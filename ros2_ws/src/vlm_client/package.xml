@@ -4,7 +4,7 @@
   <name>vlm_client</name>
   <version>0.1.0</version>
   <description>Runs a pluggable VLM backend over the camera stream and publishes 2D annotations.</description>
-  <maintainer email="aldwinakbar@gmail.com">Aldwin Akbar</maintainer>
+  <maintainer email="aldwin@hermanudin.com">Aldwin Akbar</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>

@@ -17,7 +17,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Aldwin Akbar",
-    maintainer_email="aldwinakbar@gmail.com",
+    maintainer_email="aldwin@hermanudin.com",
     description="Testbed launch files",
     license="MIT",
     entry_points={

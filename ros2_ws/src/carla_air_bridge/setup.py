@@ -13,7 +13,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Aldwin Akbar",
-    maintainer_email="aldwinakbar@gmail.com",
+    maintainer_email="aldwin@hermanudin.com",
     description="CARLA-Air to PX4-shaped ROS 2 bridge",
     license="MIT",
     entry_points={

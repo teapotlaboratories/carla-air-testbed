@@ -188,16 +188,17 @@ were never committed to — in practice, expect to rewrite them. Worth keeping i
 
 ## Housekeeping
 
-### H-01 · Maintainer email is inconsistent — **open**
+### H-01 · Maintainer email — **done** *(2026-08-01)*
 
-13 package files carry `aldwinakbar@gmail.com`; the repo's git identity is
-`aldwin@hermanudin.com`. Both are the owner's, so nothing is leaked, but the `package.xml`
-maintainer field is public-facing if this is ever published. Left alone deliberately —
-rewriting contact details is the owner's call.
+Aligned to `aldwin@hermanudin.com` across 13 package files to match the repo's git identity,
+before the first public push. `package.xml` maintainer is a public-facing field, so the
+moment before publishing was the cheap time to do it.
 
-### H-02 · No remote — **open**
+### H-02 · No remote — **done** *(2026-08-01)*
 
-Six commits on `main`, no remote configured, nothing pushed.
+Published to `teapotlaboratories/carla-air-testbed`, public, matching the sibling
+`drone-sim`. The repo is named for what the work became rather than the local directory
+name it started as.
 
 ---
 

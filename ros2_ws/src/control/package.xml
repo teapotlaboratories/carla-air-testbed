@@ -4,7 +4,7 @@
   <name>control</name>
   <version>0.1.0</version>
   <description>Streams PX4 offboard setpoints toward the current grounded waypoint.</description>
-  <maintainer email="aldwinakbar@gmail.com">Aldwin Akbar</maintainer>
+  <maintainer email="aldwin@hermanudin.com">Aldwin Akbar</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>

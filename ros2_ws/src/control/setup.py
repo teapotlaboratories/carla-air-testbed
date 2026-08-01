@@ -13,7 +13,7 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Aldwin Akbar",
-    maintainer_email="aldwinakbar@gmail.com",
+    maintainer_email="aldwin@hermanudin.com",
     description="PX4 offboard setpoint streamer",
     license="MIT",
     entry_points={

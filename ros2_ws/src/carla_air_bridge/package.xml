@@ -4,7 +4,7 @@
   <name>carla_air_bridge</name>
   <version>0.1.0</version>
   <description>Bridges the CARLA-Air simulator into a PX4-shaped ROS 2 graph via the Python 3.10 sim_bridge sidecar.</description>
-  <maintainer email="aldwinakbar@gmail.com">Aldwin Akbar</maintainer>
+  <maintainer email="aldwin@hermanudin.com">Aldwin Akbar</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
