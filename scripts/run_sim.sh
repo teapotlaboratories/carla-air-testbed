@@ -98,6 +98,46 @@ else
 fi
 unset VK_ICD_FILENAMES || true
 
+# ---- which GPU ----
+#
+# TESTBED_GPU picks the card: unset (let the driver choose, historically device 0), an index
+# as nvidia-smi reports it ("0", "1"), or a raw "vendor:device" pair.
+#
+# This goes through the Mesa device-select Vulkan layer, which despite the name is a generic
+# loader layer and works with the proprietary NVIDIA driver. It is the mechanism that
+# actually works here: this CARLA build carries no UE `-graphicsadapter` switch, and
+# CUDA_VISIBLE_DEVICES does not affect Vulkan.
+if [ -n "${TESTBED_GPU:-}" ]; then
+    if [ ! -e /usr/share/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json ]; then
+        echo "WARNING: TESTBED_GPU is set but the Mesa device-select layer is missing;" >&2
+        echo "         the request will be ignored. Install mesa-vulkan-drivers." >&2
+    fi
+    case "$TESTBED_GPU" in
+        *:*)
+            sel="$TESTBED_GPU"
+            ;;
+        *)
+            # nvidia-smi reports pci.device_id as 0xDDDDVVVV — device first, vendor second.
+            raw="$(nvidia-smi --query-gpu=pci.device_id --format=csv,noheader -i "$TESTBED_GPU" 2>/dev/null | tr -d ' ' || true)"
+            case "$raw" in
+                0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+                *)
+                    echo "ERROR: no GPU with index '$TESTBED_GPU'." >&2
+                    echo "       Available:" >&2
+                    nvidia-smi --query-gpu=index,name --format=csv,noheader 2>/dev/null | sed 's/^/         /' >&2
+                    exit 1
+                    ;;
+            esac
+            raw="${raw#0x}"
+            sel="$(printf '%s' "${raw:4:4}" | tr 'A-Z' 'a-z'):$(printf '%s' "${raw:0:4}" | tr 'A-Z' 'a-z')"
+            ;;
+    esac
+    export MESA_VK_DEVICE_SELECT="$sel"
+    # Remember the index so the post-startup VRAM check looks at the right card.
+    case "$TESTBED_GPU" in *:*) : ;; *) TESTBED_GPU_INDEX="$TESTBED_GPU" ;; esac
+    echo "gpu: requesting device $sel$([ "$sel" = "$TESTBED_GPU" ] || echo " (index $TESTBED_GPU)")"
+fi
+
 pkill -x "CarlaUE4-Linux-" 2>/dev/null || true
 sleep 4
 
@@ -116,18 +156,25 @@ for i in $(seq 1 60); do
     if ss -tln 2>/dev/null | grep -q ":41451 "; then
         echo "ready after $((i * 5))s — CARLA :2000, AirSim :41451"
 
-        # Guard against the silent software-rendering fallback. A GPU-backed UE4 loading
-        # Town10HD sits around 3.3 GB of VRAM; lavapipe leaves it at ~111 MB.
+        # Guard against the silent software-rendering fallback, on the card we actually
+        # asked for. A GPU-backed UE4 loading Town10HD sits around 3.3 GB; lavapipe leaves
+        # the card untouched at ~110 MB. Checking a FIXED index here would be wrong as soon
+        # as TESTBED_GPU points elsewhere — and worse than wrong, since another workload on
+        # GPU 0 would make a software-rendering run look confirmed.
         sleep 3
-        vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0 2>/dev/null | tr -d ' ')"
+        target="${TESTBED_GPU_INDEX:-0}"
+        vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$target" 2>/dev/null | tr -d ' ')"
+        name="$(nvidia-smi --query-gpu=name --format=csv,noheader -i "$target" 2>/dev/null)"
         if [ -n "$vram" ] && [ "$vram" -lt 1000 ]; then
             echo >&2
-            echo "WARNING: GPU 0 is only using ${vram} MiB — the simulator is almost" >&2
-            echo "         certainly on the lavapipe SOFTWARE rasteriser, not the RTX." >&2
-            echo "         Check that $ICD points at a libGLX_nvidia.so.0 that exists." >&2
+            echo "WARNING: GPU $target ($name) is only using ${vram} MiB — the simulator is" >&2
+            echo "         almost certainly on the lavapipe SOFTWARE rasteriser, not the GPU." >&2
+            echo "         Check the Vulkan ICD, and that any TESTBED_GPU request was honoured." >&2
         else
-            echo "GPU 0: ${vram} MiB in use — hardware rendering confirmed"
+            echo "GPU $target ($name): ${vram} MiB in use — hardware rendering confirmed"
         fi
+        nvidia-smi --query-gpu=index,name,memory.used --format=csv,noheader 2>/dev/null |
+            awk -F', ' '{printf "  GPU %s (%s): %s\n", $1, $2, $3}'
         exit 0
     fi
     if ! pgrep -x "CarlaUE4-Linux-" > /dev/null; then
