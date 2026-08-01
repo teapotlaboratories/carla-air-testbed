@@ -58,18 +58,15 @@ makes it affordable to leave on.
 
 ## Evaluation
 
-### E-01 · Turn single-seed markers into success rates — **next**
+### E-01 · Turn single-seed markers into success rates — **done** *(2026-08-01)*
 
-Every backend result in the README and worklogs is **one seed**. Oracle 4/4 and geometric 0/4
-are ceiling and floor markers, not rates, and nothing published should be read as a success
-rate until this runs.
+40 episodes, 5 seeds x 4 scenarios x 2 backends, on the 5060 Ti. **oracle 20/20 (100%),
+geometric 0/20 (0%), zero collisions.** Every geometric failure was `max_steps` — it wanders
+rather than crashing. Oracle final distances span 13.7–19.8 m, so the harness is not the
+noise floor. `scripts/run_sweep.sh` reproduces it; see the 2026-08-01 sweep worklog.
 
-- 5 seeds × 4 scenarios × {oracle, geometric}. ~90 min of wall clock; sweeps run in real
-  time and `ClockSpeed` cannot help (see the 2026-08-01 worklog).
-- Also exercises two code paths that have only ever run in one session: bearing-only
-  grounding and the three-way AirSim client split.
-- **Verify:** per-scenario success rate with N, plus the failure-mode breakdown, written to
-  `out/sweep-*.json` and summarised in a worklog.
+Also exercised, forty times each, two paths that had previously run once: bearing-only
+grounding and the three-way AirSim client split. Neither stalled.
 
 ### E-02 · `avoid_the_block` does not test what its name claims — **open**
 

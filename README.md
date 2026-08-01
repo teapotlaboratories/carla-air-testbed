@@ -85,17 +85,20 @@ Other entry points:
 something points at them, and a depth-following heuristic with no language understanding
 reaches none. That gap is the space a VLM has to fill.
 
-> **These are single-seed markers, not success rates.** One run per scenario per backend:
-> a ceiling and a floor, not a measurement with an N. A 5-seed sweep is the next piece of
-> work (`E-01` in [`docs/todo.md`](docs/todo.md)); until it runs, nothing here should be
-> quoted as a success rate.
+Measured over **40 seeded episodes** — 5 seeds x 4 scenarios x 2 backends, zero collisions.
 
-| scenario | oracle | geometric |
+| scenario | oracle (N=5) | geometric (N=5) |
 |---|---|---|
-| `cross_the_plaza` | **SUCCESS** 18.6 m, 14 steps | FAILURE 41.3 m |
-| `follow_the_avenue` | **SUCCESS** 19.6 m, 16 steps | FAILURE 188.0 m |
-| `rain_descent` | **SUCCESS** 13.4 m, 8 steps | FAILURE 71.8 m |
-| `avoid_the_block` | **SUCCESS** 18.2 m, 9 steps | FAILURE 173.6 m |
+| `cross_the_plaza` | **5/5** · 18.2 m median | 0/5 · 185.7 m |
+| `follow_the_avenue` | **5/5** · 18.7 m median | 0/5 · 187.0 m |
+| `rain_descent` | **5/5** · 14.1 m median | 0/5 · 81.4 m |
+| `avoid_the_block` | **5/5** · 17.9 m median | 0/5 · 175.4 m |
+| **all** | **20/20 — 100%** | **0/20 — 0%** |
+
+Every geometric failure is `max_steps`: it does not crash, it wanders. The oracle's 20
+episodes land between 13.7 m and 19.8 m of the goal, so the harness itself is not the noise.
+Caveat worth keeping in view: **none of these scenarios require obstacle avoidance**, so a
+100% oracle rate shows the harness reaches goals, not that the scenarios are hard.
 
 Measured with the full graph running:
 
