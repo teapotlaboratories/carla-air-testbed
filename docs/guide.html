@@ -238,8 +238,8 @@
     </p>
 
     <div class="stats">
-      <div class="stat ok"><span class="k">Oracle</span><span class="v">4/4</span></div>
-      <div class="stat"><span class="k">Baseline</span><span class="v">0/4</span></div>
+      <div class="stat ok"><span class="k">Oracle</span><span class="v">20/20</span></div>
+      <div class="stat"><span class="k">Baseline</span><span class="v">0/20</span></div>
       <div class="stat air"><span class="k">Grounding</span><span class="v">~3 m</span></div>
       <div class="stat"><span class="k">Real-time</span><span class="v">1.000</span></div>
       <div class="stat"><span class="k">Offline tests</span><span class="v">50</span></div>
@@ -323,26 +323,30 @@ export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
     <h2 id="r-results">Results</h2>
     <div class="prose">
       <p>
-        The scenarios are navigable, the harness reaches goals when something points at them,
-        and a depth-following heuristic with no language understanding reaches none. That gap
-        is the space a VLM has to fill.
+        Measured over <strong>40 seeded episodes</strong> — 5 seeds x 4 scenarios x 2 backends,
+        zero collisions. The scenarios are navigable, the harness reaches goals when something
+        points at them, and a depth-following heuristic with no language understanding reaches
+        none. That gap is the space a VLM has to fill.
       </p>
     </div>
     <div class="tw"><table>
-      <thead><tr><th>Scenario</th><th>Oracle</th><th>Geometric baseline</th></tr></thead>
+      <thead><tr><th>Scenario</th><th>Oracle (N=5)</th><th>Geometric baseline (N=5)</th></tr></thead>
       <tbody>
         <tr><th><code>cross_the_plaza</code></th>
-            <td><span class="chip ok">Success</span> 18.6 m, 14 steps</td>
-            <td><span class="chip no">Failure</span> 41.3 m</td></tr>
+            <td><span class="chip ok">5/5</span> 18.2 m median</td>
+            <td><span class="chip no">0/5</span> 185.7 m</td></tr>
         <tr><th><code>follow_the_avenue</code></th>
-            <td><span class="chip ok">Success</span> 19.6 m, 16 steps</td>
-            <td><span class="chip no">Failure</span> 188.0 m</td></tr>
+            <td><span class="chip ok">5/5</span> 18.7 m median</td>
+            <td><span class="chip no">0/5</span> 187.0 m</td></tr>
         <tr><th><code>rain_descent</code></th>
-            <td><span class="chip ok">Success</span> 13.4 m, 8 steps</td>
-            <td><span class="chip no">Failure</span> 71.8 m</td></tr>
+            <td><span class="chip ok">5/5</span> 14.1 m median</td>
+            <td><span class="chip no">0/5</span> 81.4 m</td></tr>
         <tr><th><code>avoid_the_block</code></th>
-            <td><span class="chip ok">Success</span> 18.2 m, 9 steps</td>
-            <td><span class="chip no">Failure</span> 173.6 m</td></tr>
+            <td><span class="chip ok">5/5</span> 17.9 m median</td>
+            <td><span class="chip no">0/5</span> 175.4 m</td></tr>
+        <tr><th>all</th>
+            <td><span class="chip ok">20/20 — 100%</span></td>
+            <td><span class="chip no">0/20 — 0%</span></td></tr>
       </tbody>
     </table></div>
     <div class="tw"><table>
@@ -356,6 +360,17 @@ export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
         <tr><th>Real-time factor</th><td>1.000 on both clocks, 60 FPS</td></tr>
       </tbody>
     </table></div>
+
+    <div class="note warn">
+      <span class="t">What this does not say</span>
+      <p>
+        Every geometric failure is <code>max_steps</code> — it does not crash, it wanders. And
+        <strong>none of these scenarios require obstacle avoidance</strong>: the oracle solves
+        all four on essentially straight lines, <code>avoid_the_block</code> in a median 8
+        steps despite the name. A 100% oracle rate shows the harness reaches goals, not that
+        the scenarios are hard.
+      </p>
+    </div>
 
     <h2 id="r-backend">Adding a VLM backend</h2>
     <div class="prose">
