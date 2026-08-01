@@ -133,9 +133,13 @@ controller, a DDS bridge, or a simulator binding that an upstream already provid
 
 ## Plan first — non-trivial work starts written down
 
-Before implementing a feature or a substantive change, write down what it is, why, and how
-it will be verified — then build it. Keep the status current, and mark it done when it
-lands. Trivial or mechanical changes (a typo, a rename) do not need this.
+Before implementing a feature or a substantive change, add it to
+[`docs/todo.md`](../docs/todo.md) — what it is, why, and how it will be verified — then build
+it. Keep the status current, and mark it done when it lands. Trivial or mechanical changes (a
+typo, a rename) do not need this.
+
+The "how it will be verified" line is the load-bearing part: an item without one tends to
+land as something nobody can tell is working.
 
 ## Committing
 

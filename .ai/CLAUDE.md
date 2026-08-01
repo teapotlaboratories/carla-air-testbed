@@ -44,6 +44,8 @@ Most important rules:
 - **`colcon --symlink-install` still needs a rebuild** for `ament_python` packages — the
   symlink is made at build time, so editing `src/` alone does not reach a running node. When
   a change appears to have no effect, check this first.
+- **Plan first** — non-trivial work gets an entry in [`docs/todo.md`](../docs/todo.md)
+  (what, why, how it will be verified) before it gets code, and is marked done when it lands.
 - **Verify by running it, end to end.** A clean build proves nothing about flight. Pure
   logic goes in `tests/` (no sim, GPU or display); anything that flies or grounds gets
   exercised through the full graph, with a success rate over N seeded runs. **Validate a

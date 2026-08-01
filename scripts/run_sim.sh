@@ -26,6 +26,25 @@ if [ "$MAP" = "--kill" ]; then
     exit 0
 fi
 
+# Fail early and clearly if the release is not where we think. Without this the launch
+# proceeds, nohup cannot exec a missing binary, and the startup watchdog reports it as a bad
+# Vulkan ICD — which sent a debugging session down the wrong path.
+if [ ! -x "$BIN" ]; then
+    echo "ERROR: simulator binary not found at" >&2
+    echo "         $BIN" >&2
+    echo >&2
+    if [ -z "${CARLAAIR_RELEASE:-}" ]; then
+        echo "       CARLAAIR_RELEASE is not set, so this fell back to a default path." >&2
+        echo "       Set it to your unpacked release (scripts/fetch_release.sh prints it):" >&2
+        echo "         export CARLAAIR_RELEASE=/path/to/CarlaAir-v0.1.7" >&2
+    else
+        echo "       CARLAAIR_RELEASE is set to: $CARLAAIR_RELEASE" >&2
+        echo "       but no simulator binary is under it. Check the path is the unpacked" >&2
+        echo "       release directory itself, not its parent." >&2
+    fi
+    exit 1
+fi
+
 # ---- AirSim settings ----
 # Without CaptureSettings per ImageType, only ImageType 0 honours the configured
 # resolution: RGB comes back 1280x960 (4:3) while depth/segmentation fall back to AirSim's

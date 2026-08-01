@@ -45,17 +45,37 @@ export UV_PYTHON_INSTALL_DIR="$PROJ/vendor/python"
 # numpy<2 is not cosmetic: airsim 1.8.1 predates the NumPy 2 ABI break and
 # msgpack-rpc-python pins tornado 4.5.3, which is likewise 3.10-era.
 
-# ---------- 4. the CARLA module from the release ----------
+# ---------- 4. the CARLA client module ----------
 # Not the PyPI `carla` wheel — CARLA-Air is a fork with a different server ABI
 # (client version aa9c92b). Upstream ships it as a tarball, not a wheel.
+#
+# And NOT the copy inside the release archive, which is a broken build: its RPATH is
+# hardcoded to the upstream author's own machine
+#
+#   RPATH: /home/lenovo/miniconda3/envs/carlaAir/lib
+#
+# and its carla.libs/ vendors only libboost_python310, expecting libpng16/libtiff5/libjpeg/
+# libwebp/libzstd/liblzma/libjbig from a system that no longer exists. On Ubuntu 24.04
+# libtiff5 is not even packaged, so it cannot import at all. This was found by containerising
+# and is why setup_env.sh no longer reads $CARLAAIR_RELEASE/env_setup/.
+#
+# The same file in the project's GitHub repo is properly auditwheel-vendored — 7 bundled
+# libs with mangled SONAMEs and a correct $ORIGIN rpath — and imports with no system
+# dependencies at all. Pinned by commit and checksummed, because a raw URL follows a moving
+# ref otherwise.
 SITE="$($VENV/bin/python -c 'import site; print(site.getsitepackages()[0])')"
-TARBALL="$RELEASE_DIR/env_setup/carla_python_module.tar.gz"
-if [ -f "$TARBALL" ]; then
-    rm -rf "$SITE/carla" "$SITE/carla.libs"
-    tar xzf "$TARBALL" -C "$SITE"
-else
-    echo "WARN: $TARBALL not found — set CARLAAIR_RELEASE to the extracted release" >&2
+CARLAAIR_REPO_SHA=d70247b52043d6eadb849ea41cac861ad8567dba
+CARLA_MODULE_MD5=a3fa4579f646f6ef1dcac5fa9e03c0b8
+TARBALL="$PROJ/vendor/carla_python_module.tar.gz"
+
+if [ ! -f "$TARBALL" ] || ! echo "$CARLA_MODULE_MD5  $TARBALL" | md5sum -c - >/dev/null 2>&1; then
+    mkdir -p "$PROJ/vendor"
+    curl -fsSL -o "$TARBALL" \
+      "https://raw.githubusercontent.com/louiszengCN/CarlaAir/${CARLAAIR_REPO_SHA}/env_setup/carla_python_module.tar.gz"
+    echo "$CARLA_MODULE_MD5  $TARBALL" | md5sum -c -
 fi
+rm -rf "$SITE/carla" "$SITE/carla.libs"
+tar xzf "$TARBALL" -C "$SITE"
 
 # ---------- 5. verify ----------
 "$VENV/bin/python" - <<'PY'

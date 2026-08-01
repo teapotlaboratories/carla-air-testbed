@@ -33,7 +33,7 @@ extension and ROS 2 Jazzy is 3.12, so neither interpreter can load the other's C
 | **Display** | none — everything is `-RenderOffScreen` |
 
 No Docker, no conda, no display server. It runs on **native Ubuntu and inside a distrobox**;
-see [Running outside a container](#running-outside-a-container).
+see [Native Ubuntu vs this distrobox](#native-ubuntu-vs-this-distrobox).
 
 ```bash
 sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
@@ -84,6 +84,11 @@ Other entry points:
 **Oracle 4/4, geometric 0/4** — the scenarios are navigable, the harness reaches goals when
 something points at them, and a depth-following heuristic with no language understanding
 reaches none. That gap is the space a VLM has to fill.
+
+> **These are single-seed markers, not success rates.** One run per scenario per backend:
+> a ceiling and a floor, not a measurement with an N. A 5-seed sweep is the next piece of
+> work (`E-01` in [`docs/todo.md`](docs/todo.md)); until it runs, nothing here should be
+> quoted as a success rate.
 
 | scenario | oracle | geometric |
 |---|---|---|
@@ -145,11 +150,11 @@ Four ship today: `mock` (seeded random), `scripted` (fixed pixels, for regressio
 (**a diagnostic, not a competitor** — it is handed the goal, so it validates scenarios and
 must never be reported beside a real model's score).
 
-## Running outside a container
+## Native Ubuntu vs this distrobox
 
-This was developed inside a distrobox on a Fedora host, but **native Ubuntu 24.04 is the
-simpler target** — one workaround exists purely because of the container and disappears
-without it.
+Everything here runs **natively** — no Docker, no conda, no display server. It was developed
+inside a distrobox on a Fedora host, but **native Ubuntu 24.04 is the simpler target**: one
+workaround exists purely because of the distrobox and disappears without it.
 
 - **Vulkan ICD (container-only).** distrobox injects the *host's* ICD JSON, so on a Fedora
   host it names `/usr/lib64/libGLX_nvidia.so.0`, a path that does not exist in an Ubuntu

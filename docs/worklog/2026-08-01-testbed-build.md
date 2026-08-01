@@ -244,6 +244,52 @@ ceiling** — budget roughly `timeout x seeds` of wall clock.
 
 ---
 
+## A containerisation attempt, abandoned — and the bug it found on the way
+
+Three images were built and then removed: GPU passthrough does not survive the nesting on
+this machine (Docker runs inside the `drone-sim` distrobox, so the driver crosses two
+container boundaries; compute survives, Vulkan does not). The full ruling-out is recorded in
+`docs/todo.md` under P-01. **Everything stays inside the distrobox, which is where it
+already works.**
+
+The attempt was not wasted, because building from nothing surfaced a live bug that the host
+had been masking.
+
+### The carla client module in the release archive is a broken build
+
+**The carla client module inside the release archive is a broken build.** Its RPATH is
+hardcoded to the upstream author's own machine:
+
+```
+$ readelf -d carla/libcarla.cpython-310-x86_64-linux-gnu.so | grep RPATH
+  RPATH   Library rpath: [/home/lenovo/miniconda3/envs/carlaAir/lib]
+```
+
+and its `carla.libs/` vendors exactly one library, `libboost_python310.so.1.84.0`, expecting
+libpng16, libtiff5, libjpeg, libwebp, libzstd, liblzma and libjbig from a system that no
+longer exists. On Ubuntu 24.04 `libtiff5` is not even packaged, so it cannot import at all.
+
+The same file in the project's GitHub repo is a different artifact — properly
+auditwheel-vendored, 7 bundled libs with mangled SONAMEs and a correct `$ORIGIN` rpath — and
+imports in a bare container with no apt packages whatsoever.
+
+| | release archive | GitHub repo |
+|---|---|---|
+| size | 118 MB | 194 MB |
+| md5 | `a0f07583…` | `fef95c97…` |
+| vendored libs | 1 | 7 |
+| unmet deps in a clean container | 2+ | **0** |
+
+**This was a live bug in `scripts/setup_env.sh`, not just a container problem.** The host
+environment worked all session only because the module had been installed by hand from a
+scratch clone early on; the documented install path pointed at the release copy and would
+have produced a broken environment on any fresh machine. Found only because containerising
+starts from nothing, which is the entire argument for doing it.
+
+Both the host script and the image now fetch the working tarball from the repo at a pinned
+commit (`d70247b5`) with an md5 check. Verified by deleting the host venv's `carla`/
+`carla.libs` and re-running `scripts/setup_env.sh` from scratch.
+
 ## Bugs in this project's own code, found late
 
 Recorded because each was invisible until something unrelated exposed it:
