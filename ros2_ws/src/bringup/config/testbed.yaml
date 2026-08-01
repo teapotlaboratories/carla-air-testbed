@@ -1,0 +1,52 @@
+# One parameter file for the whole graph. Every value here was either measured by the
+# conformance suite or is a deliberate trade-off documented in docs/architecture.md.
+
+carla_air_bridge:
+  ros__parameters:
+    socket_path: "/tmp/carla_air_testbed.sock"
+    # 20 Hz, not PX4's 100 Hz: this is what the sim can serve without starving the image
+    # path. Nothing here should be read as flight-controller timing.
+    odometry_rate_hz: 20.0
+    # RGB + depth costs ~51 ms with depth at 160x120, so 8 Hz has headroom. It was 4 Hz
+    # when depth rendered at 320x240 and the pair cost 251 ms — see docs/architecture.md
+    # for why depth resolution, not the GPU, sets this number.
+    # Turning publish_segmentation on adds ~77 ms per capture; leave it off for the loop.
+    image_rate_hz: 8.0
+    publish_depth: true
+    publish_segmentation: false
+    frame_id: "drone"
+    setpoint_duration_s: 0.5      # must exceed the controller's 0.1 s resend period
+
+vlm_client:
+  ros__parameters:
+    backend: "geometric"
+    seed: 0
+    min_period_s: 1.0             # a slow model is the design point, not a problem
+    history_length: 5
+    instruction: "fly forward and stay clear of buildings"
+
+grounding:
+  ros__parameters:
+    # Must match what scripts/run_episode.py sets on the camera. -28.6 deg looks far
+    # enough down to see obstacles and far enough forward to see where it is going.
+    camera_pitch_deg: -28.6
+    camera_offset_body: [0.5, 0.0, 0.1]
+    depth_history: 12
+    max_range_m: 200.0
+
+offboard_control:
+  ros__parameters:
+    rate_hz: 10.0
+    setpoint_duration_s: 0.5
+    max_speed_mps: 5.0
+    max_step_m: 20.0              # bounded step: the grounded point is ON a surface
+    standoff_m: 8.0
+    arrival_radius_m: 2.0
+    min_altitude_m: 15.0
+    max_altitude_m: 120.0
+    enabled: true
+
+episode_runner:
+  ros__parameters:
+    results_dir: "out/episodes"
+    status_rate_hz: 2.0

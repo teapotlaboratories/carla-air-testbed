@@ -1,0 +1,9 @@
+# Start / stop an episode. Used by the runner; also handy from the command line.
+string scenario
+string instruction
+uint32 seed
+bool start                      # false = abort whatever is running
+---
+bool accepted
+string episode_id
+string message

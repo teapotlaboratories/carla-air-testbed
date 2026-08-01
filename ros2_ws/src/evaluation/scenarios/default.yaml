@@ -1,0 +1,54 @@
+# Seeded scenarios for Town10HD.
+#
+# Coordinates are AirSim/PX4 NED metres. Remember the AirSim origin on this map is
+# OFFSHORE — (0, 0) is open water, and the city sits around x=100..200, y=-250..-120.
+# Convert a CARLA spawn point with: carla_x + 172.20, carla_y - 183.86.
+#
+# success_radius_m defaults to 20 m, matching AerialVLN. Do not tighten it below ~8 m:
+# the vehicle relaxes ~4 m after reaching a setpoint, so a tighter radius measures the
+# controller's station-keeping rather than the model's navigation.
+
+scenarios:
+  - name: cross_the_plaza
+    instruction: "fly across the open plaza and stop above the far side"
+    start_ned: [107.6, -159.4, -55.0]
+    goal_ned: [187.6, -159.4, -55.0]
+    success_radius_m: 20.0
+    max_steps: 25
+    timeout_s: 180.0
+    weather: ClearNoon
+    traffic_vehicles: 15
+    traffic_walkers: 10
+
+  - name: follow_the_avenue
+    instruction: "follow the main road ahead, keeping above the traffic"
+    start_ned: [107.6, -159.4, -45.0]
+    goal_ned: [107.6, -249.4, -45.0]
+    success_radius_m: 20.0
+    max_steps: 30
+    timeout_s: 240.0
+    weather: ClearNoon
+    traffic_vehicles: 20
+    traffic_walkers: 12
+
+  - name: rain_descent
+    instruction: "descend toward the intersection below and hold above it"
+    start_ned: [125.0, -170.0, -80.0]
+    goal_ned: [125.0, -170.0, -35.0]
+    success_radius_m: 15.0
+    max_steps: 20
+    timeout_s: 180.0
+    weather: HardRainSunset      # p06 measured a 45.8 mean pixel delta vs ClearNoon
+    traffic_vehicles: 15
+    traffic_walkers: 8
+
+  - name: avoid_the_block
+    instruction: "fly north but go around the tall building, do not fly through it"
+    start_ned: [107.6, -159.4, -50.0]
+    goal_ned: [107.6, -229.4, -50.0]
+    success_radius_m: 20.0
+    max_steps: 30
+    timeout_s: 240.0
+    weather: CloudyNoon
+    traffic_vehicles: 10
+    traffic_walkers: 6
