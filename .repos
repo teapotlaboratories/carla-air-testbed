@@ -1,0 +1,10 @@
+# Pinned upstreams for the testbed. Fetch with scripts/fetch_vendor.sh.
+#
+# px4_msgs is branch-matched to PX4 v1.16 and uses the SAME sha as drone-sim, so the two
+# projects speak identical /fmu/* message definitions and nodes can move between them.
+# A branch is not a pin: the sha is the pin.
+repositories:
+  vendor/px4_msgs:
+    type: git
+    url: https://github.com/PX4/px4_msgs.git
+    version: 392e831c1f659429ca83902e66820d7094591410   # release/1.16, tags v1.16.0-v1.16.2
