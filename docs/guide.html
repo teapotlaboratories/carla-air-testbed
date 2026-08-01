@@ -1,0 +1,600 @@
+<title>carla-air testbed — README &amp; Quick start</title>
+<style>
+  :root{
+    --paper:#E6E7E1; --panel:#EFEFEA; --ink:#161A18; --ink-soft:#4A524C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --ground:#C8892B;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+    --scan:rgba(22,26,24,.030);
+    --display:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;
+    --body:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#111512; --panel:#171C19; --ink:#E4E7E0; --ink-soft:#9BA49C;
+      --rule:#2C332E; --rule-soft:#232925;
+      --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+      --air:#3BA5D4; --ground:#E0A643;
+      --ok:#5FA351; --stop:#D25638;
+      --thead:#0B0E0C; --thead-ink:#D8DCD4;
+      --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+      --scan:rgba(228,231,224,.022);
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#E6E7E1; --panel:#EFEFEA; --ink:#161A18; --ink-soft:#4A524C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64; --air:#1584B5; --ground:#C8892B;
+    --ok:#3F7A34; --stop:#A3341F; --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+    --scan:rgba(22,26,24,.030);
+  }
+  :root[data-theme="dark"]{
+    --paper:#111512; --panel:#171C19; --ink:#E4E7E0; --ink-soft:#9BA49C;
+    --rule:#2C332E; --rule-soft:#232925;
+    --chrome:#2FB3BE; --chrome-ink:#7FD8DF; --air:#3BA5D4; --ground:#E0A643;
+    --ok:#5FA351; --stop:#D25638; --thead:#0B0E0C; --thead-ink:#D8DCD4;
+    --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+    --scan:rgba(228,231,224,.022);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--body); font-size:16px; line-height:1.62;
+    background-image:repeating-linear-gradient(180deg,var(--scan) 0 1px,transparent 1px 3px);
+  }
+
+  /* ---------- chrome ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:20; background:var(--paper);
+    border-bottom:1px solid var(--rule);
+    display:flex; align-items:baseline; gap:1.25rem; flex-wrap:wrap;
+    padding:.7rem clamp(1rem,4vw,2.5rem);
+  }
+  .brand{
+    font-family:var(--display); font-weight:800; letter-spacing:.10em;
+    text-transform:uppercase; font-size:.9rem; color:var(--chrome-ink);
+    white-space:nowrap;
+  }
+  @media (prefers-color-scheme:dark){ .brand{color:var(--chrome)} }
+  :root[data-theme="dark"] .brand{color:var(--chrome)}
+  .brand span{color:var(--ink-soft); font-weight:600}
+  .tabs{display:flex; gap:.4rem; margin-left:auto}
+  .tab{
+    font-family:var(--display); font-size:.72rem; font-weight:700;
+    letter-spacing:.09em; text-transform:uppercase;
+    padding:.4rem .8rem; border:1px solid var(--rule); border-radius:2px;
+    background:transparent; color:var(--ink-soft); cursor:pointer;
+  }
+  .tab:hover{border-color:var(--chrome); color:var(--ink)}
+  .tab:focus-visible{outline:2px solid var(--chrome); outline-offset:2px}
+  .tab[aria-selected="true"]{background:var(--chrome); border-color:var(--chrome); color:#fff}
+
+  /* ---------- shell ---------- */
+  .shell{
+    display:grid; grid-template-columns:1fr; gap:2rem;
+    padding:2rem clamp(1rem,4vw,2.5rem) 5rem; max-width:1180px; margin:0 auto;
+  }
+  @media (min-width:1080px){
+    .shell{grid-template-columns:190px minmax(0,1fr); gap:3rem}
+  }
+  .rail{display:none}
+  @media (min-width:1080px){
+    .rail{display:block; position:sticky; top:4.2rem; align-self:start; max-height:80vh; overflow-y:auto}
+  }
+  .rail h4{
+    font-family:var(--display); font-size:.66rem; letter-spacing:.13em;
+    text-transform:uppercase; color:var(--ink-soft); margin:0 0 .7rem;
+  }
+  .rail a{
+    display:block; padding:.22rem 0 .22rem .7rem; font-size:.83rem;
+    color:var(--ink-soft); text-decoration:none;
+    border-left:2px solid var(--rule-soft);
+  }
+  .rail a:hover{color:var(--ink); border-left-color:var(--chrome)}
+
+  main{min-width:0}
+  .doc[hidden]{display:none}
+  .prose{max-width:68ch}
+
+  /* ---------- type ---------- */
+  h1{
+    font-family:var(--display); font-size:clamp(1.9rem,4.4vw,2.7rem); font-weight:800;
+    letter-spacing:-.015em; line-height:1.08; margin:0 0 .6rem; text-wrap:balance;
+  }
+  h2{
+    font-family:var(--display); font-size:1.24rem; font-weight:800;
+    letter-spacing:.02em; margin:3rem 0 .9rem; padding-bottom:.4rem;
+    border-bottom:2px solid var(--chrome); text-wrap:balance;
+  }
+  h3{font-family:var(--display); font-size:1rem; font-weight:700; letter-spacing:.03em; margin:2rem 0 .6rem}
+  .lede{font-size:1.06rem; color:var(--ink-soft); max-width:66ch; text-wrap:pretty}
+  p{margin:0 0 1rem; text-wrap:pretty}
+  ul,ol{margin:0 0 1rem; padding-left:1.15rem}
+  li{margin:.32rem 0}
+  a{color:var(--chrome-ink)}
+  @media (prefers-color-scheme:dark){a{color:var(--chrome-ink)}}
+  strong{font-weight:700}
+  code{font-family:var(--mono); font-size:.87em; background:var(--panel);
+       border:1px solid var(--rule-soft); border-radius:2px; padding:.06em .32em}
+
+  .eyebrow{
+    font-family:var(--display); font-size:.68rem; font-weight:700; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--ground); margin:0 0 .5rem;
+  }
+
+  /* ---------- terminal ---------- */
+  pre{
+    background:var(--code-bg); color:var(--code-ink); font-family:var(--mono);
+    font-size:.8rem; line-height:1.62; margin:0 0 1.2rem; padding:1rem 1.1rem;
+    border-radius:3px; overflow-x:auto; border:1px solid var(--thead);
+  }
+  pre .c{color:var(--code-dim)}
+  pre .g{color:#7FD8A0}
+  pre .y{color:#E0B75F}
+  pre b{color:#fff; font-weight:600}
+
+  /* ---------- tables ---------- */
+  .tw{overflow-x:auto; margin:0 0 1.3rem; border:1px solid var(--rule); border-radius:3px}
+  table{border-collapse:collapse; width:100%; font-size:.86rem; font-variant-numeric:tabular-nums}
+  thead th{
+    background:var(--thead); color:var(--thead-ink); text-align:left;
+    font-family:var(--display); font-size:.68rem; letter-spacing:.11em;
+    text-transform:uppercase; padding:.55rem .8rem; font-weight:700;
+  }
+  td,tbody th{padding:.5rem .8rem; border-top:1px solid var(--rule-soft); text-align:left; vertical-align:top}
+  tbody th{font-weight:600; white-space:nowrap}
+  tbody tr:nth-child(even){background:var(--panel)}
+  td code,tbody th code{background:transparent; border:0; padding:0}
+
+  .chip{
+    display:inline-block; font-family:var(--display); font-size:.63rem; font-weight:700;
+    letter-spacing:.09em; text-transform:uppercase; padding:.16rem .45rem;
+    border-radius:2px; color:#fff; white-space:nowrap;
+  }
+  .chip.ok{background:var(--ok)} .chip.no{background:var(--stop)}
+
+  /* ---------- callouts ---------- */
+  .note{
+    border-left:3px solid var(--chrome); background:var(--panel);
+    padding:.85rem 1rem; margin:0 0 1.2rem; font-size:.93rem; border-radius:0 3px 3px 0;
+  }
+  .note.warn{border-left-color:var(--ground)}
+  .note.stop{border-left-color:var(--stop)}
+  .note p:last-child{margin-bottom:0}
+  .note .t{
+    font-family:var(--display); font-size:.68rem; font-weight:700; letter-spacing:.12em;
+    text-transform:uppercase; display:block; margin-bottom:.25rem; color:var(--ink-soft);
+  }
+
+  /* ---------- stat strip ---------- */
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:1px;
+         background:var(--rule); border:1px solid var(--rule); margin:0 0 1.5rem; border-radius:3px; overflow:hidden}
+  .stat{background:var(--paper); padding:.7rem .85rem}
+  .stat .k{font-family:var(--display); font-size:.62rem; letter-spacing:.11em;
+           text-transform:uppercase; color:var(--ink-soft); display:block}
+  .stat .v{font-family:var(--mono); font-size:1.15rem; font-weight:600; font-variant-numeric:tabular-nums}
+  .stat.air .v{color:var(--air)} .stat.ground .v{color:var(--ground)} .stat.ok .v{color:var(--ok)}
+
+  /* ---------- pipeline ---------- */
+  .pipe{
+    display:flex; flex-wrap:wrap; align-items:stretch; gap:.4rem;
+    margin:0 0 .6rem; font-size:.78rem;
+  }
+  .stage{
+    flex:1 1 130px; border:1px solid var(--rule); border-top:3px solid var(--air);
+    background:var(--panel); padding:.55rem .65rem; border-radius:2px; min-width:0;
+  }
+  .stage.g{border-top-color:var(--ground)}
+  .stage .n{font-family:var(--display); font-weight:700; font-size:.74rem;
+            letter-spacing:.04em; display:block; margin-bottom:.15rem}
+  .stage .d{font-family:var(--mono); font-size:.68rem; color:var(--ink-soft); word-break:break-word}
+  .legend{font-size:.76rem; color:var(--ink-soft); margin:0 0 1.4rem}
+  .sw{display:inline-block; width:.65rem; height:.65rem; border-radius:1px; vertical-align:baseline}
+  .sw.a{background:var(--air)} .sw.g{background:var(--ground)}
+
+  .steps{list-style:none; padding:0; counter-reset:s}
+  .steps>li{counter-increment:s; position:relative; padding-left:2.1rem; margin:0 0 1.5rem}
+  .steps>li::before{
+    content:counter(s); position:absolute; left:0; top:.05rem;
+    font-family:var(--display); font-size:.72rem; font-weight:800; color:#fff;
+    background:var(--chrome); width:1.45rem; height:1.45rem; border-radius:2px;
+    display:grid; place-items:center;
+  }
+  .steps h3{margin-top:0}
+  footer{border-top:1px solid var(--rule); margin-top:3rem; padding-top:1rem;
+         font-size:.8rem; color:var(--ink-soft)}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+</style>
+
+<div class="topbar">
+  <span class="brand">carla-air <span>testbed</span></span>
+  <div class="tabs" role="tablist" aria-label="Document">
+    <button class="tab" role="tab" id="t-readme" aria-controls="d-readme" aria-selected="true">Readme</button>
+    <button class="tab" role="tab" id="t-quick" aria-controls="d-quick" aria-selected="false">Quick start</button>
+  </div>
+</div>
+
+<div class="shell">
+  <nav class="rail" aria-label="On this page">
+    <h4>On this page</h4>
+    <div id="toc"></div>
+  </nav>
+
+  <main>
+  <!-- ============================ README ============================ -->
+  <article class="doc" id="d-readme" role="tabpanel" aria-labelledby="t-readme">
+    <p class="eyebrow">VLM navigation testbed · ROS 2 Jazzy · CARLA-Air v0.1.7</p>
+    <h1>A drone that flies where a model points</h1>
+    <p class="lede">
+      Reproduces the See-Point-Fly loop — <em>frame → 2D annotation → 3D displacement →
+      velocity setpoint</em> — against a photorealistic city with live traffic and weather.
+      Headless, on one GPU, with no containers.
+    </p>
+
+    <div class="stats">
+      <div class="stat ok"><span class="k">Oracle</span><span class="v">4/4</span></div>
+      <div class="stat"><span class="k">Baseline</span><span class="v">0/4</span></div>
+      <div class="stat air"><span class="k">Grounding</span><span class="v">~3 m</span></div>
+      <div class="stat"><span class="k">Real-time</span><span class="v">1.000</span></div>
+      <div class="stat"><span class="k">Offline tests</span><span class="v">50</span></div>
+    </div>
+
+    <p>
+      The autonomy nodes talk to <code>/fmu/out/*</code> and <code>/fmu/in/*</code> exactly as
+      they would to a real Pixhawk 6C, so they port to hardware by deleting one node rather
+      than rewriting the stack.
+    </p>
+
+    <h2 id="r-pipeline">The loop</h2>
+    <div class="pipe">
+      <div class="stage g"><span class="n">sim_bridge</span><span class="d">py3.10 · carla + airsim</span></div>
+      <div class="stage"><span class="n">bridge</span><span class="d">/fmu/out/* · /camera/*</span></div>
+      <div class="stage"><span class="n">vlm_client</span><span class="d">/vlm/annotation</span></div>
+      <div class="stage"><span class="n">grounding</span><span class="d">/vlm/grounded_waypoint</span></div>
+      <div class="stage"><span class="n">control</span><span class="d">/fmu/in/trajectory_setpoint</span></div>
+    </div>
+    <p class="legend">
+      <span class="sw g"></span> the ground world — CARLA traffic, pedestrians, weather &nbsp;·&nbsp;
+      <span class="sw a"></span> the aircraft — ROS 2 Jazzy, PX4-shaped topics
+    </p>
+    <div class="prose">
+      <p>
+        Two processes because it has to be: the CARLA-Air client is an ABI-tagged
+        <code>cpython-310</code> extension and ROS 2 Jazzy is 3.12, so neither interpreter can
+        load the other's C extensions.
+      </p>
+    </div>
+
+    <h2 id="r-prereq">Prerequisites</h2>
+    <div class="tw"><table>
+      <tbody>
+        <tr><th>OS</th><td>Ubuntu 24.04 (Noble) — ROS 2 Jazzy has no packages for other releases</td></tr>
+        <tr><th>GPU</th><td>NVIDIA, Vulkan-capable, <strong>≥ 6 GB VRAM</strong> (the sim uses ~3.3 GB on Town10HD)</td></tr>
+        <tr><th>Driver</th><td>535+, with <code>nvidia-smi</code> working</td></tr>
+        <tr><th>Disk</th><td>~30 GB for the simulator, ~1 GB for the project</td></tr>
+        <tr><th>RAM</th><td>16 GB minimum</td></tr>
+        <tr><th>Display</th><td>none — everything runs <code>-RenderOffScreen</code></td></tr>
+      </tbody>
+    </table></div>
+    <div class="prose">
+      <p>No Docker, no conda, no display server. Runs on native Ubuntu and inside a distrobox.</p>
+    </div>
+<pre><span class="c"># ROS 2 Jazzy and build tools</span>
+sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
+                 ros-jazzy-cv-bridge git curl unzip</pre>
+
+    <h2 id="r-install">Install</h2>
+<pre>git clone &lt;this repo&gt; carla-air_testing &amp;&amp; cd carla-air_testing
+
+bash scripts/setup_env.sh          <span class="c"># ~2 min   CPython 3.10 venv (uv, no conda)</span>
+bash scripts/fetch_release.sh      <span class="c"># ~5 min   6.85 GB simulator -&gt; 18 GB unpacked</span>
+bash scripts/fetch_vendor.sh       <span class="c"># ~30 s    px4_msgs pinned to 392e831c</span>
+bash scripts/build_ros.sh          <span class="c"># ~3 min   colcon: px4_msgs + 7 packages</span>
+
+export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
+./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">50 passed</span><span class="c">, no simulator needed</span></pre>
+
+    <h2 id="r-run">Run an example</h2>
+<pre><span class="c"># terminal 1 — simulator + the whole ROS 2 graph (~90 s to be ready)</span>
+./scripts/bringup.sh --backend oracle
+
+<span class="c"># terminal 2 — one scored episode</span>
+./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1
+<span class="c">#   -&gt; </span><span class="g">SUCCESS  18.6 m from goal, 14 steps</span>
+
+<span class="c"># always, when the test is done</span>
+./scripts/stop.sh --all &amp;&amp; ./scripts/status.sh</pre>
+    <div class="note warn">
+      <span class="t">Project rule</span>
+      <p>
+        Every flight test ends with <code>stop.sh --all</code>. The simulator holds 3.3 GB of
+        VRAM while idle, and a leftover graph <strong>stacks</strong> on the next bringup — two
+        controllers then fight over the aircraft while <code>ros2 node list</code> still looks
+        correct.
+      </p>
+    </div>
+
+    <h2 id="r-results">Results</h2>
+    <div class="prose">
+      <p>
+        The scenarios are navigable, the harness reaches goals when something points at them,
+        and a depth-following heuristic with no language understanding reaches none. That gap
+        is the space a VLM has to fill.
+      </p>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Scenario</th><th>Oracle</th><th>Geometric baseline</th></tr></thead>
+      <tbody>
+        <tr><th><code>cross_the_plaza</code></th>
+            <td><span class="chip ok">Success</span> 18.6 m, 14 steps</td>
+            <td><span class="chip no">Failure</span> 41.3 m</td></tr>
+        <tr><th><code>follow_the_avenue</code></th>
+            <td><span class="chip ok">Success</span> 19.6 m, 16 steps</td>
+            <td><span class="chip no">Failure</span> 188.0 m</td></tr>
+        <tr><th><code>rain_descent</code></th>
+            <td><span class="chip ok">Success</span> 13.4 m, 8 steps</td>
+            <td><span class="chip no">Failure</span> 71.8 m</td></tr>
+        <tr><th><code>avoid_the_block</code></th>
+            <td><span class="chip ok">Success</span> 18.2 m, 9 steps</td>
+            <td><span class="chip no">Failure</span> 173.6 m</td></tr>
+      </tbody>
+    </table></div>
+    <div class="tw"><table>
+      <thead><tr><th>Measured with the full graph running</th><th>Rate</th></tr></thead>
+      <tbody>
+        <tr><th><code>/fmu/out/vehicle_odometry</code></th><td>20.0 Hz</td></tr>
+        <tr><th><code>/camera/{rgb,depth}/image_raw</code></th><td>7.8 Hz</td></tr>
+        <tr><th><code>/vlm/annotation</code></th><td>0.9 Hz — a slow model is the design point</td></tr>
+        <tr><th><code>/fmu/in/trajectory_setpoint</code></th><td>10.0 Hz</td></tr>
+        <tr><th>Grounding accuracy</th><td>~3 m residual on a 64 m ray</td></tr>
+        <tr><th>Real-time factor</th><td>1.000 on both clocks, 60 FPS</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="r-backend">Adding a VLM backend</h2>
+    <div class="prose">
+      <p>
+        Implement one method — image and instruction in, pixel out — and register it in
+        <code>BACKENDS</code>. The model never sees a pose, a map or metres; all the geometry
+        happens downstream in <code>grounding</code>, which is what keeps backends swappable and
+        the comparison fair.
+      </p>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Backend</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><th><code>mock</code></th><td>Seeded random pixels. The floor.</td></tr>
+        <tr><th><code>scripted</code></th><td>A fixed pixel sequence — a changed outcome is unambiguously a change in the stack, not the model.</td></tr>
+        <tr><th><code>geometric</code></th><td>Steers toward the most open depth column. The baseline a real VLM must beat to be worth its latency.</td></tr>
+        <tr><th><code>oracle</code></th><td><strong>A diagnostic, not a competitor.</strong> Handed the goal, so it answers whether a scenario is navigable at all. Never reported beside a real model's score.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="r-native">Running outside a container</h2>
+    <div class="prose">
+      <p>
+        Developed inside a distrobox on a Fedora host, but <strong>native Ubuntu 24.04 is the
+        simpler target</strong> — exactly one workaround exists because of the container, and it
+        disappears without it.
+      </p>
+      <ul>
+        <li>
+          <strong>Vulkan ICD (container-only).</strong> distrobox injects the <em>host's</em> ICD
+          JSON, so on a Fedora host it names <code>/usr/lib64/libGLX_nvidia.so.0</code> — absent
+          in an Ubuntu container. On native Ubuntu the driver package ships a correct one.
+          <code>run_sim.sh</code> uses the system ICD when it resolves and synthesises a corrected
+          one only when it does not, so it works either way with no configuration.
+        </li>
+        <li>
+          <strong>Everything else is portable.</strong> The Python 3.10 venv is needed because
+          <em>Ubuntu 24.04</em> ships 3.12, not because of the container.
+          <code>ROS_DOMAIN_ID=42</code> avoids a sibling project's ROS graph. The
+          <code>pkill -f</code> guardrails are universal shell behaviour.
+        </li>
+      </ul>
+    </div>
+
+    <h2 id="r-fit">What it is and is not good for</h2>
+    <div class="note">
+      <span class="t">Good for</span>
+      <p>
+        Developing and benchmarking a VLM navigation client against a photoreal city with dense
+        traffic, weather and segmentation ground truth. Episodes are repeatable to 0.04 m of
+        trajectory divergence, on one workstation GPU, with no build step.
+      </p>
+    </div>
+    <div class="note stop">
+      <span class="t">Not for sim-to-real</span>
+      <p>
+        CARLA-Air contains <strong>no PX4</strong> — zero occurrences of <code>px4</code>,
+        <code>mavlink</code>, <code>uxrce</code> or <code>/fmu/</code> upstream. These
+        <code>/fmu/*</code> topics are a shim over AirSim SimpleFlight: you get portability of
+        <em>your</em> nodes, not a flight controller. Failsafes, lockstep, EKF2 and arming logic
+        need a different lane.
+      </p>
+    </div>
+    <div class="note warn">
+      <span class="t">Sweeps run in real time</span>
+      <p>
+        Both clocks hold RTF 1.000 and faster-than-real-time is unavailable — AirSim's
+        <code>ClockSpeed</code> accelerates the aircraft while CARLA's world stays at 1×, so the
+        two halves desync. Budget <code>timeout × seeds</code> of wall clock.
+      </p>
+    </div>
+  </article>
+
+  <!-- ============================ QUICKSTART ============================ -->
+  <article class="doc" id="d-quick" role="tabpanel" aria-labelledby="t-quick" hidden>
+    <p class="eyebrow">From nothing to a scored autonomous flight</p>
+    <h1>Quick start</h1>
+    <p class="lede">
+      About 40 minutes, most of it the 6.85 GB download and the 18 GB unpack. The three
+      failures you are most likely to hit are all silent — they are in
+      <a href="#q-trouble">Troubleshooting</a>.
+    </p>
+
+    <h2 id="q-check">Check the machine first</h2>
+<pre><span class="c"># all three must succeed</span>
+nvidia-smi                                   <span class="c"># driver alive</span>
+source /opt/ros/jazzy/setup.bash &amp;&amp; ros2 --help &gt;/dev/null &amp;&amp; echo "ros2 ok"
+ls /usr/share/vulkan/icd.d/nvidia_icd*.json  <span class="c"># a Vulkan ICD exists</span></pre>
+
+    <ol class="steps">
+      <li>
+        <h3 id="q-install">Install — four commands</h3>
+<pre>git clone &lt;this repo&gt; carla-air_testing &amp;&amp; cd carla-air_testing
+
+bash scripts/setup_env.sh          <span class="c"># ~2 min</span>
+bash scripts/fetch_release.sh      <span class="c"># ~5 min</span>
+bash scripts/fetch_vendor.sh       <span class="c"># ~30 s</span>
+bash scripts/build_ros.sh          <span class="c"># ~3 min</span></pre>
+        <div class="prose">
+          <p>
+            <code>fetch_release.sh</code> prints an <code>export CARLAAIR_RELEASE=…</code> line at
+            the end. <strong>Run it, and put it in your shell profile</strong> — every other
+            script reads it. Then verify without touching the simulator:
+          </p>
+        </div>
+<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">50 passed</span></pre>
+      </li>
+
+      <li>
+        <h3 id="q-up">Bring the stack up</h3>
+<pre>./scripts/bringup.sh --backend oracle</pre>
+        <div class="prose"><p>Wait for these three lines — about 90 s, mostly Unreal loading the map:</p></div>
+<pre><span class="g">GPU 0: 3342 MiB in use — hardware rendering confirmed</span>
+sim_bridge up on /tmp/carla_air_testbed.sock
+[bridge_node-1] bridged to CARLA-Air — map=Town10HD hfov=89.9deg</pre>
+        <div class="note stop">
+          <span class="t">3342 MiB matters</span>
+          <p>
+            If it reports a few hundred MiB you are rendering on the CPU, not the GPU — RGB
+            capture drops from 53.8 Hz to 5.95 Hz and nothing errors. See
+            <a href="#q-trouble">Troubleshooting</a>.
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <h3 id="q-fly">Fly a scored episode</h3>
+<pre>cd carla-air_testing
+./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1</pre>
+<pre>=== cross_the_plaza seed=1 ===
+  traffic: {'vehicles': 15, 'walkers': 9}
+  start pose: [113.0, -167.1, -55.7] (commanded [107.6, -159.4, -55.0], error 9.4 m)
+  episode running [cross_the_plaza-s1-331669] — 'fly across the open plaza…'
+    alt  54.4 m  pos [122.1, -173.7, -54.4]
+    alt  54.6 m  pos [145.8, -168.5, -54.6]
+    alt  54.9 m  pos [169.6, -163.3, -54.9]
+  -&gt; <span class="g">SUCCESS  18.6 m from goal, 14 steps</span>
+
+=== cross_the_plaza: <span class="g">1/1 succeeded (100%)</span> ===</pre>
+        <div class="prose">
+          <p>
+            The result lands in <code>out/episodes/&lt;episode_id&gt;.json</code>. A <strong>~9 m
+            start-pose error is normal</strong> — the aircraft relaxes about 4 m after reaching a
+            setpoint, which is why success radii are 20 m.
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <h3 id="q-stop">Stop — every time</h3>
+<pre>./scripts/stop.sh --all
+./scripts/status.sh          <span class="c"># every count 0, GPU back to ~110 MiB</span></pre>
+        <div class="prose">
+          <p>This is a project rule, not tidiness — see the note in the readme.</p>
+        </div>
+      </li>
+    </ol>
+
+    <h2 id="q-next">What you just ran</h2>
+    <div class="prose">
+      <p>
+        <code>oracle</code> is not a VLM. It is handed the goal and flies straight at it, so it
+        answers one question: <strong>is this scenario navigable at all?</strong> Its 4/4 is the
+        ceiling; the <code>geometric</code> baseline scores 0/4. Try the contrast:
+      </p>
+    </div>
+<pre>./scripts/stop.sh
+./scripts/bringup.sh --backend geometric
+<span class="c"># then in terminal 2, the same episode command</span>
+
+<span class="c"># other things to try</span>
+./.venv/bin/python scripts/run_episode.py --scenario follow_the_avenue --seeds 1 2 3
+./.venv/bin/python scripts/record_flight.py 60   <span class="c"># -&gt; out/flight.mp4</span>
+./scripts/run_conformance.sh                     <span class="c"># ~15 min; p06/p07/p09 </span><span class="y">expected to fail</span></pre>
+
+    <h2 id="q-trouble">Troubleshooting</h2>
+    <div class="tw"><table>
+      <thead><tr><th>Symptom</th><th>Cause and fix</th></tr></thead>
+      <tbody>
+        <tr>
+          <th>Everything is slow; <code>run_sim.sh</code> reports a few hundred MiB of VRAM</th>
+          <td>You are on the <strong>lavapipe software rasteriser</strong>, not the GPU — 53.8 Hz drops to 5.95 Hz and nothing errors. <code>run_sim.sh</code> regenerates a corrected Vulkan ICD automatically; if it persists, check <code>ldconfig -p | grep libGLX_nvidia</code> finds a library that exists. Common inside a distrobox.</td>
+        </tr>
+        <tr>
+          <th>Simulator exits immediately, <code>out/sim.log</code> empty, no crash dump</th>
+          <td>That is what a broken Vulkan ICD looks like. Same fix. It is <em>not</em> a corrupt install.</td>
+        </tr>
+        <tr>
+          <th><code>bringup.sh</code> cannot reach <code>sim_bridge</code></th>
+          <td>The sidecar could not connect to the simulator. Check <code>out/sim_bridge.log</code>, and that ports 2000 and 41451 are listening: <code>ss -tln | grep -E '2000|41451'</code>.</td>
+        </tr>
+        <tr>
+          <th>Topic rates look doubled; two controllers seem to fight</th>
+          <td>A previous graph is still running. <code>./scripts/stop.sh</code>, then bring up again — <code>status.sh</code> shows a count above 1.</td>
+        </tr>
+        <tr>
+          <th><code>ros2 topic list</code> shows nothing</th>
+          <td>Set the domain — everything here runs on <code>ROS_DOMAIN_ID=42</code> to stay clear of other ROS graphs on the machine.</td>
+        </tr>
+        <tr>
+          <th>A code change has no effect</th>
+          <td><code>colcon --symlink-install</code> still needs a rebuild for <code>ament_python</code> packages; the symlink is made at build time. Re-run <code>scripts/build_ros.sh</code>.</td>
+        </tr>
+        <tr>
+          <th><code>import carla</code> fails</th>
+          <td>Use <code>./.venv/bin/python</code>. The client module is <code>cpython-310</code>; system Python on Ubuntu 24.04 is 3.12 and physically cannot load it.</td>
+        </tr>
+      </tbody>
+    </table></div>
+  </article>
+
+  <footer>carla-air testbed · CARLA-Air v0.1.7 · ROS 2 Jazzy · px4_msgs pinned to 392e831c</footer>
+  </main>
+</div>
+
+<script>
+  const tabs = [...document.querySelectorAll('.tab')];
+  const toc  = document.getElementById('toc');
+
+  function buildToc(doc){
+    toc.innerHTML = '';
+    doc.querySelectorAll('h2[id]').forEach(h => {
+      const a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.textContent = h.textContent;
+      toc.appendChild(a);
+    });
+  }
+
+  function select(tab){
+    tabs.forEach(t => {
+      const on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    buildToc(document.getElementById(tab.getAttribute('aria-controls')));
+    window.scrollTo({top: 0, behavior: 'auto'});
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => select(t)));
+  buildToc(document.getElementById('d-readme'));
+</script>
