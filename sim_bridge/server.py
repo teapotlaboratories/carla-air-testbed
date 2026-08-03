@@ -50,7 +50,14 @@ class SimBridge:
     #: nothing and cost everything: `land` blocks for the whole descent while holding
     #: `slow_lock`, and BOTH video streams froze behind it for tens of seconds. Reported as
     #: "pressing land breaks the web stream"; it was the lock, not the stream.
-    MEDIA = frozenset({"capture", "view_jpeg", "chase_jpeg", "lidar"})
+    #:
+    #: `set_camera_pose` belongs here too, and its absence was the FOURTH instance of this
+    #: same root cause. It drives `self.camera`, which is built on `self.airsim_media` - but
+    #: it sat outside every class and so took `slow_lock`, letting it run concurrently with
+    #: `capture` on the one msgpackrpc socket. msgpackrpc answers that with
+    #: "IOLoop is already running", the call fails, and the CAMERA PITCH IS SILENTLY NOT
+    #: APPLIED - on a measurement surface that every scored episode depends on.
+    MEDIA = frozenset({"capture", "view_jpeg", "chase_jpeg", "lidar", "set_camera_pose"})
 
     def __init__(self, carla_port=2000, airsim_port=41451, seed=None, timeout=30.0):
         self.carla_client = carla.Client("127.0.0.1", carla_port)

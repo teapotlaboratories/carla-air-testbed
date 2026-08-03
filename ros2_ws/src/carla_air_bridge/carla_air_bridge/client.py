@@ -173,5 +173,12 @@ class SimBridgeClient:
     def destroy_actors(self):
         return self.call("destroy_actors")
 
+    def chase_start(self, path, width=1280, height=720, fps=30.0):
+        """The exterior follow camera. A spectator view, scored on nothing."""
+        return self.call("chase_start", path=path, width=width, height=height, fps=fps)
+
+    def chase_stop(self):
+        return self.call("chase_stop")
+
     def carla_to_ned(self, x, y, z=0.0):
         return self.call("carla_to_ned", x=float(x), y=float(y), z=float(z))["ned"]

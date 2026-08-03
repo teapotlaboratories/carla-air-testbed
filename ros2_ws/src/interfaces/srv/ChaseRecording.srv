@@ -1,0 +1,20 @@
+# Start or stop the exterior follow-camera recording.
+#
+# One service rather than two, because start and stop are the same concern and a caller that
+# can reach one can always reach the other. `path` is written by the SIDECAR, not the caller,
+# so it resolves on the machine running the simulator.
+#
+# Deliberately separate from the onboard capture path: that one feeds the model and is a
+# measurement surface, this one is a spectator and is scored on nothing. Recording must never
+# be able to fail a flight.
+bool start                      # false = stop, and the remaining fields are ignored
+string path                     # absolute .mp4 path; the sidecar creates parent directories
+int32 width
+int32 height
+float64 fps
+---
+bool success
+int32 frames                    # on stop: what was actually written
+int32 dropped                   # frames the follower could not keep up with
+float64 seconds
+string message

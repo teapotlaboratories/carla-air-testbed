@@ -17,7 +17,7 @@ this section serves that, and the recommended order is at the end.
 The line that decides every question here: **the only interface to the aircraft and the world
 is ROS 2.** If something needs the sidecar socket, it is not finished.
 
-### R-01 · Put world control on ROS 2 — **half done** *(2026-08-03)*
+### R-01 · Put world control on ROS 2 — **done** *(2026-08-03)*
 
 The keystone, and the item that is not obvious from the outside. [S-04](#sensors) closed
 *aircraft* commanding — takeoff, land, position, velocity, attitude all have `/fmu/in/*`
@@ -40,9 +40,12 @@ methods; these are the ones a scenario needs and ROS cannot reach:
 
 Consequences, both of which are real work rather than plumbing:
 
-- **The chase camera needs a ROS topic.** It is a sidecar-only concern today; the web console
-  gets JPEGs over the socket (`webui/server.py:286`). It has to become an
-  `image_transport`-shaped publisher like the onboard camera, or R-03 cannot happen.
+- **The chase camera needs a ROS surface — but a narrower one than this said.** *(Revised
+  2026-08-03, when R-03 was deferred.)* Originally "it must become an `image_transport`
+  publisher". That was driven entirely by the web console's second video pane. Chase
+  *recording* writes its own mp4 inside the sidecar (`chase_start` / `chase_stop`) and never
+  streams frames anywhere, so what `run_episode.py` actually needs is those two calls as
+  services. The video topic is deferred with R-03.
 - **Services or topics, decided per method.** `reset` and `spawn_traffic` are request/response
   with a meaningful failure — services. `collision` is state — a topic. Guessing uniformly
   either way will be wrong for half of them.
@@ -89,10 +92,42 @@ Also fixed on the way: `client.spawn_traffic` silently dropped `near_ned` and `r
 every ROS-side spawn would have been map-wide — a scenario asking for busy streets getting an
 empty city, with nothing to indicate it.
 
-**Still open, and R-03 is blocked on it:** the **chase camera has no ROS topic**. It remains
-sidecar-only (`chase_jpeg` over the socket), so the web console cannot yet drop its second
-video pane onto ROS. And `scripts/run_episode.py` still opens the socket directly — rewriting
-it onto these services is the honest end of this item.
+**Finished the same day.** Two more services (`SetCameraPose`, `ChaseRecording`) and a
+`Collision` message replacing the bare `Bool` on `/sim/collision` — the flag alone had people
+searching video for a building the log already knew the name of.
+
+`scripts/run_episode.py` is now **a plain ROS 2 client**. It no longer opens the socket, and
+it no longer shells out through `bash -lc` to `ros2 service call` / `ros2 param set` either;
+those became a service call and a `SetParameters` client. It runs under ROS's 3.12 via
+`scripts/run_episode.sh`. That was the real test of the surface, and it passed:
+
+    cross_the_plaza seed=1 -> SUCCESS 19.4 m, 13 steps
+    cross_the_plaza seed=2 -> SUCCESS 19.4 m, 13 steps
+
+against a documented baseline of 18.6 m / 14 steps. Chase recording still works through the
+new service (452 frames, 0 dropped).
+
+**Three bugs the port exposed, none of them in the port:**
+
+- **`destroy_all` was fire-and-forget.** It used `apply_batch`, so destruction was still in
+  flight when the next `spawn_traffic` attached walker controllers to half-reaped walkers.
+  CARLA threw `set_actor_simulate_physics: Actor could not be found in the registry` as an
+  uncaught C++ `std::runtime_error`, which calls `terminate()` and **took the whole sidecar
+  down**. The old script was slow enough between the two calls to hide it; a ROS client is
+  not. Now `apply_batch_sync`, and three back-to-back destroy/spawn cycles survive.
+- **`set_camera_pose` was in no lock class** — the *fourth* instance of "lock classes guard
+  dispatch, not sockets". It drives the media AirSim client but took `slow_lock`, so it ran
+  concurrently with `capture` on one msgpackrpc socket, failed with `IOLoop is already
+  running`, and **silently did not apply the camera pitch** — on a measurement surface every
+  scored episode depends on. Now in `MEDIA`.
+- **`near_ned` falls back to map-wide silently** when the radius holds too few spawn points
+  (`world.py:83`). Measured, that is 20 cars within 60 m of the aircraft versus 5. The
+  service now reports it: *"NOT clustered: only 0 spawn points within 30 m … fell back to
+  map-wide"*.
+
+**Deferred with [R-03](#r-03--the-web-console-talks-ros-2-only--deferred-2026-08-03):** the
+chase camera still has no video *topic*. Nothing needs one now that recording is a service —
+the web console was the only consumer.
 
 ### R-02 · Decouple the VLM from the core — **next**
 
@@ -129,7 +164,7 @@ assume the current layout. The 40-episode results must reproduce afterwards.
   node running** and `ros2 node list` proves it; then the example is started separately and
   `cross_the_plaza` scores what it scored before. Re-run the E-01 sweep, not one seed.
 
-### R-03 · The web console talks ROS 2 only — **open**, needs R-01
+### R-03 · The web console talks ROS 2 only — **deferred** *(2026-08-03)*
 
 `webui/server.py` currently dispatches *arbitrary* sidecar RPC methods over the Unix socket
 (`webui/server.py:316-319`) and imports no ROS at all. Every button — velocity, yaw, hold,
@@ -146,6 +181,18 @@ reimplemented. Flying the aircraft is the part that must be ROS.
 
 - **Verify:** `grep -c 'socket' webui/server.py` reaches zero for the control and video paths,
   and every control still works over NetBird. Both video panes come from ROS topics.
+
+> **Deferred at the operator's request, 2026-08-03.** The console is a convenience for
+> looking at the simulator by hand; nothing depends on it. Two consequences worth stating
+> rather than discovering later:
+>
+> - **The chase camera does not need a ROS topic yet.** It was on R-01's list *only* because
+>   this item needed a second video pane. Chase recording writes its own mp4 inside the
+>   sidecar via `chase_start`/`chase_stop` and never streams frames to ROS, so R-01 can be
+>   finished with two more services instead of an `image_transport` pipeline nobody is
+>   consuming. The topic comes back when this item does.
+> - **The console keeps talking to the socket until then**, so "the only interface is ROS 2"
+>   has a known, documented exception rather than being quietly untrue.
 
 ### R-04 · One command to install — **done** *(2026-08-03)*
 
@@ -182,6 +229,25 @@ variable away from failing, and `.release-path` is what fixes that here.
 
 - **Still unverified:** the clean-clone path, including the actual 6.85 GB download. Only a
   fresh machine proves that, and this one already has everything.
+
+### R-07 · The offline suite dies in a ROS-sourced shell — **open**
+
+`./.venv/bin/python -m pytest tests/ -q` is the documented command, and it fails with
+`ModuleNotFoundError: No module named 'lark'` whenever the shell has sourced ROS — which is
+every shell that has just run `bringup.sh`.
+
+**Diagnosed, so this is a fix and not an investigation.** It is not our code: sourcing ROS
+puts Jazzy's 3.12 site-packages on `PYTHONPATH`, the 3.10 pytest then autoloads the pytest
+plugins ROS registers there (`launch_testing` and friends), and those import `launch`, which
+wants `lark`, which the 3.10 venv does not have. `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` makes it
+pass. Collection never starts, so a `conftest.py` cannot help — it runs too late.
+
+Pre-existing, not introduced by the ROS-services work; found while adding
+`tests/test_interfaces.py`. The error names a package nobody has heard of and points at
+`/opt/ros`, which is exactly the shape of misleading failure this project keeps paying for.
+
+- **Verify:** the documented command passes both in a clean shell and in one that has
+  sourced ROS.
 
 ### R-05 · Headless or windowed, from the config — **open**
 
@@ -228,10 +294,9 @@ Two options, and this is a decision rather than code:
 ### Recommended order
 
 1. ~~**R-04**~~ — **done 2026-08-03.**
-2. **R-01** next — the keystone. R-02 and R-03 are both blocked on it in practice, and
-   rewriting `run_episode.py` onto it is what proves the ROS surface is real.
-3. **R-02**, then **R-03** — the repositioning proper, in that order, because decoupling the
-   VLM makes clear which node the console should actually be talking to.
+2. ~~**R-01**~~ — **done 2026-08-03**, `run_episode.py` included.
+3. **R-02** — the repositioning proper. **R-03 is deferred**, so this is the last big item.
+4. **R-07** whenever it annoys someone.
 4. **R-05** and **R-06** any time — small, independent, and neither blocks anything.
 
 Deliberately **not** started until the above lands: the camera-pitch decision, and V-01's

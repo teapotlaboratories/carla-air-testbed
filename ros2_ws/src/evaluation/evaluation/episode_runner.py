@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 import rclpy
 import yaml
-from interfaces.msg import Annotation2D, EpisodeResult, EpisodeStatus, GroundedWaypoint
+from interfaces.msg import Annotation2D, Collision, EpisodeResult, EpisodeStatus, GroundedWaypoint
 from interfaces.srv import SetEpisode
 from px4_msgs.msg import VehicleOdometry
 from rclpy.node import Node
@@ -102,7 +102,7 @@ class EpisodeRunner(Node):
                                  self._on_odom, PX4_QOS)
         self.create_subscription(Annotation2D, "/vlm/annotation", self._on_annotation, 5)
         self.create_subscription(GroundedWaypoint, "/vlm/grounded_waypoint", self._on_wp, 5)
-        self.create_subscription(Bool, "/sim/collision", self._on_collision, 5)
+        self.create_subscription(Collision, "/sim/collision", self._on_collision, 5)
 
         self.srv = self.create_service(SetEpisode, "/episode/set", self._on_set)
         self.create_timer(1.0 / float(self.get_parameter("status_rate_hz").value), self._tick)
@@ -166,9 +166,14 @@ class EpisodeRunner(Node):
         if self._episode and self._episode.state == "running" and not msg.valid:
             self.get_logger().info(f"invalid waypoint during episode: {msg.reason}")
 
-    def _on_collision(self, msg: Bool):
-        if msg.data and self._episode and self._episode.state == "running":
+    def _on_collision(self, msg: Collision):
+        if msg.has_collided and self._episode and self._episode.state == "running":
             self._episode.collisions += 1
+            # Name what was hit. `has_collided` latches until the next reset, so without
+            # this the log says a run was spoiled and not by what.
+            self.get_logger().warn(
+                f"collision with {msg.object_name or 'an unnamed actor'} "
+                f"at {[round(v, 1) for v in msg.position_ned]}")
             self._finish("collision")
 
     # -------------------------------------------------------------------- logic

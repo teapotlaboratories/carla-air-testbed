@@ -21,8 +21,9 @@ import sys
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, String
+from std_msgs.msg import String
 
+from interfaces.msg import Collision
 from interfaces.srv import DestroyActors, ResetVehicle, SetWeather, SpawnTraffic
 
 #: `reset` arms the aircraft, flies it to the pose and settles — **measured 16.2 s** for a
@@ -46,12 +47,14 @@ class WorldControl(Node):
         # Read-side state. Already on ROS before this example existed; shown here so the
         # example covers the whole world surface rather than only the new half.
         self.collided = None
+        self.hit_what = ""
         self.traffic_line = None
-        self.create_subscription(Bool, "/sim/collision", self._on_collision, 5)
+        self.create_subscription(Collision, "/sim/collision", self._on_collision, 5)
         self.create_subscription(String, "/sim/traffic_stats", self._on_traffic, 5)
 
     def _on_collision(self, msg):
-        self.collided = msg.data
+        self.collided = msg.has_collided
+        self.hit_what = msg.object_name
 
     def _on_traffic(self, msg):
         self.traffic_line = msg.data

@@ -1,0 +1,13 @@
+# Move the drone's own camera in the body frame.
+#
+# `pitch` is the one that matters and the one that has cost the most time: at -28.6 deg,
+# level flight sits in the top 13.7% of the frame, so a backend that does not know the goal
+# ALTITUDE will fly itself into the ground. Changing it invalidates comparisons against
+# every episode scored at the old value - it is a measurement surface, not a preference.
+float64[3] xyz                  # metres, body FRD, from the vehicle origin
+float64 roll                    # degrees
+float64 pitch
+float64 yaw
+---
+bool success
+string message

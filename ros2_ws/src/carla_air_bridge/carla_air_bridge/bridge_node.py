@@ -58,7 +58,9 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReli
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from std_msgs.msg import Bool, String
-from interfaces.srv import DestroyActors, ResetVehicle, SetWeather, SpawnTraffic
+from interfaces.msg import Collision
+from interfaces.srv import (ChaseRecording, DestroyActors, ResetVehicle, SetCameraPose,
+                            SetWeather, SpawnTraffic)
 
 from .client import SimBridgeClient, SimBridgeError
 
@@ -180,7 +182,9 @@ class CarlaAirBridge(Node):
         self.pub_campose = self.create_publisher(PoseStamped, "/camera/pose", 5)
 
         # ---- testbed-side signals the sim can answer but a Pixhawk cannot ----
-        self.pub_collision = self.create_publisher(Bool, "/sim/collision", 5)
+        # Collision, not Bool. The flag alone sends people looking through video for a
+        # building the log already knew the name of.
+        self.pub_collision = self.create_publisher(Collision, "/sim/collision", 5)
         self.pub_traffic = self.create_publisher(String, "/sim/traffic_stats", 5)
 
         # ---- PX4-shaped inputs ----
@@ -219,6 +223,10 @@ class CarlaAirBridge(Node):
         self.create_service(SetWeather, "/sim/set_weather", self._srv_set_weather,
                             callback_group=world_group)
         self.create_service(DestroyActors, "/sim/destroy_actors", self._srv_destroy_actors,
+                            callback_group=world_group)
+        self.create_service(SetCameraPose, "/sim/set_camera_pose", self._srv_set_camera_pose,
+                            callback_group=world_group)
+        self.create_service(ChaseRecording, "/sim/chase_recording", self._srv_chase_recording,
                             callback_group=world_group)
 
         # One callback group per channel. Without this the executor serialises the timers
@@ -549,18 +557,39 @@ class CarlaAirBridge(Node):
         try:
             # An empty `near_ned` means map-wide, which is a different request from
             # "concentrate at the origin" - so the length is what decides, not the values.
+            # Length is what decides, and it can only decide because near_ned is an
+            # UNBOUNDED array - see the note in SpawnTraffic.srv.
+            if len(req.near_ned) not in (0, 3):
+                raise ValueError(
+                    f"near_ned needs 0 values (map-wide) or 3 (a point), got {len(req.near_ned)}")
             near = list(req.near_ned) if len(req.near_ned) == 3 else None
             radius = float(req.radius_m) if req.radius_m > 0.0 else 70.0
             got = self.world.spawn_traffic(vehicles=int(req.vehicles),
                                            walkers=int(req.walkers),
                                            near_ned=near, radius_m=radius)
-            resp.success = True
             resp.spawned = int(got.get("vehicles", 0))
             resp.walkers_spawned = int(got.get("walkers", 0))
             # Asked-for and got are routinely different: the map refuses spawn points that
             # are occupied. Saying so here beats a scenario silently running near-empty.
             if resp.spawned < int(req.vehicles):
-                resp.message = (f"map accepted {resp.spawned} of {int(req.vehicles)} vehicles")
+                resp.message = f"map accepted {resp.spawned} of {int(req.vehicles)} vehicles"
+            # Two ways this "succeeds" and still gives the caller something they did not
+            # ask for, both of which used to be invisible:
+            #
+            #   1. zero spawns - not partial success, a failure;
+            #   2. the sidecar falling back to MAP-WIDE because the radius held too few
+            #      spawn points. Measured, that is the difference between 20 cars within
+            #      60 m of the aircraft and 5, and the camera only sees the neighbourhood.
+            if near is not None and not got.get("clustered", True):
+                resp.message = (
+                    f"NOT clustered: only {got.get('near_candidates', 0)} spawn points within "
+                    f"{radius:.0f} m of {[round(v, 1) for v in near]}, need "
+                    f"{int(req.vehicles)} - fell back to map-wide")
+                self.get_logger().warn(resp.message)
+            resp.success = not (int(req.vehicles) > 0 and resp.spawned == 0)
+            if not resp.success:
+                resp.message = (f"no vehicles spawned near {near or 'map-wide'} "
+                                f"within {radius:.0f} m - is that point on the map?")
         except (SimBridgeError, OSError, ValueError) as exc:
             resp.success = False
             resp.message = str(exc)
@@ -591,10 +620,55 @@ class CarlaAirBridge(Node):
             self.get_logger().error(f"destroy_actors failed: {exc}")
         return resp
 
+    def _srv_set_camera_pose(self, req, resp):
+        try:
+            if len(req.xyz) != 3:
+                raise ValueError(f"xyz needs 3 values, got {len(req.xyz)}")
+            self.world.set_camera_pose(xyz=list(req.xyz), pitch=float(req.pitch),
+                                       roll=float(req.roll), yaw=float(req.yaw))
+            resp.success = True
+            self.get_logger().info(
+                f"camera pose -> xyz={[round(v, 2) for v in req.xyz]} pitch={req.pitch}")
+        except (SimBridgeError, OSError, ValueError) as exc:
+            resp.success = False
+            resp.message = str(exc)
+            self.get_logger().error(f"set_camera_pose failed: {exc}")
+        return resp
+
+    def _srv_chase_recording(self, req, resp):
+        """Start or stop the exterior recording. Never allowed to fail a flight."""
+        try:
+            if req.start:
+                if not req.path:
+                    raise ValueError("path is required when start is true")
+                self.world.chase_start(path=req.path,
+                                       width=int(req.width) or 1280,
+                                       height=int(req.height) or 720,
+                                       fps=float(req.fps) or 30.0)
+                self.get_logger().info(f"chase recording -> {req.path}")
+            else:
+                got = self.world.chase_stop()
+                resp.frames = int(got.get("frames", 0))
+                resp.dropped = int(got.get("dropped", 0))
+                resp.seconds = float(got.get("seconds", 0.0))
+            resp.success = True
+        except (SimBridgeError, OSError, ValueError) as exc:
+            # Reported, not raised. A spectator camera that cannot start must not take the
+            # episode with it - worst case the run has no video.
+            resp.success = False
+            resp.message = str(exc)
+            self.get_logger().warn(f"chase recording: {exc}")
+        return resp
+
     def _tick_world(self):
         try:
             col = self.sim.collision()
-            self.pub_collision.publish(Bool(data=bool(col["has_collided"])))
+            self.pub_collision.publish(Collision(
+                has_collided=bool(col["has_collided"]),
+                object_name=str(col.get("object_name") or ""),
+                object_id=int(col.get("object_id", 0)),
+                position_ned=[float(v) for v in col.get("position", (0.0, 0.0, 0.0))],
+                penetration_m=float(col.get("penetration_m", 0.0))))
             # Traffic stalls intermittently (4/15 vs 11/15 across two runs); upstream ships
             # a watchdog for it and so do we. Without this an episode's "urban traffic" can
             # quietly become a car park.
@@ -644,9 +718,12 @@ class CarlaAirBridge(Node):
 def main(argv=None):
     rclpy.init(args=argv)
     node = CarlaAirBridge()
-    # 5 threads: odometry, images, world tick, the setpoint subscription, and the
-    # world-control services - `reset` blocks for 16.2 s measured and must not hold a
-    # timer's thread while it does.
+    # 7 mutually-exclusive callback groups (odometry, images, sensors, lidar and world-tick
+    # timers, plus setpoints and world-control services) sharing 5 threads. Not one each:
+    # the timers are short and never all due together, and this was measured rather than
+    # assumed - odometry held 19.9 Hz against a 20 Hz target THROUGH a 16.2 s blocking
+    # reset. What matters is that `reset` cannot hold a timer's thread, which the separate
+    # world_group guarantees. Add a group and re-measure before assuming it still holds.
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=5)
     executor.add_node(node)
     try:
