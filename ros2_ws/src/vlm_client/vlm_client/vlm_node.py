@@ -28,6 +28,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 from .backends.base import Annotation
+from .backends.claude import ClaudeBackend
 from .backends.mock import GeometricBackend, MockBackend, ScriptedBackend
 from .backends.oracle import OracleBackend
 
@@ -39,6 +40,9 @@ BACKENDS = {
     # channel and so cannot be compared with backends that only see the image. Use it to
     # decide whether a scenario is navigable at all. See backends/oracle.py.
     "oracle": OracleBackend,
+    # The first real model. Sees one frame and one instruction, exactly like the baselines
+    # above, which is what makes its score comparable with theirs.
+    "claude": ClaudeBackend,
     # Real backends register here. Each must implement backends.base.VlmBackend and must
     # not need anything beyond (image, instruction) — see that module for why.
 }
@@ -56,6 +60,17 @@ class VlmNode(Node):
         self.declare_parameter("scripted_pixels", [0.5, 0.65])
         # Only the oracle needs this; it comes from simGetCameraInfo and is stable per run.
         self.declare_parameter("camera_hfov_deg", 89.9)
+        # Claude backend. The API key is NOT here on purpose — it comes from the
+        # ANTHROPIC_API_KEY environment variable, because parameters are readable from the
+        # graph and get dumped into launch logs. See backends/claude.py.
+        self.declare_parameter("claude_model", "claude-opus-5")
+        # `low` because this is a control loop: 40 steps in 300 s is 7.5 s per decision, and
+        # a higher effort can spend that on one call. Raise it to measure quality, not rate.
+        self.declare_parameter("claude_effort", "low")
+        self.declare_parameter("claude_max_tokens", 16000)
+        self.declare_parameter("claude_timeout_s", 60.0)
+        self.declare_parameter("claude_jpeg_quality", 90)
+        self.declare_parameter("claude_fallbacks", True)
 
         name = self.get_parameter("backend").value
         if name not in BACKENDS:
@@ -95,6 +110,15 @@ class VlmNode(Node):
             flat = list(self.get_parameter("scripted_pixels").value)
             pairs = [(flat[i], flat[i + 1]) for i in range(0, len(flat) - 1, 2)]
             return ScriptedBackend(pairs, loop=True)
+        if name == "claude":
+            return ClaudeBackend(
+                model=self.get_parameter("claude_model").value,
+                effort=self.get_parameter("claude_effort").value,
+                max_tokens=int(self.get_parameter("claude_max_tokens").value),
+                jpeg_quality=int(self.get_parameter("claude_jpeg_quality").value),
+                timeout_s=float(self.get_parameter("claude_timeout_s").value),
+                fallbacks=bool(self.get_parameter("claude_fallbacks").value),
+            )
         return BACKENDS[name]()
 
     # ------------------------------------------------------------------ inputs
@@ -179,6 +203,10 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Log the backend's own tally on the way out. For a paid backend this is where the
+        # call count, token spend and decision latency actually surface — without it a
+        # sweep's cost is invisible until the invoice.
+        node.get_logger().info(f"backend on shutdown: {node.backend.describe()}")
         node.backend.close()
         node.destroy_node()
         rclpy.try_shutdown()
