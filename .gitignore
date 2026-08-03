@@ -62,3 +62,6 @@ htmlcov/
 core
 core.*
 nohup.out
+
+# Written by scripts/install.sh when the release is not in the default location.
+.release-path

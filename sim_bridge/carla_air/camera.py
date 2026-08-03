@@ -1,10 +1,18 @@
 """Frame capture and the pixel→world grounding transform.
 
 The capture cost is dominated by how many buffers are requested and at what size, and it is
-wildly superlinear: with depth and segmentation rendered at RGB resolution a single
-RGB+depth grab takes **15.4 s**. `configs/sim/settings.json` keeps RGB at 640x480 and the
-extra buffers at 320x240 — same 4:3 aspect, exact 2:1 pixel scale, 2.05 Hz for RGB+depth.
-Ask for only what you need: RGB alone is ~6 Hz.
+wildly superlinear **in the number of large buffers**: with depth and segmentation rendered at
+RGB resolution a single RGB+depth grab takes **15.4 s**.
+
+The RGB buffer alone is far cheaper than that warning suggests. Raising it 640x480 -> 1440x1080
+(2026-08-02, for 1080p recordings) is 5x the pixels and cost only **7.8 -> 7.15 Hz**, because
+depth stayed at 160x120 and segmentation at 320x240. It is the *extra* buffers that must stay
+small, not RGB.
+
+**All three must keep the same 4:3 aspect.** `FOV_Degrees` is horizontal, so two buffers with
+matching HFOV and different aspects cover different *vertical* fields — and `frames.scale_to()`
+would then map an RGB pixel onto the wrong depth pixel, silently, on every waypoint. This is
+why the camera is 1440x1080 rather than the more obvious 1920x1080.
 """
 from __future__ import annotations
 

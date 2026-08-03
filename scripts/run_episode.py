@@ -87,16 +87,21 @@ def ros_service_call(scenario, seed, instruction=""):
         capture_output=True, text=True, timeout=60)
 
 
-def run_one(sim, scen, seed, camera_pitch):
+def run_one(sim, scen, seed, camera_pitch, chase=True):
     print(f"\n=== {scen['name']} seed={seed} ===", flush=True)
 
     # World first, aircraft second: traffic spawning moves actors around and the reset
     # must be the last thing that touches the vehicle before the clock starts.
     sim.call("destroy_actors")
     sim.call("set_weather", preset=scen.get("weather", "ClearNoon"))
+    # Cluster the traffic around where the aircraft actually starts. Map-wide spawning put
+    # ~4 of 15 cars and ~2 of 10 pedestrians within 60 m of the start; the camera only ever
+    # sees the neighbourhood, so the rest was scenery for nobody.
     traffic = sim.call("spawn_traffic",
                        vehicles=int(scen.get("traffic_vehicles", 15)),
-                       walkers=int(scen.get("traffic_walkers", 10)))
+                       walkers=int(scen.get("traffic_walkers", 10)),
+                       near_ned=list(scen["start_ned"][:2]),
+                       radius_m=float(scen.get("traffic_radius_m", 150.0)))
     print(f"  traffic: {traffic}", flush=True)
 
     start = list(scen["start_ned"])
@@ -135,19 +140,47 @@ def run_one(sim, scen, seed, camera_pitch):
     episode_id = m.group(1)
     print(f"  episode running [{episode_id}] — {scen['instruction']!r}", flush=True)
 
-    deadline = time.time() + float(scen.get("timeout_s", 240.0)) + 30.0
-    while time.time() < deadline:
-        time.sleep(5.0)
-        s = sim.call("state")
-        c = sim.call("collision")
-        print(f"    alt {abs(s['position'][2]):5.1f} m  "
-              f"pos {[round(v, 1) for v in s['position']]}"
-              f"{'  COLLIDED: ' + c['object_name'] if c['has_collided'] else ''}", flush=True)
-        result = result_for(episode_id)
-        if result:
-            return result
-    print("  runner did not report a result before the deadline", flush=True)
-    return None
+    # Exterior HD view, following the aircraft. A CARLA sensor, so it does not compete with
+    # the AirSim captures the model depends on. Recording must never be able to fail a
+    # flight, so every call here is guarded — worst case you lose the video.
+    chase_path = None
+    if chase:
+        try:
+            os.makedirs(os.path.join(PROJ, "out", "chase"), exist_ok=True)
+            chase_path = os.path.join(PROJ, "out", "chase", f"{episode_id}.mp4")
+            sim.call("chase_start", path=chase_path,
+                     width=int(scen.get("chase_width", 1280)),
+                     height=int(scen.get("chase_height", 720)),
+                     fps=float(scen.get("chase_fps", 30.0)))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  chase camera unavailable ({exc}); flying without it", flush=True)
+            chase_path = None
+
+    try:
+        deadline = time.time() + float(scen.get("timeout_s", 240.0)) + 30.0
+        while time.time() < deadline:
+            time.sleep(5.0)
+            s = sim.call("state")
+            c = sim.call("collision")
+            print(f"    alt {abs(s['position'][2]):5.1f} m  "
+                  f"pos {[round(v, 1) for v in s['position']]}"
+                  f"{'  COLLIDED: ' + c['object_name'] if c['has_collided'] else ''}", flush=True)
+            result = result_for(episode_id)
+            if result:
+                return result
+        print("  runner did not report a result before the deadline", flush=True)
+        return None
+    finally:
+        # In `finally` so a timeout or an exception still closes the file. Without this the
+        # video of the run that went wrong is the one left unplayable.
+        if chase_path:
+            try:
+                info = sim.call("chase_stop")
+                print(f"    chase: {info.get('frames', 0)} frames "
+                      f"({info.get('seconds', 0)}s), {info.get('dropped', 0)} dropped "
+                      f"-> {chase_path}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  chase camera did not stop cleanly: {exc}", flush=True)
 
 
 def result_for(episode_id):
@@ -167,6 +200,8 @@ def main():
     ap.add_argument("--socket", default=protocol.DEFAULT_SOCKET)
     ap.add_argument("--camera-pitch", type=float, default=-0.5,
                     help="radians; must match grounding's camera_pitch_deg")
+    ap.add_argument("--no-chase", action="store_true",
+                    help="skip the exterior HD chase-camera recording")
     args = ap.parse_args()
 
     scen = load_scenario(args.scenario)
@@ -176,7 +211,7 @@ def main():
     results = []
     try:
         for seed in args.seeds:
-            r = run_one(sim, scen, seed, args.camera_pitch)
+            r = run_one(sim, scen, seed, args.camera_pitch, chase=not args.no_chase)
             if r:
                 results.append(r)
                 print(f"  -> {'SUCCESS' if r['success'] else 'FAILURE (' + r['failure_mode'] + ')'}"

@@ -10,13 +10,24 @@
 #   ./scripts/run_sim.sh --kill
 set -euo pipefail
 
-# Default matches scripts/fetch_release.sh, so the three scripts agree without
-# configuration. Override with CARLAAIR_RELEASE (or CARLAAIR_HOME for the parent).
-RELEASE="${CARLAAIR_RELEASE:-${CARLAAIR_HOME:-$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")/carla-air-release}/CarlaAir-v0.1.7}"
+# One resolver for every script that needs the release. Override for a single run with
+# CARLAAIR_RELEASE; a custom install location is remembered in .release-path instead.
+RELEASE="$("$(dirname "${BASH_SOURCE[0]}")/release_path.sh")"
 BIN="$RELEASE/CarlaUE4/Binaries/Linux/CarlaUE4-Linux-Shipping"
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ICD="$PROJ/configs/vulkan/nvidia_icd.container.json"
-MAP="${1:-Town10HD}"
+# Defaults come from configs/testbed.yaml; the argument and the environment still win, so
+# a one-off run needs no edit and a permanent change needs no flag.
+cfg() { "$PROJ/.venv/bin/python" -c "
+import sys, yaml
+d = yaml.safe_load(open('$PROJ/configs/testbed.yaml'))
+for k in sys.argv[1].split('.'):
+    d = (d or {}).get(k)
+    if d is None: print(''); raise SystemExit
+print(d)" "$1" 2>/dev/null; }
+
+MAP="${1:-$(cfg simulator.map)}"
+MAP="${MAP:-Town10HD}"
 
 # `pkill -f CarlaUE4-Linux-Shipping` also matches this script's own command line and kills
 # the shell running it. Match on the process name instead.
@@ -51,8 +62,44 @@ fi
 # 256x144 (16:9) default, so a pixel index from the RGB frame reads the wrong place.
 # configs/sim/settings.json keeps the aspect ratios equal and depth/seg small — see
 # docs/architecture.md for why small matters (it is the float readback, not the GPU).
+# Render configs/testbed.yaml first, so settings.json is never stale relative to its source.
+"$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --quiet || {
+    echo "could not render configs/testbed.yaml" >&2; exit 1; }
 mkdir -p ~/Documents/AirSim
 cp "$PROJ/configs/sim/settings.json" ~/Documents/AirSim/settings.json
+
+# ---- GPS origin, chosen at start rather than baked in ----
+#
+# AirSim reads settings.json ONCE at startup, so the geodetic origin cannot be changed on a
+# running simulator — this copy is the only place it can be set. Left unset, AirSim uses its
+# own default (Redmond, Washington: 47.639686, -122.138289, observed), which is a perfectly
+# good GPS *sensor* and meaningless *geolocation*, since the aircraft is flying in Town10HD.
+#
+#   TESTBED_ORIGIN_LAT=51.5 TESTBED_ORIGIN_LON=-0.12 ./scripts/run_sim.sh
+#
+# Patching rather than templating: settings.json is also read by humans, and a file full of
+# ${PLACEHOLDERS} is worse to read than one that says what it means.
+TESTBED_ORIGIN_LAT="${TESTBED_ORIGIN_LAT:-$(cfg simulator.gps_origin.lat)}"
+TESTBED_ORIGIN_LON="${TESTBED_ORIGIN_LON:-$(cfg simulator.gps_origin.lon)}"
+TESTBED_ORIGIN_ALT="${TESTBED_ORIGIN_ALT:-$(cfg simulator.gps_origin.alt)}"
+if [ -n "${TESTBED_ORIGIN_LAT:-}" ] && [ "${TESTBED_ORIGIN_LAT}" != "None" ]; then
+    LAT="${TESTBED_ORIGIN_LAT:-0}"; LON="${TESTBED_ORIGIN_LON:-0}"
+    ALT="${TESTBED_ORIGIN_ALT:-0}"
+    "$PROJ/.venv/bin/python" - "$LAT" "$LON" "$ALT" <<'PYEOF'
+import json, os, sys
+path = os.path.expanduser("~/Documents/AirSim/settings.json")
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["OriginGeopoint"] = {"Latitude": float(sys.argv[1]),
+                         "Longitude": float(sys.argv[2]),
+                         "Altitude": float(sys.argv[3])}
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=4)
+print(f"gps origin: {sys.argv[1]}, {sys.argv[2]} at {sys.argv[3]} m")
+PYEOF
+else
+    echo "gps origin: AirSim default (Redmond WA) - set TESTBED_ORIGIN_LAT/LON to override"
+fi
 
 # ---- Vulkan: put it on the actual GPU ----
 #
@@ -107,7 +154,8 @@ unset VK_ICD_FILENAMES || true
 # loader layer and works with the proprietary NVIDIA driver. It is the mechanism that
 # actually works here: this CARLA build carries no UE `-graphicsadapter` switch, and
 # CUDA_VISIBLE_DEVICES does not affect Vulkan.
-if [ -n "${TESTBED_GPU:-}" ]; then
+TESTBED_GPU="${TESTBED_GPU:-$(cfg simulator.gpu)}"
+if [ -n "${TESTBED_GPU:-}" ] && [ "$TESTBED_GPU" != "None" ]; then
     if [ ! -e /usr/share/vulkan/implicit_layer.d/VkLayer_MESA_device_select.json ]; then
         echo "WARNING: TESTBED_GPU is set but the Mesa device-select layer is missing;" >&2
         echo "         the request will be ignored. Install mesa-vulkan-drivers." >&2

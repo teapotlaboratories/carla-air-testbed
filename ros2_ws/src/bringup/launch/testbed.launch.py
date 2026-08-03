@@ -28,12 +28,15 @@ def generate_launch_description():
         DeclareLaunchArgument("params", default_value=default_params,
                               description="parameter file applied to every node"),
         DeclareLaunchArgument("backend", default_value="geometric",
-                              description="VLM backend: mock | scripted | geometric"),
+                              description="VLM backend: mock | scripted | geometric | oracle | claude"),
         DeclareLaunchArgument("instruction",
                               default_value="fly forward and stay clear of buildings"),
         DeclareLaunchArgument("evaluation", default_value="true",
                               description="run the episode runner"),
         DeclareLaunchArgument("socket_path", default_value="/tmp/carla_air_testbed.sock"),
+        # On by default: a failed episode used to leave a number and nothing to look at.
+        DeclareLaunchArgument("record", default_value="true",
+                              description="record every episode to out/videos/<episode_id>.mp4"),
     ]
 
     params = LaunchConfiguration("params")
@@ -56,6 +59,14 @@ def generate_launch_description():
         Node(
             package="control", executable="offboard_node", name="offboard_control",
             output="screen", parameters=[params],
+        ),
+        Node(
+            package="evaluation", executable="recorder", name="recorder", output="screen",
+            parameters=[params],
+            # A condition, not a bool parameter: LaunchConfiguration hands over the string
+            # "true", and feeding a string to a bool parameter fails at launch.
+            condition=IfCondition(PythonExpression(
+                ["'", LaunchConfiguration("record"), "' == 'true'"])),
         ),
         Node(
             package="evaluation", executable="episode_runner", name="episode_runner",

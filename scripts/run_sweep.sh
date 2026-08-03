@@ -21,7 +21,9 @@ OUT="$PROJ/out/sweep-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
 START_EPOCH="$(date +%s)"
 
-: "${CARLAAIR_RELEASE:?set CARLAAIR_RELEASE to the unpacked release}"
+RELEASE="$("$PROJ/scripts/release_path.sh")"
+[ -d "$RELEASE" ] || { echo "no release at $RELEASE - run ./scripts/install.sh" >&2; exit 1; }
+export CARLAAIR_RELEASE="$RELEASE"
 
 cleanup() { "$PROJ/scripts/stop.sh" --all >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM

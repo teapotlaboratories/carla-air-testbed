@@ -12,6 +12,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/EpisodeStatus.msg"
   "msg/EpisodeResult.msg"
   "srv/SetEpisode.srv"
+  # World control. These are what let a ROS-only client set up a scenario without
+  # reaching for the sidecar socket - see todo.md R-01.
+  "srv/ResetVehicle.srv"
+  "srv/SpawnTraffic.srv"
+  "srv/SetWeather.srv"
+  "srv/DestroyActors.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

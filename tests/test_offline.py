@@ -196,5 +196,82 @@ def test_the_three_way_client_split_holds():
     assert not (fast & control), f"a method cannot be both: {fast & control}"
 
 
+def test_chase_follow_does_not_share_a_client_with_telemetry():
+    """The chase follower must not drive `airsim_client`.
+
+    The locks in SimBridge guard dispatch CLASSES, not clients: `state` is FAST (fast_lock)
+    while `reset` is neither FAST nor CONTROL (slow_lock), and both drive `airsim_client`.
+    Two threads under two different locks can therefore write one msgpack-rpc socket at
+    once. It surfaces from deep inside tornado as
+
+        RuntimeError: Existing exports of data: object cannot be re-sized
+
+    which names nothing about the real cause, and it cost a flight test to diagnose. The
+    follow thread runs continuously at 20 Hz, so it is the one caller that genuinely races
+    everything else — it gets its own connection.
+    """
+    import inspect  # noqa: PLC0415
+
+    import server  # noqa: PLC0415
+
+    # Strip the docstring: it names both locks in order to explain why neither is taken,
+    # and matching prose rather than code is how an assertion starts lying.
+    source = inspect.getsource(server.SimBridge._chase_follow)
+    body = "\n".join(line for line in source.splitlines()
+                     if not line.strip().startswith(("#", '"""')))
+    body = body.split('"""')[-1]
+
+    assert "self.vehicle" not in body, (
+        "the chase follower is reading the shared telemetry vehicle; give it "
+        "_chase_vehicle on its own client")
+    assert "_chase_vehicle" in body
+    # And it must not be routed through a dispatch lock it does not own.
+    assert "with self.fast_lock" not in body and "with self.slow_lock" not in body
+
+
+def test_media_never_shares_a_lock_with_blocking_commands():
+    """Video must not queue behind `land`, `reset` or `goto`.
+
+    Reported as "pressing land breaks the web stream". `land` blocks for the whole descent,
+    and it held the same `slow_lock` that `view_jpeg` and `chase_jpeg` needed — so both
+    streams froze for tens of seconds. Frames come off the media AirSim client or off CARLA
+    and touch neither the telemetry nor the control socket, so they get their own lock.
+    """
+    import server  # noqa: PLC0415
+
+    media = server.SimBridge.MEDIA
+    assert {"capture", "view_jpeg", "chase_jpeg"} <= media
+    # Disjoint from every other dispatch class, or it lands on the wrong lock.
+    assert not (media & server.SimBridge.FAST)
+    assert not (media & server.SimBridge.CONTROL)
+    # And a blocking command must never be classed as media.
+    for blocking in ("reset", "goto", "land", "spawn_traffic"):
+        assert blocking not in media, f"{blocking} blocks; it cannot share the media lock"
+
+
+def test_land_is_a_control_command_not_a_slow_one():
+    """`land` drove the TELEMETRY client while `state` drove the same socket under a
+    different lock — the two-locks-one-socket race that produced 'Existing exports of data'.
+    It belongs on the control client, and therefore on the control path."""
+    import server  # noqa: PLC0415
+
+    assert "land" in server.SimBridge.CONTROL
+
+    import inspect  # noqa: PLC0415
+    body = inspect.getsource(server.SimBridge.land)
+    body = body.split('"""')[-1]           # drop the docstring, which names both clients
+    assert "self.vehicle" not in body, "land must not drive the telemetry client"
+    assert "self.control" in body
+
+
+def test_chase_methods_are_not_on_the_fast_or_control_paths():
+    """Chase calls touch CARLA and spawn a connection; they belong on neither hot path."""
+    import server  # noqa: PLC0415
+
+    for method in ("chase_start", "chase_stop"):
+        assert method not in server.SimBridge.FAST
+        assert method not in server.SimBridge.CONTROL
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

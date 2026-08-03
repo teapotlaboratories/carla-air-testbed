@@ -1,0 +1,12 @@
+# Set the CARLA weather preset. The AirSim drone camera sees it: mean pixel delta 45.8
+# measured between ClearNoon and HardRainSunset, which is the air-ground coupling that makes
+# CARLA-Air worth using over a bare AirSim map.
+#
+# An unknown preset is a FAILURE with the valid list in `message`, not a silent fallback to
+# clear skies - a scenario named "rain_descent" running in sunshine would score fine and mean
+# nothing.
+string preset                   # e.g. ClearNoon, HardRainSunset
+---
+bool success
+string applied                  # the preset now in effect
+string message                  # on failure, the valid presets

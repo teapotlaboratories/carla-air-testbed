@@ -24,9 +24,16 @@ from . import frames
 
 
 class Vehicle:
+    #: How long a ground-truth environment read stays good. Temperature, pressure and density
+    #: do not meaningfully move over a flight, and re-reading them every tick is 20% of the
+    #: sensor call's cost for no new information.
+    ENV_CACHE_S = 5.0
+
     def __init__(self, client: airsim.MultirotorClient, name: str = "SimpleFlight"):
         self._c = client
         self._name = name
+        self._env_cache = None
+        self._env_at = 0.0
 
     # ---------- lifecycle ----------
 
@@ -40,6 +47,30 @@ class Vehicle:
         self._c.enableApiControl(True, self._name)
         self._c.armDisarm(True, self._name)
         self._c.moveToPositionAsync(*hold_ned, speed, vehicle_name=self._name).join()
+        time.sleep(settle_s)
+        return self.state()
+
+    def takeoff(self, altitude_ned=-30.0, speed=6.0, settle_s=1.0):
+        """Arm, take off, and climb to `altitude_ned`, LEFT HOLDING A SETPOINT.
+
+        Needed because `land()` ends with `armDisarm(False)` and `enableApiControl(False)` —
+        after a landing the aircraft is inert, and until this existed the only way back into
+        the air was `reset()`, which also teleports it to a different place.
+
+        `takeoffAsync` only clears the ground by a couple of metres, so it is followed by a
+        climb to the requested altitude at the current x/y. And it returns holding, never
+        merely armed — same rule as `reset()`, for the same reason: an armed vehicle with no
+        setpoint is the state this project has watched run away.
+
+        `altitude_ned` is NED, not AGL, and the controller clamps NED altitude to
+        [15, 120] m. On Town10HD the ground is NED z = +27.45, so -30 is about 57 m of climb.
+        """
+        self._c.enableApiControl(True, self._name)
+        self._c.armDisarm(True, self._name)
+        self._c.takeoffAsync(vehicle_name=self._name).join()
+        p = self._c.getMultirotorState(vehicle_name=self._name).kinematics_estimated.position
+        self._c.moveToPositionAsync(p.x_val, p.y_val, float(altitude_ned), speed,
+                                    vehicle_name=self._name).join()
         time.sleep(settle_s)
         return self.state()
 
@@ -66,6 +97,65 @@ class Vehicle:
             "yaw": frames.quat_to_yaw(q.w_val, q.x_val, q.y_val, q.z_val),
             "landed": int(s.landed_state),
             "armed": True,
+        }
+
+    def sensors(self):
+        """IMU, barometer, magnetometer and GPS in one call.
+
+        AirSim creates these four automatically for a multirotor, so they answer even though
+        `settings.json` declares no `Sensors` block — which is why they had been available and
+        unpublished since the beginning. LiDAR and the distance sensor are NOT auto-created and
+        throw an RPC error until declared; see S-02b.
+
+        One call rather than four: these are four round trips to the same client for data read
+        microseconds apart, and the bridge polls them on a timer.
+
+        They carry AirSim's noise models — two IMU reads 0.4 s apart differ by ~1e-1 — so this
+        is an instrument stream, not a second copy of ground truth.
+        """
+        # Five RPC round trips per call is what makes this expensive: at 20 Hz it costs ~28%
+        # of the RGB capture rate, because the sidecar is one Python process and msgpack-rpc
+        # holds the GIL while it serialises. The environment read is the one that can go —
+        # air temperature and density are effectively constant over a flight, so it is cached
+        # rather than fetched every tick.
+        now = time.time()
+        if self._env_cache is None or now - self._env_at > self.ENV_CACHE_S:
+            self._env_cache = self._c.simGetGroundTruthEnvironment(vehicle_name=self._name)
+            self._env_at = now
+        env = self._env_cache
+
+        imu = self._c.getImuData(vehicle_name=self._name)
+        baro = self._c.getBarometerData(vehicle_name=self._name)
+        mag = self._c.getMagnetometerData(vehicle_name=self._name)
+        gps = self._c.getGpsData(vehicle_name=self._name)
+        g = gps.gnss.geo_point
+        v = gps.gnss.velocity
+        return {
+            "t": time.time(),
+            "imu": {
+                # AirSim body frame is already FRD, which is what PX4's SensorCombined wants,
+                # so no axis juggling here — unlike the CARLA->NED hop in frames.py.
+                "accel": [imu.linear_acceleration.x_val, imu.linear_acceleration.y_val,
+                          imu.linear_acceleration.z_val],
+                "gyro": [imu.angular_velocity.x_val, imu.angular_velocity.y_val,
+                         imu.angular_velocity.z_val],
+                "orientation": [imu.orientation.w_val, imu.orientation.x_val,
+                                imu.orientation.y_val, imu.orientation.z_val],
+                "t": imu.time_stamp,
+            },
+            "baro": {"altitude": baro.altitude, "pressure": baro.pressure,
+                     "qnh": baro.qnh, "t": baro.time_stamp},
+            # AirSim reports the field in Gauss, which is also PX4's unit. No conversion.
+            "mag": {"field": [mag.magnetic_field_body.x_val, mag.magnetic_field_body.y_val,
+                              mag.magnetic_field_body.z_val], "t": mag.time_stamp},
+            "gps": {"lat": g.latitude, "lon": g.longitude, "alt": g.altitude,
+                    "vel": [v.x_val, v.y_val, v.z_val],
+                    "eph": gps.gnss.eph, "epv": gps.gnss.epv,
+                    "fix": int(gps.gnss.fix_type), "valid": bool(gps.is_valid),
+                    "t": gps.time_stamp},
+            # Temperature in KELVIN from AirSim; PX4's VehicleAirData wants Celsius.
+            "env": {"temperature_k": env.temperature, "pressure": env.air_pressure,
+                    "density": env.air_density, "gravity": env.gravity.z_val},
         }
 
     def collision(self):
@@ -99,6 +189,35 @@ class Vehicle:
         if settle_s:
             time.sleep(settle_s)
         return self.state()
+
+    def attitude(self, roll: float, pitch: float, yaw: float, z: float,
+                 duration: float = 0.2):
+        """Hold a roll/pitch/yaw attitude at NED altitude `z` for `duration` seconds.
+
+        `moveByRollPitchYawZAsync` keeps altitude on a Z controller while the three angles are
+        commanded directly — the closest thing SimpleFlight has to PX4's attitude mode. The
+        alternative, `...ThrottleAsync`, hands altitude to the caller as a normalised throttle,
+        which is a different and much sharper knife.
+
+        Not joined: at a 20 Hz command stream, blocking for the duration would let each command
+        overrun the next. AirSim replaces the active command on the next call, which is what a
+        setpoint stream wants.
+        """
+        # PITCH AND YAW ARE NEGATED, ROLL IS NOT. Measured, not guessed: commanding through
+        # this API and reading the resulting orientation back out of AirSim's own state gives
+        #
+        #     roll  +12 deg -> +12.0      correct
+        #     pitch +15 deg -> -15.0      inverted
+        #     yaw   +40 deg -> -40.0      inverted
+        #
+        # symmetric and exact on both signs, so it is a convention mismatch rather than drift:
+        # `moveByRollPitchYawZAsync` does not use the same handedness for pitch and yaw that
+        # AirSim's own orientation reporting does. Correcting here means everything above this
+        # line - PX4 messages, the ROS graph, the docs - speaks one consistent NED/FRD
+        # convention, and the quirk stays contained to the one call that has it.
+        self._c.moveByRollPitchYawZAsync(float(roll), -float(pitch), -float(yaw), float(z),
+                                         float(duration), vehicle_name=self._name)
+        return {"roll": roll, "pitch": pitch, "yaw": yaw, "z": z}
 
     def yaw(self, deg: float, timeout_s: float = 10.0):
         self._c.rotateToYawAsync(float(deg), timeout_sec=timeout_s, vehicle_name=self._name).join()

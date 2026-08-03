@@ -5,8 +5,15 @@ set -euo pipefail
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJ/ros2_ws"
 
+# ROS's setup scripts read unbound variables (AMENT_TRACE_SETUP_FILES and friends), so
+# `set -u` has to come off for exactly as long as it takes to source them. Without this the
+# build dies on line 8 of setup.bash with "AMENT_TRACE_SETUP_FILES: unbound variable" —
+# but only from a shell that has never sourced ROS, which is every fresh install and no
+# interactive session, so it hides well. `scripts/bringup.sh` guards the same way.
+set +u
 # shellcheck disable=SC1091
 source /opt/ros/jazzy/setup.bash
+set -u
 
 if [ ! -d "$PROJ/vendor/px4_msgs" ]; then
     echo "vendor/px4_msgs missing — run scripts/fetch_vendor.sh first" >&2

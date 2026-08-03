@@ -31,16 +31,26 @@ import carla  # noqa: E402
 
 import protocol  # noqa: E402
 from carla_air.camera import Camera  # noqa: E402
-from carla_air.frames import OFFSETS, DEFAULT_OFFSET, carla_to_ned  # noqa: E402
+from carla_air.carla_sensors import (CarlaSensorRig,  # noqa: E402
+                                     semantic_lidar_payload)
+from carla_air.chase import ChaseCamera  # noqa: E402
+from carla_air.frames import (OFFSETS, DEFAULT_OFFSET, carla_to_ned,  # noqa: E402
+                              quat_to_yaw)
 from carla_air.vehicle import Vehicle  # noqa: E402
 from carla_air.world import World  # noqa: E402
 
 
 class SimBridge:
     #: telemetry reads — must never queue behind capture OR behind a control command
-    FAST = frozenset({"ping", "state", "collision", "carla_to_ned"})
+    FAST = frozenset({"ping", "state", "collision", "carla_to_ned", "sensors"})
     #: control writes — their own client so a 10 Hz setpoint stream cannot starve telemetry
-    CONTROL = frozenset({"velocity", "hold", "goto", "yaw"})
+    CONTROL = frozenset({"velocity", "hold", "goto", "yaw", "land", "takeoff", "attitude"})
+    #: frames — the media AirSim client, or CARLA for the chase view. Neither touches the
+    #: telemetry or control sockets, so serialising them against `reset`/`land`/`goto` bought
+    #: nothing and cost everything: `land` blocks for the whole descent while holding
+    #: `slow_lock`, and BOTH video streams froze behind it for tens of seconds. Reported as
+    #: "pressing land breaks the web stream"; it was the lock, not the stream.
+    MEDIA = frozenset({"capture", "view_jpeg", "chase_jpeg", "lidar"})
 
     def __init__(self, carla_port=2000, airsim_port=41451, seed=None, timeout=30.0):
         self.carla_client = carla.Client("127.0.0.1", carla_port)
@@ -56,6 +66,7 @@ class SimBridge:
         self.airsim_media = _airsim()         # image capture only
         self.fast_lock = threading.Lock()
         self.control_lock = threading.Lock()
+        self.media_lock = threading.Lock()
         self.slow_lock = threading.Lock()
 
         self.world = World(self.carla_client, seed=seed)
@@ -64,6 +75,34 @@ class SimBridge:
         self.camera = Camera(self.airsim_media)
         self.offset = OFFSETS.get(self.world.map_name, DEFAULT_OFFSET)
         self._last_rgb_shape = None
+
+        # The chase camera is a CARLA sensor, so it costs nothing on the AirSim image path
+        # the model depends on. Created lazily: a run that never records never spawns it.
+        #
+        # It gets its OWN AirSim client, and that is not tidiness. The locks here guard
+        # DISPATCH CLASSES, not clients: `state` is FAST (fast_lock) and `reset` is neither
+        # FAST nor CONTROL (slow_lock), yet both drive `self.airsim_client`. Two threads
+        # holding two different locks can therefore write the same msgpack-rpc socket at
+        # once, which surfaces as `Existing exports of data: object cannot be re-sized` from
+        # deep inside tornado — an error that names nothing about the actual cause. Nothing
+        # hit it before because every caller was serialised by run_episode.py; a follow
+        # thread polling at 20 Hz is the first thing here that genuinely runs concurrently.
+        self._chase = None
+        self._chase_client = None
+        self._chase_vehicle = None
+        self._chase_stop = threading.Event()
+        self._chase_thread = None
+        self._make_airsim = _airsim
+        self._landing = None
+        self._flying = None
+
+        # CARLA sensors that follow the aircraft, declared in configs/sim/carla_sensors.yaml
+        # and spawned once here. They render in-process and push asynchronously, so unlike the
+        # AirSim sensors they do not compete with image capture for the RPC path.
+        self._rig = CarlaSensorRig(self.world._w)
+        self._rig_status = self._rig.spawn()
+        if self._rig_status["spawned"]:
+            self._ensure_follow_thread()
 
     # ---------- methods (names must match protocol.METHODS) ----------
 
@@ -86,6 +125,9 @@ class SimBridge:
 
     def state(self):
         return self.vehicle.state()
+
+    def sensors(self):
+        return self.vehicle.sensors()
 
     def collision(self):
         return self.vehicle.collision()
@@ -116,22 +158,209 @@ class SimBridge:
     def goto(self, x, y, z, speed=6.0, settle_s=0.0):
         return self.control.goto(x, y, z, speed, settle_s)
 
+    def attitude(self, roll, pitch, yaw, z, duration=0.2):
+        return self.control.attitude(roll, pitch, yaw, z, duration)
+
     def yaw(self, deg, timeout_s=10.0):
         return self.control.yaw(deg, timeout_s)
 
     def hold(self):
         return self.control.hold()
 
+    def takeoff(self, altitude_ned=-30.0, speed=6.0):
+        """Arm and climb, returning immediately — the mirror of `land`.
+
+        Blocking for the whole climb would freeze the console exactly as `land` used to, so
+        the same treatment: control client, background thread, "started" not "finished".
+        """
+        if self._flying is not None and self._flying.is_alive():
+            return {"takeoff": True, "already": True}
+
+        def _run():
+            try:
+                self.control.takeoff(altitude_ned=altitude_ned, speed=speed)
+            except Exception:  # noqa: BLE001 — a failed takeoff must not kill the sidecar
+                pass
+
+        self._flying = threading.Thread(target=_run, daemon=True)
+        self._flying.start()
+        return {"takeoff": True, "altitude_ned": altitude_ned}
+
     def land(self):
-        self.vehicle.land()
+        """Start a landing and return immediately.
+
+        `landAsync().join()` blocks for the whole descent — tens of seconds from 55 m. Holding
+        an RPC open that long makes the console look hung, and the disarm afterwards cannot
+        simply be dropped: cutting power mid-descent turns a landing into a fall. So the
+        blocking part runs on a thread and the reply is "started", not "finished".
+
+        On the CONTROL client, not telemetry. `self.vehicle` is the telemetry client, which
+        `state` also drives under a DIFFERENT lock — two locks on one msgpack-rpc socket is
+        exactly the race that produced "Existing exports of data: object cannot be re-sized"
+        earlier today.
+        """
+        if self._landing is not None and self._landing.is_alive():
+            return {"landing": True, "already": True}
+
+        def _run():
+            try:
+                self.control.land()
+            except Exception:  # noqa: BLE001 — a failed landing must not kill the sidecar
+                pass
+
+        self._landing = threading.Thread(target=_run, daemon=True)
+        self._landing.start()
+        return {"landing": True}
         return {"landed": True}
 
     def set_camera_pose(self, xyz=(0.5, 0.0, 0.1), pitch=0.0, roll=0.0, yaw=0.0):
         self.camera.set_pose(tuple(xyz), pitch, roll, yaw)
         return self.camera.info()
 
-    def spawn_traffic(self, vehicles=15, walkers=10):
-        return self.world.spawn_traffic(vehicles, walkers)
+    def view_jpeg(self, quality=75, width=0):
+        """The drone's own camera as JPEG bytes — for the web console's live view.
+
+        Encoding on this side rather than shipping a raw array keeps a 640x480 frame at
+        roughly 40 kB instead of 900 kB over the socket. Runs on the MEDIA client, so it
+        queues behind other captures rather than stalling telemetry.
+
+        **Takes no lock.** The dispatcher already holds `slow_lock` for any method outside
+        FAST and CONTROL, and `threading.Lock` is not reentrant — acquiring it here
+        deadlocked the sidecar permanently on the first call, taking every other slow method
+        down with it because the lock was never released.
+
+        This is a real AirSim capture and therefore competes with the ROS graph for the
+        image path.
+        """
+        import cv2  # noqa: PLC0415
+
+        frame = self.camera.capture(rgb=True, depth=False, segmentation=False)["rgb"]
+        if width and width < frame.shape[1]:
+            h = int(frame.shape[0] * width / frame.shape[1])
+            frame = cv2.resize(frame, (int(width), h), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+        if not ok:
+            raise RuntimeError("failed to encode the onboard frame")
+        return {"jpeg": buf.tobytes(), "shape": list(frame.shape[:2])}
+
+    def chase_view(self, width=1280, height=720, fps=30.0, distance=14.0, above=6.0):
+        """Bring the chase camera up for LIVE viewing, without recording to a file.
+
+        Separate entry point from `chase_start` so the console can show a picture without
+        creating an mp4 nobody asked for. Recording can still be layered on afterwards.
+
+        **30 Hz is free; 60 is not.** Every chase frame is a full extra render pass. Measured
+        against the simulator's own tick rate, which is what actually matters:
+
+            chase off        sim 60.0 fps
+            30 Hz @ 1080p    sim 59.8 fps    <- no measurable cost
+            60 Hz @ 1080p    sim 49.5 fps    <- steals ~10 fps from the simulation
+            30 Hz @  720p    sim 59.8 fps
+            60 Hz @  720p    sim 56.0 fps
+
+        Real-time factor stays 1.000 throughout, which is the trap: CARLA stretches
+        `delta_seconds` to keep simulated time tracking wall time, so a slowed simulator looks
+        healthy on the RTF and is quietly integrating physics on a coarser timestep
+        (16.7 ms -> 20.3 ms at 60 Hz/1080p). Judge this by tick rate, not by RTF.
+        """
+        self._ensure_chase(width, height, fps, distance, above)
+        return {"streaming": True, "size": [width, height], "fps": fps}
+
+    def chase_jpeg(self, quality=75):
+        if self._chase is None:
+            return {"jpeg": None}
+        return {"jpeg": self._chase.latest_jpeg(quality)}
+
+    def _ensure_follow_thread(self):
+        """One thread drives the chase camera AND every CARLA sensor from a single pose read.
+
+        A thread each would mean a pose read each, on a client that exists precisely so those
+        reads stay cheap.
+        """
+        if self._chase_vehicle is None:
+            self._chase_client = self._make_airsim()
+            self._chase_vehicle = Vehicle(self._chase_client)
+        if self._chase_thread is None or not self._chase_thread.is_alive():
+            self._chase_stop.clear()
+            self._chase_thread = threading.Thread(target=self._chase_follow, daemon=True)
+            self._chase_thread.start()
+
+    def carla_sensors(self):
+        """What is spawned, from what config, and whether anything failed."""
+        return self._rig.describe()
+
+    def lidar(self):
+        """Newest semantic LiDAR sweep as raw bytes plus how to decode it.
+
+        Returns None when no lidar is configured or nothing has arrived yet — the caller
+        publishes nothing rather than an empty cloud, which would look like a clear sky.
+        """
+        sensor = self._rig.sensors.get("lidar")
+        if sensor is None:
+            return None
+        return semantic_lidar_payload(sensor.drain())
+
+    def _ensure_chase(self, width, height, fps, distance, above):
+        # Rebuild when the requested spec differs. Returning early on "a camera exists"
+        # silently served whatever the FIRST caller asked for: open the live view at 720p/30,
+        # then start a 1080p/10 recording, and you got a 720p/30 file with no error anywhere.
+        # A CARLA sensor's resolution and tick are fixed at spawn, so the only honest way to
+        # honour a new spec is a new sensor.
+        want = (int(width), int(height), float(fps))
+        if self._chase is not None:
+            have = (self._chase.width, self._chase.height, self._chase.fps)
+            if have != want:
+                self._chase.destroy()
+                self._chase = None
+        if self._chase is None:
+            self._chase = ChaseCamera(self.world._w, width=width, height=height, fps=fps,
+                                      distance=distance, above=above)
+        # Own connection -> own socket -> no interleaving with telemetry or reset.
+        self._ensure_follow_thread()
+
+    def chase_start(self, path, width=1280, height=720, fps=30.0,
+                    distance=14.0, above=6.0):
+        """Begin recording an HD exterior view that follows the aircraft.
+
+        Separate from `capture()` on purpose: that one feeds the model and is a measurement
+        surface, this one is a spectator and is scored on nothing.
+        """
+        self._ensure_chase(width, height, fps, distance, above)
+        self._chase.start(path)
+        return {"recording": path, "size": [width, height], "fps": fps}
+
+    def chase_stop(self):
+        if self._chase is None:
+            return {"frames": 0, "dropped": 0}
+        self._chase_stop.set()
+        if self._chase_thread is not None:
+            self._chase_thread.join(timeout=5.0)
+            self._chase_thread = None
+        return self._chase.stop()
+
+    def _chase_follow(self, hz=20.0):
+        """Drive the camera from the aircraft's pose, on a connection nothing else uses.
+
+        No lock is taken deliberately: this thread is the only user of `_chase_client`, so
+        there is nothing to serialise against. Sharing the telemetry client instead — even
+        under `fast_lock` — races `reset`, which drives the same socket under `slow_lock`.
+
+        A failure here must never stop a flight; the camera simply stops following.
+        """
+        period = 1.0 / hz
+        while not self._chase_stop.wait(period):
+            try:
+                st = self._chase_vehicle.state()
+                pos, yaw = st["position"], quat_to_yaw(*st["orientation"])
+                if self._chase is not None:
+                    self._chase.follow(pos, yaw)
+                self._rig.follow(pos, yaw)
+            except Exception:  # noqa: BLE001
+                continue
+
+    def spawn_traffic(self, vehicles=15, walkers=10, near_ned=None, radius_m=150.0):
+        return self.world.spawn_traffic(vehicles, walkers,
+                                        near_ned=near_ned, radius_m=radius_m)
 
     def traffic_stats(self):
         return self.world.traffic_stats()
@@ -167,6 +396,8 @@ def _handle(bridge: SimBridge, conn: socket.socket):
                 lock = bridge.fast_lock
             elif method in bridge.CONTROL:
                 lock = bridge.control_lock
+            elif method in bridge.MEDIA:
+                lock = bridge.media_lock
             else:
                 lock = bridge.slow_lock
             try:

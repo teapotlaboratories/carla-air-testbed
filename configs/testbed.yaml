@@ -1,0 +1,216 @@
+# The testbed, in one file.
+#
+# `scripts/apply_config.py` renders this into the formats each reader actually demands:
+#
+#   configs/sim/settings.json                 AirSim's schema, read by the CarlaUE4 binary
+#   ros2_ws/src/bringup/config/testbed.yaml   ROS's schema, read by rclpy's parameter system
+#
+# Both are GENERATED. Edit this file, not those.
+#
+# ---------------------------------------------------------------------------------------
+# The three sections are named for WHEN a change takes effect, not for which file it lands
+# in, because that is the difference that costs you time:
+#
+#   simulator:   restart the simulator          ~60 s
+#   sidecar:     restart the sidecar            ~5 s   (simulator keeps running)
+#   graph:       nothing — `ros2 param set`     live
+#
+# ---------------------------------------------------------------------------------------
+
+simulator:
+  map: Town10HD
+  gpu: 1                    # nvidia-smi index, or a "10de:2d04" vendor:device pair.
+                            # GPU 0 is the operator's and is regularly busy with UnrealEditor.
+
+  # 1.0 and leave it there. AirSim's ClockSpeed accelerates SimpleFlight but NOT CARLA, so
+  # anything else desynchronises the two halves of the world.
+  clock_speed: 1.0
+
+  # Geodetic origin. Null means AirSim's own default, which is Redmond, Washington and has no
+  # relationship to Town10HD — a fine GPS *sensor*, a meaningless *position*. Set all three to
+  # pin somewhere deliberate.
+  gps_origin:
+    lat: null
+    lon: null
+    alt: 0.0
+
+  # The drone's own cameras. ALL THREE MUST STAY 4:3. `fov` is horizontal, so two buffers with
+  # matching fov and different aspect ratios cover different VERTICAL fields, and
+  # `frames.scale_to()` then maps an RGB pixel onto the wrong depth pixel — silently, on every
+  # waypoint. This is also why the drone camera is not 1920x1080.
+  cameras:
+    rgb:          {width: 640, height: 480, fov: 90}
+    depth:        {width: 160, height: 120, fov: 90}
+    segmentation: {width: 320, height: 240, fov: 90}
+
+
+# ---------------------------------------------------------------------------------------
+# SENSORS — one list, whichever simulator provides them.
+#
+# `source` decides how a sensor is obtained, and the difference is not cosmetic:
+#
+#   airsim   POLLED over RPC, on the same path as image capture. Costs image rate:
+#            5 Hz is -1.7%, 20 Hz is -28%. Measured, not estimated.
+#   carla    PUSHED asynchronously from inside UE4. Free-floating actors that follow the
+#            aircraft by transform, because CARLA has no actor for an AirSim vehicle.
+#            No measurable cost to the image path.
+#
+# The four AirSim sensors below are created AUTOMATICALLY by AirSim for a multirotor — they
+# answer whether or not they appear here. `enabled` controls whether the bridge PUBLISHES
+# them, not whether they exist. AirSim LiDAR and distance sensors are the opposite: they do
+# not exist without an explicit block and a simulator restart, which is why the lidar here is
+# a CARLA one instead.
+# ---------------------------------------------------------------------------------------
+
+sensors:
+  - name: imu
+    source: airsim
+    enabled: true
+    topic: /fmu/out/sensor_combined          # px4_msgs/msg/SensorCombined
+
+  - name: barometer
+    source: airsim
+    enabled: true
+    topic: /fmu/out/vehicle_air_data         # px4_msgs/msg/VehicleAirData
+
+  - name: magnetometer
+    source: airsim
+    enabled: true
+    topic: /fmu/out/vehicle_magnetometer     # px4_msgs/msg/VehicleMagnetometer
+
+  - name: gps
+    source: airsim
+    enabled: true
+    topic: /fmu/out/sensor_gps               # px4_msgs/msg/SensorGps
+
+  # A point cloud where every point carries the object id and semantic tag of what it hit.
+  # Strictly more than depth for obstacle work.
+  #
+  # RANGE IS THE BINDING CONSTRAINT, not points_per_second — which counts rays CAST, not
+  # points returned. With lower_fov -50 and a level sensor the steepest ray is 50 degrees
+  # below horizontal, so the ground is only reachable below about `range * sin(50)` = 61 m
+  # AGL. Above that this sees buildings and nothing else.
+  - name: lidar
+    source: carla
+    enabled: true
+    blueprint: sensor.lidar.ray_cast_semantic
+    topic: /sensors/lidar/points             # sensor_msgs/msg/PointCloud2
+    offset: {x: 0.0, y: 0.0, z: -0.4}        # metres, body FRD. Negative z is ABOVE.
+    attributes:
+      channels: "16"
+      range: "80.0"
+      # 120000 destabilised the simulator: CARLA's own RPC began timing out at 30 s and took
+      # the sidecar down with it. Ray casting is CPU work inside UE4 competing with the
+      # simulation it samples.
+      points_per_second: "30000"
+      rotation_frequency: "10"
+      upper_fov: "10.0"
+      lower_fov: "-50.0"
+      horizontal_fov: "360.0"
+
+  # Everything below is off. Kept as working examples — rediscovering the right attribute
+  # names costs more than these lines do.
+
+  - name: radar
+    source: carla
+    enabled: false
+    blueprint: sensor.other.radar
+    offset: {x: 0.3, y: 0.0, z: 0.0}
+    attributes: {horizontal_fov: "45.0", vertical_fov: "30.0", range: "100.0",
+                 points_per_second: "3000"}
+
+  # Event camera: per-pixel brightness CHANGES rather than frames. Nothing in the AirSim set
+  # is equivalent, and it is a genuinely different signal for a navigation policy.
+  - name: events
+    source: carla
+    enabled: false
+    blueprint: sensor.camera.dvs
+    offset: {x: 0.5, y: 0.0, z: 0.1}
+    attributes: {image_size_x: "640", image_size_y: "480", fov: "90.0"}
+
+  # Object identity, not just class — what would let a scenario say "the second building on
+  # the left" and be able to score it.
+  - name: instances
+    source: carla
+    enabled: false
+    blueprint: sensor.camera.instance_segmentation
+    offset: {x: 0.5, y: 0.0, z: 0.1}
+    attributes: {image_size_x: "640", image_size_y: "480", fov: "90.0", sensor_tick: "0.1"}
+
+
+sidecar:
+  socket: /tmp/carla_air_testbed.sock
+
+  # The exterior camera that follows the aircraft. A CARLA sensor, so it is nearly free — but
+  # not entirely: measured against the SIMULATOR's tick rate, 30 Hz at 1080p costs nothing
+  # (59.8 vs 60.0) while 60 Hz costs 10 fps of simulation. Real-time factor stays 1.000
+  # throughout, which is the trap — judge this by tick rate, never by RTF.
+  chase_camera:
+    width: 1280
+    height: 720
+    fps: 30
+    distance: 14.0          # metres behind
+    above: 6.0              # metres above
+    crf: 26                 # x264 constant-rate-factor for recordings; 23 near-transparent,
+                            # 26 is ~2.2x smaller on moving footage, 30 is ~3.7x
+
+
+graph:
+  ros_domain_id: 42         # NOT 0. On the default domain this merges with a sibling project
+                            # publishing REAL PX4 topics of the same names.
+
+  carla_air_bridge:
+    odometry_rate_hz: 20.0
+    sensor_rate_hz: 5.0     # the AirSim sensors above. See the cost note in `sensors:`.
+    lidar_rate_hz: 10.0
+    image_rate_hz: 8.0
+    publish_depth: true
+    publish_segmentation: false   # works, but ~77 ms per capture
+    frame_id: drone
+    setpoint_duration_s: 0.5      # how long a velocity/attitude command lives
+
+  vlm_client:
+    backend: geometric      # mock | scripted | geometric | oracle | claude
+    seed: 0
+    min_period_s: 1.0
+    history_length: 5
+    instruction: "fly forward and stay clear of buildings"
+    claude_model: claude-opus-5
+    claude_effort: low      # 40 steps in 300 s is 7.5 s per decision; higher effort blows it
+    claude_max_tokens: 16000
+    claude_timeout_s: 60.0
+    claude_jpeg_quality: 90
+    claude_fallbacks: true
+
+  grounding:
+    camera_pitch_deg: -28.6       # level flight lives in the top 13.7% of the frame at this
+                                  # pitch. Any backend that does not know the goal ALTITUDE
+                                  # flies itself into the ground.
+    camera_offset_body: [0.5, 0.0, 0.1]
+    depth_history: 12
+    max_range_m: 200.0
+
+  offboard_control:
+    rate_hz: 10.0
+    setpoint_duration_s: 0.5
+    max_speed_mps: 5.0
+    max_step_m: 20.0
+    standoff_m: 8.0
+    arrival_radius_m: 2.0
+    # THESE ARE NED, NOT AGL. The origin sits 27.45 m above the street on Town10HD, so the
+    # real floor is 42.45 m AGL and the ceiling 147.45 m.
+    min_altitude_m: 15.0
+    max_altitude_m: 120.0
+    enabled: true
+
+  episode_runner:
+    results_dir: out/episodes
+    status_rate_hz: 2.0
+
+  recorder:
+    record_dir: out/videos
+    fps: 8.0
+    draw_overlay: true
+    output_height: 0        # 0 = the camera's own size. The onboard view is evidence of what
+                            # the model saw; upscaling it only inflates the file.
+    crf: 26
