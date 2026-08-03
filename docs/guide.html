@@ -1,4 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>carla-air testbed — README &amp; Quick start</title>
+</head>
+<body>
 <style>
   :root{
     --paper:#E6E7E1; --panel:#EFEFEA; --ink:#161A18; --ink-soft:#4A524C;
@@ -65,6 +72,17 @@
   :root[data-theme="dark"] .brand{color:var(--chrome)}
   .brand span{color:var(--ink-soft); font-weight:600}
   .tabs{display:flex; gap:.4rem; margin-left:auto}
+  .themer{margin-left:auto;display:inline-flex;border:1px solid var(--rule);
+          border-radius:3px;overflow:hidden;background:var(--panel)}
+  .themer button{font-family:var(--display);font-size:.62rem;font-weight:700;
+          letter-spacing:.1em;text-transform:uppercase;padding:.32rem .6rem;
+          border:0;border-right:1px solid var(--rule);background:transparent;
+          color:var(--ink-soft);cursor:pointer;line-height:1.6}
+  .themer button:last-child{border-right:0}
+  .themer button:hover{color:var(--ink)}
+  .themer button[aria-pressed="true"]{background:var(--chrome);color:#fff}
+  .themer button:focus-visible{outline:2px solid var(--chrome);outline-offset:-2px}
+
   .tab{
     font-family:var(--display); font-size:.72rem; font-weight:700;
     letter-spacing:.09em; text-transform:uppercase;
@@ -172,6 +190,24 @@
     text-transform:uppercase; display:block; margin-bottom:.25rem; color:var(--ink-soft);
   }
 
+  /* ---------- full-file disclosure ---------- */
+  details.full{border:1px solid var(--rule); border-radius:3px; margin:0 0 1.3rem;
+               background:var(--panel); overflow:hidden}
+  details.full>summary{
+    font-family:var(--display); font-size:.68rem; font-weight:700; letter-spacing:.11em;
+    text-transform:uppercase; color:var(--ink-soft); padding:.6rem .9rem; cursor:pointer;
+    list-style:none; display:flex; align-items:center; gap:.5rem;
+  }
+  details.full>summary::-webkit-details-marker{display:none}
+  details.full>summary::before{content:"\25B8"; color:var(--chrome); font-size:.85rem; line-height:1}
+  details.full[open]>summary::before{content:"\25BE"}
+  details.full>summary:hover{color:var(--ink)}
+  details.full>summary:focus-visible{outline:2px solid var(--chrome); outline-offset:-2px}
+  details.full>summary .n{font-family:var(--mono); text-transform:none; letter-spacing:0;
+                          color:var(--ink); font-size:.78rem}
+  details.full pre{margin:0; border-radius:0; border-left:0; border-right:0; border-bottom:0;
+                   max-height:34rem; overflow:auto}
+
   /* ---------- stat strip ---------- */
   .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:1px;
          background:var(--rule); border:1px solid var(--rule); margin:0 0 1.5rem; border-radius:3px; overflow:hidden}
@@ -218,6 +254,11 @@
     <button class="tab" role="tab" id="t-readme" aria-controls="d-readme" aria-selected="true">Readme</button>
     <button class="tab" role="tab" id="t-quick" aria-controls="d-quick" aria-selected="false">Quick start</button>
   </div>
+  <div class="themer" role="group" aria-label="Colour theme">
+    <button type="button" data-theme-set="auto"  aria-pressed="true">Auto</button>
+    <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+    <button type="button" data-theme-set="dark"  aria-pressed="false">Dark</button>
+  </div>
 </div>
 
 <div class="shell">
@@ -238,11 +279,11 @@
     </p>
 
     <div class="stats">
-      <div class="stat ok"><span class="k">Oracle</span><span class="v">20/20</span></div>
+      <div class="stat ok"><span class="k">Oracle</span><span class="v">15/20</span></div>
       <div class="stat"><span class="k">Baseline</span><span class="v">0/20</span></div>
       <div class="stat air"><span class="k">Grounding</span><span class="v">~3 m</span></div>
       <div class="stat"><span class="k">Real-time</span><span class="v">1.000</span></div>
-      <div class="stat"><span class="k">Offline tests</span><span class="v">50</span></div>
+      <div class="stat"><span class="k">Offline tests</span><span class="v">103</span></div>
     </div>
 
     <p>
@@ -292,13 +333,12 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
     <h2 id="r-install">Install</h2>
 <pre>git clone &lt;this repo&gt; carla-air_testing &amp;&amp; cd carla-air_testing
 
-bash scripts/setup_env.sh          <span class="c"># ~2 min   CPython 3.10 venv (uv, no conda)</span>
-bash scripts/fetch_release.sh      <span class="c"># ~5 min   6.85 GB simulator -&gt; 18 GB unpacked</span>
-bash scripts/fetch_vendor.sh       <span class="c"># ~30 s    px4_msgs pinned to 392e831c</span>
-bash scripts/build_ros.sh          <span class="c"># ~3 min   colcon: px4_msgs + 7 packages</span>
+./scripts/install.sh               <span class="c"># ~10 min, resumable, one command</span>
+                                   <span class="c">#   venv -&gt; simulator -&gt; px4_msgs -&gt; colcon build</span>
+                                   <span class="c"># pass a directory to put the 18 GB release</span>
+                                   <span class="c"># elsewhere; remembered, no export needed</span>
 
-export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
-./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">50 passed</span><span class="c">, no simulator needed</span></pre>
+./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">117 passed</span><span class="c">, no simulator needed</span></pre>
 
     <h2 id="r-run">Run an example</h2>
 <pre><span class="c"># terminal 1 — simulator + the whole ROS 2 graph (~90 s to be ready)</span>
@@ -323,10 +363,10 @@ export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
     <h2 id="r-results">Results</h2>
     <div class="prose">
       <p>
-        Measured over <strong>40 seeded episodes</strong> — 5 seeds x 4 scenarios x 2 backends,
-        zero collisions. The scenarios are navigable, the harness reaches goals when something
-        points at them, and a depth-following heuristic with no language understanding reaches
-        none. That gap is the space a VLM has to fill.
+        Measured over <strong>50 seeded episodes</strong> — 5 seeds x 4 scenarios x 2 backends,
+        zero collisions. The harness reaches goals when something points at them, a
+        depth-following heuristic with no language understanding reaches none, and one scenario
+        now defeats both. That gap is the space a VLM has to fill.
       </p>
     </div>
     <div class="tw"><table>
@@ -341,11 +381,11 @@ export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
         <tr><th><code>rain_descent</code></th>
             <td><span class="chip ok">5/5</span> 14.1 m median</td>
             <td><span class="chip no">0/5</span> 81.4 m</td></tr>
-        <tr><th><code>avoid_the_block</code></th>
-            <td><span class="chip ok">5/5</span> 17.9 m median</td>
-            <td><span class="chip no">0/5</span> 175.4 m</td></tr>
+        <tr><th><code>avoid_the_block</code><br><small>blocked by a tower</small></th>
+            <td><span class="chip no">0/5</span> 70.6 m median</td>
+            <td><span class="chip no">0/5</span> 249.4 m</td></tr>
         <tr><th>all</th>
-            <td><span class="chip ok">20/20 — 100%</span></td>
+            <td><span class="chip ok">15/20 — 75%</span></td>
             <td><span class="chip no">0/20 — 0%</span></td></tr>
       </tbody>
     </table></div>
@@ -364,11 +404,22 @@ export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
     <div class="note warn">
       <span class="t">What this does not say</span>
       <p>
-        Every geometric failure is <code>max_steps</code> — it does not crash, it wanders. And
-        <strong>none of these scenarios require obstacle avoidance</strong>: the oracle solves
-        all four on essentially straight lines, <code>avoid_the_block</code> in a median 8
-        steps despite the name. A 100% oracle rate shows the harness reaches goals, not that
-        the scenarios are hard.
+        Every failure here is <code>max_steps</code> — nothing crashes, and there were zero
+        collisions across all 50 episodes. <code>geometric</code> wanders.
+      </p>
+      <p>
+        <strong>The oracle's 0/5 on <code>avoid_the_block</code> is the intended result</strong>,
+        not a regression. The oracle is handed the goal and steers straight at it, so a scenario
+        built to block the straight line defeats it by construction: all five seeds park against
+        the same tower face, 70.0–71.0 m from the goal. A way around exists at 1.18x the direct
+        distance — <code>survey_buildings.py --route</code> proves it — so this is the first
+        scenario where a real model has room to beat both baselines rather than tie them.
+      </p>
+      <p>
+        The other three scenarios are still solved by a straight line, so a 5/5 there shows the
+        harness reaches goals, not that the scenario is hard. They are left unchanged on purpose:
+        editing them would invalidate the baseline the first VLM backend is meant to be measured
+        against.
       </p>
     </div>
 
@@ -387,7 +438,8 @@ export CARLAAIR_RELEASE=&lt;path fetch_release.sh printed&gt;
         <tr><th><code>mock</code></th><td>Seeded random pixels. The floor.</td></tr>
         <tr><th><code>scripted</code></th><td>A fixed pixel sequence — a changed outcome is unambiguously a change in the stack, not the model.</td></tr>
         <tr><th><code>geometric</code></th><td>Steers toward the most open depth column. The baseline a real VLM must beat to be worth its latency.</td></tr>
-        <tr><th><code>oracle</code></th><td><strong>A diagnostic, not a competitor.</strong> Handed the goal, so it answers whether a scenario is navigable at all. Never reported beside a real model's score.</td></tr>
+        <tr><th><code>oracle</code></th><td><strong>A diagnostic, not a competitor.</strong> Handed the goal, so it answers whether a scenario is navigable at all. Never reported beside a real model's score. It only validates <em>open</em> scenarios: being a straight-line policy, it fails an obstacle scenario by construction, so use <code>survey_buildings.py --route</code> to prove those are reachable.</td></tr>
+        <tr><th><code>claude</code></th><td><strong>The first real model in the loop</strong>, over the Anthropic API. Sees the same frame and instruction as the baselines, which is what makes its score comparable. Schema-constrained reply, so the pixel arrives as an integer; <code>effort: low</code> by default because 40 steps in 300 s leaves 7.5 s per decision. Needs <code>ANTHROPIC_API_KEY</code> in the environment — never a ROS parameter. Its SDK is a python 3.12 dependency in <code>vendor/py312</code>, not the 3.10 venv.</td></tr>
       </tbody>
     </table></div>
 
@@ -462,28 +514,36 @@ ls /usr/share/vulkan/icd.d/nvidia_icd*.json  <span class="c"># a Vulkan ICD exis
 
     <ol class="steps">
       <li>
-        <h3 id="q-install">Install — four commands</h3>
+        <h3 id="q-install">Install — one command</h3>
 <pre>git clone &lt;this repo&gt; carla-air_testing &amp;&amp; cd carla-air_testing
+./scripts/install.sh                       <span class="c"># ~10 min</span>
 
-bash scripts/setup_env.sh          <span class="c"># ~2 min</span>
-bash scripts/fetch_release.sh      <span class="c"># ~5 min</span>
-bash scripts/fetch_vendor.sh       <span class="c"># ~30 s</span>
-bash scripts/build_ros.sh          <span class="c"># ~3 min</span></pre>
+<span class="c"># put the 18 GB release somewhere with room - it is remembered</span>
+./scripts/install.sh /mnt/big-disk
+<span class="c"># or skip the 6.85 GB download entirely</span>
+./scripts/install.sh --skip-release</pre>
         <div class="prose">
           <p>
-            <code>fetch_release.sh</code> prints an <code>export CARLAAIR_RELEASE=…</code> line at
-            the end. <strong>Run it, and put it in your shell profile</strong> — every other
-            script reads it. Then verify without touching the simulator:
+            Four steps, printed as it goes: the CPython 3.10 venv (~2 min), the simulator
+            (~5 min), the pinned upstreams (~40 s) and the colcon build of 7 packages
+            (~3 min). Every step is idempotent, so a failure is <strong>resumable</strong> —
+            fix it, re-run, and completed steps are skipped.
+          </p>
+          <p>
+            There is <strong>no <code>export</code> to copy into a shell profile</strong>: a
+            non-default release location is written to <code>.release-path</code> and every
+            script resolves it through <code>scripts/release_path.sh</code>. Then verify
+            without touching the simulator:
           </p>
         </div>
-<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">50 passed</span></pre>
+<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">117 passed</span></pre>
       </li>
 
       <li>
         <h3 id="q-up">Bring the stack up</h3>
 <pre>./scripts/bringup.sh --backend oracle</pre>
         <div class="prose"><p>Wait for these three lines — about 90 s, mostly Unreal loading the map:</p></div>
-<pre><span class="g">GPU 0: 3342 MiB in use — hardware rendering confirmed</span>
+<pre><span class="g">GPU 1 (NVIDIA GeForce RTX 5060 Ti): 3342 MiB in use — hardware rendering confirmed</span>
 sim_bridge up on /tmp/carla_air_testbed.sock
 [bridge_node-1] bridged to CARLA-Air — map=Town10HD hfov=89.9deg</pre>
         <div class="note stop">
@@ -492,6 +552,11 @@ sim_bridge up on /tmp/carla_air_testbed.sock
             If it reports a few hundred MiB you are rendering on the CPU, not the GPU — RGB
             capture drops from 53.8 Hz to 5.95 Hz and nothing errors. See
             <a href="#q-trouble">Troubleshooting</a>.
+          </p>
+          <p>
+            The index is whichever card <code>simulator.gpu</code> asked for — <code>1</code> in
+            the shipped config, because GPU 0 is the workstation's display card. On a
+            single-GPU machine set <code>simulator.gpu: 0</code> before the first run.
           </p>
         </div>
       </li>
@@ -522,19 +587,325 @@ sim_bridge up on /tmp/carla_air_testbed.sock
       <li>
         <h3 id="q-stop">Stop — every time</h3>
 <pre>./scripts/stop.sh --all
-./scripts/status.sh          <span class="c"># every count 0, GPU back to ~110 MiB</span></pre>
+./scripts/status.sh          <span class="c"># every count 0, the sim's GPU back to idle</span></pre>
         <div class="prose">
           <p>This is a project rule, not tidiness — see the note in the readme.</p>
         </div>
       </li>
     </ol>
 
+    <h2 id="q-config">Change something</h2>
+    <div class="prose">
+      <p>
+        Everything is configured in <strong>one file</strong>, <code>configs/testbed.yaml</code>.
+        Its sections are named for <strong>when a change takes effect</strong> &mdash; the
+        difference that actually costs you time.
+      </p>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Section</th><th>What lives there</th><th>Cost to change</th></tr></thead>
+      <tbody>
+        <tr><th><code>simulator</code></th><td>map, GPU, camera buffers, GPS origin, clock speed</td>
+            <td>restart the simulator, ~60 s</td></tr>
+        <tr><th><code>sensors</code></th><td>every sensor on the aircraft, both simulators</td>
+            <td>restart the sidecar, ~5 s</td></tr>
+        <tr><th><code>sidecar</code></th><td>the chase camera</td>
+            <td>restart the sidecar, ~5 s</td></tr>
+        <tr><th><code>graph</code></th><td>rates, backend, controller limits, recording</td>
+            <td><strong>live</strong> &mdash; <code>ros2 param set</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <details class="full">
+      <summary><span class="n">configs/testbed.yaml</span> &mdash; the complete file</summary>
+<pre><span class="c"># The testbed, in one file.</span>
+<span class="c">#</span>
+<span class="c"># `scripts/apply_config.py` renders this into the formats each reader actually demands:</span>
+<span class="c">#</span>
+<span class="c">#   configs/sim/settings.json                 AirSim&#x27;s schema, read by the CarlaUE4 binary</span>
+<span class="c">#   ros2_ws/src/bringup/config/testbed.yaml   ROS&#x27;s schema, read by rclpy&#x27;s parameter system</span>
+<span class="c">#</span>
+<span class="c"># Both are GENERATED. Edit this file, not those.</span>
+<span class="c">#</span>
+<span class="c"># ---------------------------------------------------------------------------------------</span>
+<span class="c"># The three sections are named for WHEN a change takes effect, not for which file it lands</span>
+<span class="c"># in, because that is the difference that costs you time:</span>
+<span class="c">#</span>
+<span class="c">#   simulator:   restart the simulator          ~60 s</span>
+<span class="c">#   sidecar:     restart the sidecar            ~5 s   (simulator keeps running)</span>
+<span class="c">#   graph:       nothing — `ros2 param set`     live</span>
+<span class="c">#</span>
+<span class="c"># ---------------------------------------------------------------------------------------</span>
+
+<b>simulator</b>:
+  map: Town10HD
+  gpu: 1                    <span class="c"># nvidia-smi index, or a &quot;10de:2d04&quot; vendor:device pair.</span>
+                            <span class="c"># GPU 0 is the operator&#x27;s and is regularly busy with UnrealEditor.</span>
+
+  <span class="c"># 1.0 and leave it there. AirSim&#x27;s ClockSpeed accelerates SimpleFlight but NOT CARLA, so</span>
+  <span class="c"># anything else desynchronises the two halves of the world.</span>
+  clock_speed: 1.0
+
+  <span class="c"># Geodetic origin. Null means AirSim&#x27;s own default, which is Redmond, Washington and has no</span>
+  <span class="c"># relationship to Town10HD — a fine GPS *sensor*, a meaningless *position*. Set all three to</span>
+  <span class="c"># pin somewhere deliberate.</span>
+  gps_origin:
+    lat: null
+    lon: null
+    alt: 0.0
+
+  <span class="c"># The drone&#x27;s own cameras. ALL THREE MUST STAY 4:3. `fov` is horizontal, so two buffers with</span>
+  <span class="c"># matching fov and different aspect ratios cover different VERTICAL fields, and</span>
+  <span class="c"># `frames.scale_to()` then maps an RGB pixel onto the wrong depth pixel — silently, on every</span>
+  <span class="c"># waypoint. This is also why the drone camera is not 1920x1080.</span>
+  cameras:
+    rgb:          {width: 640, height: 480, fov: 90}
+    depth:        {width: 160, height: 120, fov: 90}
+    segmentation: {width: 320, height: 240, fov: 90}
+
+
+<span class="c"># ---------------------------------------------------------------------------------------</span>
+<span class="c"># SENSORS — one list, whichever simulator provides them.</span>
+<span class="c">#</span>
+<span class="c"># `source` decides how a sensor is obtained, and the difference is not cosmetic:</span>
+<span class="c">#</span>
+<span class="c">#   airsim   POLLED over RPC, on the same path as image capture. Costs image rate:</span>
+<span class="c">#            5 Hz is -1.7%, 20 Hz is -28%. Measured, not estimated.</span>
+<span class="c">#   carla    PUSHED asynchronously from inside UE4. Free-floating actors that follow the</span>
+<span class="c">#            aircraft by transform, because CARLA has no actor for an AirSim vehicle.</span>
+<span class="c">#            No measurable cost to the image path.</span>
+<span class="c">#</span>
+<span class="c"># The four AirSim sensors below are created AUTOMATICALLY by AirSim for a multirotor — they</span>
+<span class="c"># answer whether or not they appear here. `enabled` controls whether the bridge PUBLISHES</span>
+<span class="c"># them, not whether they exist. AirSim LiDAR and distance sensors are the opposite: they do</span>
+<span class="c"># not exist without an explicit block and a simulator restart, which is why the lidar here is</span>
+<span class="c"># a CARLA one instead.</span>
+<span class="c"># ---------------------------------------------------------------------------------------</span>
+
+<b>sensors</b>:
+  - name: imu
+    source: airsim
+    enabled: true
+    topic: /fmu/out/sensor_combined          <span class="c"># px4_msgs/msg/SensorCombined</span>
+
+  - name: barometer
+    source: airsim
+    enabled: true
+    topic: /fmu/out/vehicle_air_data         <span class="c"># px4_msgs/msg/VehicleAirData</span>
+
+  - name: magnetometer
+    source: airsim
+    enabled: true
+    topic: /fmu/out/vehicle_magnetometer     <span class="c"># px4_msgs/msg/VehicleMagnetometer</span>
+
+  - name: gps
+    source: airsim
+    enabled: true
+    topic: /fmu/out/sensor_gps               <span class="c"># px4_msgs/msg/SensorGps</span>
+
+  <span class="c"># A point cloud where every point carries the object id and semantic tag of what it hit.</span>
+  <span class="c"># Strictly more than depth for obstacle work.</span>
+  <span class="c">#</span>
+  <span class="c"># RANGE IS THE BINDING CONSTRAINT, not points_per_second — which counts rays CAST, not</span>
+  <span class="c"># points returned. With lower_fov -50 and a level sensor the steepest ray is 50 degrees</span>
+  <span class="c"># below horizontal, so the ground is only reachable below about `range * sin(50)` = 61 m</span>
+  <span class="c"># AGL. Above that this sees buildings and nothing else.</span>
+  - name: lidar
+    source: carla
+    enabled: true
+    blueprint: sensor.lidar.ray_cast_semantic
+    topic: /sensors/lidar/points             <span class="c"># sensor_msgs/msg/PointCloud2</span>
+    offset: {x: 0.0, y: 0.0, z: -0.4}        <span class="c"># metres, body FRD. Negative z is ABOVE.</span>
+    attributes:
+      channels: &quot;16&quot;
+      range: &quot;80.0&quot;
+      <span class="c"># 120000 destabilised the simulator: CARLA&#x27;s own RPC began timing out at 30 s and took</span>
+      <span class="c"># the sidecar down with it. Ray casting is CPU work inside UE4 competing with the</span>
+      <span class="c"># simulation it samples.</span>
+      points_per_second: &quot;30000&quot;
+      rotation_frequency: &quot;10&quot;
+      upper_fov: &quot;10.0&quot;
+      lower_fov: &quot;-50.0&quot;
+      horizontal_fov: &quot;360.0&quot;
+
+  <span class="c"># Everything below is off. Kept as working examples — rediscovering the right attribute</span>
+  <span class="c"># names costs more than these lines do.</span>
+
+  - name: radar
+    source: carla
+    enabled: false
+    blueprint: sensor.other.radar
+    offset: {x: 0.3, y: 0.0, z: 0.0}
+    attributes: {horizontal_fov: &quot;45.0&quot;, vertical_fov: &quot;30.0&quot;, range: &quot;100.0&quot;,
+                 points_per_second: &quot;3000&quot;}
+
+  <span class="c"># Event camera: per-pixel brightness CHANGES rather than frames. Nothing in the AirSim set</span>
+  <span class="c"># is equivalent, and it is a genuinely different signal for a navigation policy.</span>
+  - name: events
+    source: carla
+    enabled: false
+    blueprint: sensor.camera.dvs
+    offset: {x: 0.5, y: 0.0, z: 0.1}
+    attributes: {image_size_x: &quot;640&quot;, image_size_y: &quot;480&quot;, fov: &quot;90.0&quot;}
+
+  <span class="c"># Object identity, not just class — what would let a scenario say &quot;the second building on</span>
+  <span class="c"># the left&quot; and be able to score it.</span>
+  - name: instances
+    source: carla
+    enabled: false
+    blueprint: sensor.camera.instance_segmentation
+    offset: {x: 0.5, y: 0.0, z: 0.1}
+    attributes: {image_size_x: &quot;640&quot;, image_size_y: &quot;480&quot;, fov: &quot;90.0&quot;, sensor_tick: &quot;0.1&quot;}
+
+
+<b>sidecar</b>:
+  socket: /tmp/carla_air_testbed.sock
+
+  <span class="c"># The exterior camera that follows the aircraft. A CARLA sensor, so it is nearly free — but</span>
+  <span class="c"># not entirely: measured against the SIMULATOR&#x27;s tick rate, 30 Hz at 1080p costs nothing</span>
+  <span class="c"># (59.8 vs 60.0) while 60 Hz costs 10 fps of simulation. Real-time factor stays 1.000</span>
+  <span class="c"># throughout, which is the trap — judge this by tick rate, never by RTF.</span>
+  chase_camera:
+    width: 1280
+    height: 720
+    fps: 30
+    distance: 14.0          <span class="c"># metres behind</span>
+    above: 6.0              <span class="c"># metres above</span>
+    crf: 26                 <span class="c"># x264 constant-rate-factor for recordings; 23 near-transparent,</span>
+                            <span class="c"># 26 is ~2.2x smaller on moving footage, 30 is ~3.7x</span>
+
+
+<b>graph</b>:
+  ros_domain_id: 42         <span class="c"># NOT 0. On the default domain this merges with a sibling project</span>
+                            <span class="c"># publishing REAL PX4 topics of the same names.</span>
+
+  carla_air_bridge:
+    odometry_rate_hz: 20.0
+    sensor_rate_hz: 5.0     <span class="c"># the AirSim sensors above. See the cost note in `sensors:`.</span>
+    lidar_rate_hz: 10.0
+    image_rate_hz: 8.0
+    publish_depth: true
+    publish_segmentation: false   <span class="c"># works, but ~77 ms per capture</span>
+    frame_id: drone
+    setpoint_duration_s: 0.5      <span class="c"># how long a velocity/attitude command lives</span>
+
+  vlm_client:
+    backend: geometric      <span class="c"># mock | scripted | geometric | oracle | claude</span>
+    seed: 0
+    min_period_s: 1.0
+    history_length: 5
+    instruction: &quot;fly forward and stay clear of buildings&quot;
+    claude_model: claude-opus-5
+    claude_effort: low      <span class="c"># 40 steps in 300 s is 7.5 s per decision; higher effort blows it</span>
+    claude_max_tokens: 16000
+    claude_timeout_s: 60.0
+    claude_jpeg_quality: 90
+    claude_fallbacks: true
+
+  grounding:
+    camera_pitch_deg: -28.6       <span class="c"># level flight lives in the top 13.7% of the frame at this</span>
+                                  <span class="c"># pitch. Any backend that does not know the goal ALTITUDE</span>
+                                  <span class="c"># flies itself into the ground.</span>
+    camera_offset_body: [0.5, 0.0, 0.1]
+    depth_history: 12
+    max_range_m: 200.0
+
+  offboard_control:
+    rate_hz: 10.0
+    setpoint_duration_s: 0.5
+    max_speed_mps: 5.0
+    max_step_m: 20.0
+    standoff_m: 8.0
+    arrival_radius_m: 2.0
+    <span class="c"># THESE ARE NED, NOT AGL. The origin sits 27.45 m above the street on Town10HD, so the</span>
+    <span class="c"># real floor is 42.45 m AGL and the ceiling 147.45 m.</span>
+    min_altitude_m: 15.0
+    max_altitude_m: 120.0
+    enabled: true
+
+  episode_runner:
+    results_dir: out/episodes
+    status_rate_hz: 2.0
+
+  recorder:
+    record_dir: out/videos
+    fps: 8.0
+    draw_overlay: true
+    output_height: 0        <span class="c"># 0 = the camera&#x27;s own size. The onboard view is evidence of what</span>
+                            <span class="c"># the model saw; upscaling it only inflates the file.</span>
+    crf: 26</pre>
+    </details>
+
+    <div class="prose">
+      <p>
+        That is the whole thing, as it ships. Everything below changes one part of it.
+      </p>
+    </div>
+
+    <div class="prose"><p>Put the aircraft somewhere else in the world:</p></div>
+<pre><span class="c"># configs/testbed.yaml</span>
+simulator:
+  gps_origin:
+    lat: <span class="y">51.5074</span>        <span class="c"># London, not AirSim's default (Redmond, Washington)</span>
+    lon: <span class="y">-0.1278</span>
+    alt: <span class="y">11.0</span></pre>
+<pre>./scripts/bringup.sh --backend geometric      <span class="c"># renders the config, then starts</span>
+ros2 topic echo /fmu/out/sensor_gps --once    <span class="c"># now a London coordinate</span></pre>
+
+    <h3 id="q-sensors">Adding a sensor</h3>
+    <div class="prose">
+      <p>
+        All of them are one list, whichever simulator provides them. Flip <code>enabled</code>
+        and restart the sidecar.
+      </p>
+    </div>
+<pre>sensors:
+  - name: lidar
+    source: carla                  <span class="c"># pushed from inside UE4 - costs the image path nothing</span>
+    enabled: <span class="g">true</span>
+    blueprint: sensor.lidar.ray_cast_semantic
+    topic: /sensors/lidar/points
+    offset: {x: 0.0, y: 0.0, z: -0.4}   <span class="c"># metres, body FRD; negative z is ABOVE</span>
+    attributes: {channels: "16", range: "80.0", points_per_second: "30000"}
+
+  - name: radar
+    source: carla
+    enabled: <span class="y">false</span>                 <span class="c"># &lt;- flip this</span>
+    blueprint: sensor.other.radar</pre>
+    <div class="note warn">
+      <span class="t">source is not cosmetic</span>
+      <p>
+        <code>airsim</code> sensors are <strong>polled over RPC</strong>, on the same path as
+        image capture, and that costs measurable frame rate: 5&nbsp;Hz costs 1.7%, 20&nbsp;Hz
+        costs 28%. <code>carla</code> sensors are <strong>pushed</strong> asynchronously from
+        inside the simulator and cost nothing measurable. The file carries the numbers.
+      </p>
+      <p>
+        <code>radar</code>, <code>events</code> (an event camera) and <code>instances</code>
+        (instance segmentation) are already written out and disabled, so enabling one is a
+        one-word edit.
+      </p>
+    </div>
+    <div class="note stop">
+      <span class="t">Two files you must not edit</span>
+      <p>
+        <code>configs/sim/settings.json</code> and <code>ros2_ws/src/bringup/config/testbed.yaml</code>
+        are <strong>generated</strong>. AirSim's schema is read by the simulator binary and the
+        parameter file by rclpy, and neither will accept a unified file. Both carry a
+        DO-NOT-EDIT header, both are re-rendered on every start, and a test fails if they drift
+        from their source.
+      </p>
+    </div>
+
     <h2 id="q-next">What you just ran</h2>
     <div class="prose">
       <p>
         <code>oracle</code> is not a VLM. It is handed the goal and flies straight at it, so it
-        answers one question: <strong>is this scenario navigable at all?</strong> Its 4/4 is the
-        ceiling; the <code>geometric</code> baseline scores 0/4. Try the contrast:
+        answers one question: <strong>is this scenario navigable at all?</strong> On the three
+        open scenarios it is the ceiling at 5/5 each, and the <code>geometric</code> baseline
+        scores 0/5. It scores <strong>0/5 on <code>avoid_the_block</code></strong>, which is that
+        scenario working as intended — there is a tower on the straight line, and a straight-line
+        policy cannot get past it. Try the contrast:
       </p>
     </div>
 <pre>./scripts/stop.sh
@@ -575,6 +946,10 @@ sim_bridge up on /tmp/carla_air_testbed.sock
           <td><code>colcon --symlink-install</code> still needs a rebuild for <code>ament_python</code> packages; the symlink is made at build time. Re-run <code>scripts/build_ros.sh</code>.</td>
         </tr>
         <tr>
+          <th>A <em>config</em> change has no effect</th>
+          <td>Three possibilities, in order of likelihood. You edited a <strong>generated</strong> file (<code>configs/sim/settings.json</code> or <code>ros2_ws/src/bringup/config/testbed.yaml</code>) instead of <code>configs/testbed.yaml</code>, and the next start overwrote it. Or the setting lives in <code>simulator:</code> and needs the simulator restarted, not just the graph. Or an environment variable is winning: <code>TESTBED_GPU</code>, <code>TESTBED_ORIGIN_LAT/LON/ALT</code> and the <code>bringup.sh</code> flags all override the file, deliberately, so a one-off run needs no edit. <code>scripts/apply_config.py --check</code> answers the first.</td>
+        </tr>
+        <tr>
           <th><code>import carla</code> fails</th>
           <td>Use <code>./.venv/bin/python</code>. The client module is <code>cpython-310</code>; system Python on Ubuntu 24.04 is 3.12 and physically cannot load it.</td>
         </tr>
@@ -613,3 +988,34 @@ sim_bridge up on /tmp/carla_air_testbed.sock
   tabs.forEach(t => t.addEventListener('click', () => select(t)));
   buildToc(document.getElementById('d-readme'));
 </script>
+<script>
+(function () {
+  var root = document.documentElement;
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-theme-set]'));
+  var KEY = 'carla-air-theme';
+  function apply(choice) {
+    if (choice === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', choice);
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === choice));
+    });
+  }
+  var stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) {}
+  if (stored === 'light' || stored === 'dark' || stored === 'auto') apply(stored);
+  else if (root.getAttribute('data-theme')) {
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed',
+        String(b.dataset.themeSet === root.getAttribute('data-theme')));
+    });
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      apply(b.dataset.themeSet);
+      try { localStorage.setItem(KEY, b.dataset.themeSet); } catch (e) {}
+    });
+  });
+})();
+</script>
+</body>
+</html>

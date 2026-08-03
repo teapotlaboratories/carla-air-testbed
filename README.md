@@ -45,13 +45,12 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
 ```bash
 git clone <this repo> carla-air_testing && cd carla-air_testing
 
-bash scripts/setup_env.sh          # ~2 min   CPython 3.10 venv (uv, no conda)
-bash scripts/fetch_release.sh      # ~5 min   6.85 GB simulator -> 18 GB unpacked
-bash scripts/fetch_vendor.sh       # ~30 s    px4_msgs pinned to 392e831c
-bash scripts/build_ros.sh          # ~3 min   colcon: px4_msgs + 7 packages
+./scripts/install.sh               # ~10 min, resumable, one command
+                                   #   venv -> simulator -> px4_msgs -> colcon build
+                                   # pass a directory to put the 18 GB release elsewhere;
+                                   # it is remembered, no shell-profile export needed
 
-export CARLAAIR_RELEASE=<path fetch_release.sh printed>   # add to your shell profile
-./.venv/bin/python -m pytest tests/ -q                     # 50 passed, no sim needed
+./.venv/bin/python -m pytest tests/ -q     # 117 passed, no sim needed
 ```
 
 ## Run an example
@@ -77,28 +76,38 @@ Other entry points:
 ./.venv/bin/python scripts/record_flight.py 60 # -> out/flight.mp4
 ./scripts/run_conformance.sh                   # is the simulator still behaving? ~15 min
 ./scripts/status.sh --rates                    # what is running, and how fast
+
+# Does a scenario actually contain an obstacle, or does a straight line solve it?
+./.venv/bin/python scripts/survey_buildings.py --check
+./.venv/bin/python scripts/survey_buildings.py --propose --span 110
 ```
 
 ## Results
 
-**Oracle 4/4, geometric 0/4** — the scenarios are navigable, the harness reaches goals when
-something points at them, and a depth-following heuristic with no language understanding
-reaches none. That gap is the space a VLM has to fill.
+**Oracle 15/15 on the open scenarios, 0/5 on the one with a building in the way; geometric
+0/20.** The harness reaches goals when something points at them, a depth-following heuristic
+with no language understanding reaches none, and one scenario now defeats both. That gap is
+the space a VLM has to fill.
 
-Measured over **40 seeded episodes** — 5 seeds x 4 scenarios x 2 backends, zero collisions.
+Measured over **50 seeded episodes** — 5 seeds x 4 scenarios x 2 backends, zero collisions.
 
-| scenario | oracle (N=5) | geometric (N=5) |
-|---|---|---|
-| `cross_the_plaza` | **5/5** · 18.2 m median | 0/5 · 185.7 m |
-| `follow_the_avenue` | **5/5** · 18.7 m median | 0/5 · 187.0 m |
-| `rain_descent` | **5/5** · 14.1 m median | 0/5 · 81.4 m |
-| `avoid_the_block` | **5/5** · 17.9 m median | 0/5 · 175.4 m |
-| **all** | **20/20 — 100%** | **0/20 — 0%** |
+| scenario | straight line? | oracle (N=5) | geometric (N=5) |
+|---|---|---|---|
+| `cross_the_plaza` | solves it | **5/5** · 18.2 m median | 0/5 · 185.7 m |
+| `follow_the_avenue` | solves it | **5/5** · 18.7 m median | 0/5 · 187.0 m |
+| `rain_descent` | solves it | **5/5** · 14.1 m median | 0/5 · 81.4 m |
+| `avoid_the_block` | **blocked by a tower** | 0/5 · 70.6 m median | 0/5 · 249.4 m |
 
-Every geometric failure is `max_steps`: it does not crash, it wanders. The oracle's 20
+Every failure is `max_steps`; nothing crashes. `geometric` wanders. The oracle's 15 successful
 episodes land between 13.7 m and 19.8 m of the goal, so the harness itself is not the noise.
-Caveat worth keeping in view: **none of these scenarios require obstacle avoidance**, so a
-100% oracle rate shows the harness reaches goals, not that the scenarios are hard.
+
+`avoid_the_block` is **meant** to defeat the oracle. The oracle is handed the goal and steers
+straight at it, so a scenario built to block the straight line fails it by construction — its
+five finals span just 1.0 m (70.0–71.0 m), all of them parked against the same tower face. It
+is the first scenario where a real model has room to beat both baselines rather than tie them;
+`survey_buildings.py --route` proves a way around exists at 1.18x the direct distance. The
+other three remain straight-line-solvable, which is honest as a baseline and thin as a
+benchmark — see `E-02b` in [`docs/todo.md`](docs/todo.md).
 
 Measured with the full graph running:
 
@@ -113,33 +122,58 @@ Measured with the full graph running:
 
 Evidence: [`docs/worklog/`](docs/worklog/).
 
+## Documentation
+
+| | |
+|---|---|
+| [`docs/ros2-api.html`](docs/ros2-api.html) | **Commanding the aircraft from ROS 2** — five commands, twelve sensor streams, message types and code. Every figure measured against the running simulator. |
+| [`docs/dataflow.html`](docs/dataflow.html) | **How the data moves** — every protocol hop from UE4 render target to velocity setpoint, and why each one is there. |
+| [`docs/guide.html`](docs/guide.html) | This README and the quick start, rendered as one page. |
+| [`docs/architecture.md`](docs/architecture.md) | What runs where, the measured numbers, and the traps that cost time. |
+| [`docs/todo.md`](docs/todo.md) | The backlog: what is open, why, and how each item will be verified. |
+| [`docs/worklog/`](docs/worklog/) | Dated accounts of what was tried, what was measured, and what turned out to be wrong. |
+
+The HTML pages are self-contained — no CDN, no fonts, no scripts beyond a theme toggle — so
+they open from disk and survive being emailed.
+
+**Want to fly it from your own code?** Start with
+[`examples/ros2_full_control.py`](examples/ros2_full_control.py). It takes off, flies a
+waypoint, holds a velocity, commands an attitude, lands, and prints every sensor — and imports
+nothing from this project, which is the test that the ROS surface stands on its own.
+
 ## Layout
 
 ```
 sim_bridge/            python 3.10, no ROS — owns the carla + airsim clients
   carla_air/           frames · vehicle · camera · world  (every workaround lives here once)
   protocol.py          the wire format, imported by BOTH interpreters
-  server.py            UDS server, 3 AirSim clients, thread per connection
+  server.py            UDS server, 4 AirSim clients + a CARLA sensor rig
 
 ros2_ws/src/
   interfaces/          Annotation2D · GroundedWaypoint · EpisodeStatus · EpisodeResult
   carla_air_bridge/    the only node that knows the simulator exists
-  vlm_client/          backends: mock · scripted · geometric · oracle
+  vlm_client/          backends: mock · scripted · geometric · oracle · claude
   grounding/           pixel + depth → world NED  (the See-Point-Fly transform)
   control/             offboard setpoint streamer
   evaluation/          seeded episode runner and scoring
-  bringup/             launch + one parameter file
+  bringup/             launch + config/testbed.yaml (GENERATED from configs/testbed.yaml)
 
-configs/               sim/settings.json · vulkan/nvidia_icd.container.json
-scripts/               setup · fetch_release · fetch_vendor · build · run_sim · bringup
-                       · stop · status · run_episode · run_conformance · record_flight
-tests/                 test_offline.py + test_scenarios.py (50, no sim) · conformance/ (needs sim)
-docs/                  architecture · references · worklog
+configs/               testbed.yaml (THE source) · sim/settings.json (generated)
+                       · vulkan/nvidia_icd.container.json
+scripts/               install (one command) · setup · fetch_release · fetch_vendor
+                       · build · release_path · run_sim · bringup
+                       · stop · status · run_episode · run_sweep · run_conformance
+                       · record_flight · survey_buildings
+tests/                 test_offline · test_scenarios · test_survey · test_claude_backend
+                       · test_config (117, no sim) · conformance/
+examples/              ros2_full_control.py — fly it from plain ROS 2, no project imports
+docs/                  ros2-api.html · dataflow.html · guide.html
+                       architecture · references · worklog · todo
 ```
 
-Nothing installs into `~` or the system: `vendor/` holds uv, the standalone CPython and
-`px4_msgs`; `.venv/` the packages; the 18 GB simulator lives wherever `CARLAAIR_RELEASE`
-points.
+Nothing installs into `~` or the system: `vendor/` holds uv, the standalone CPython,
+`px4_msgs` and the ROS-side (3.12) python packages in `vendor/py312`; `.venv/` holds the
+3.10 packages; the 18 GB simulator lives wherever `CARLAAIR_RELEASE` points.
 
 ## Adding a VLM backend
 
@@ -148,10 +182,32 @@ in `vlm_client/vlm_node.py`. The model never sees a pose, a map or metres; all t
 happens downstream in `grounding`, which is what keeps backends swappable and the comparison
 fair.
 
-Four ship today: `mock` (seeded random), `scripted` (fixed pixels, for regression),
-`geometric` (steers to the most open depth column — the baseline to beat), and `oracle`
+Five ship today: `mock` (seeded random), `scripted` (fixed pixels, for regression),
+`geometric` (steers to the most open depth column — the baseline to beat), `oracle`
 (**a diagnostic, not a competitor** — it is handed the goal, so it validates scenarios and
-must never be reported beside a real model's score).
+must never be reported beside a real model's score), and `claude` (the Anthropic API).
+
+`claude` needs credentials in the environment — never a ROS parameter, since those are
+readable from the graph and land in launch logs. Either works:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # from console.anthropic.com
+ant auth login                        # or an OAuth profile, if the account has an API org
+
+./scripts/bringup.sh --backend claude
+```
+
+> **A Claude.ai Pro/Max subscription does not cover this.** The subscription is for claude.ai
+> and Claude Code; the API is billed separately with its own credits. `~/.claude/.credentials.json`
+> is Claude Code's own OAuth token — different audience and scopes — and cannot be used here.
+> The backend checks for all three credential sources at construction and says so if it finds
+> none, rather than failing on the first frame with the aircraft already airborne.
+
+Its SDK is a **python 3.12** dependency (the ROS side), installed by `fetch_vendor.sh` into
+`vendor/py312` — not into the 3.10 `.venv` that owns the carla/airsim clients. Defaults live
+in `configs/testbed.yaml`: `claude-opus-5` at `effort: low`, because 40 steps in 300 s
+leaves 7.5 s per decision and a higher effort can spend that on a single call. The backend
+tallies call count, token spend and p50/p95 decision latency, and logs them on shutdown.
 
 ## Native Ubuntu vs this distrobox
 

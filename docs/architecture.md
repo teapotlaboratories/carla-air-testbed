@@ -3,6 +3,13 @@
 A VLM navigation testbed over ROS 2, on CARLA-Air. Two processes, one ROS 2 graph, and a
 deliberate seam between them.
 
+> **This document describes what runs today.** As of 2026-08-03 the project is being
+> repositioned into *a ROS 2-driven drone simulator* with VLM navigation as an example on top
+> — see [`todo.md` → Repositioning](todo.md#repositioning--a-drone-simulator-first-a-vlm-testbed-second).
+> Two things below are known to be on the wrong side of that line and are called out where
+> they appear: `vlm_client` and `grounding` launch as part of the core graph, and the web
+> console commands the aircraft over the sidecar socket instead of ROS 2.
+
 ```
 ┌─ Python 3.10 ────────────────┐          ┌─ Python 3.12 / ROS 2 Jazzy ──────────────────┐
 │                              │          │                                              │
@@ -117,6 +124,66 @@ projects speak identical definitions.
 - QoS matches PX4's (best-effort, transient-local, depth 5) on purpose, so a node that
   works here does not fail on hardware over a QoS mismatch.
 
+## Configuration: one source, two rendered files
+
+`configs/testbed.yaml` is the only file anyone edits. Two of the three formats involved are
+not ours to change — AirSim's `settings.json` is read by the CarlaUE4 binary at launch, and
+the parameter file is read by rclpy's parameter system — so the unification happens one level
+up: one source, rendered by `scripts/apply_config.py` into what each reader insists on.
+
+```
+configs/testbed.yaml  ─┬─▸  configs/sim/settings.json                AirSim's schema
+                       └─▸  ros2_ws/src/bringup/config/testbed.yaml  rclpy's schema
+```
+
+Both carry a DO-NOT-EDIT header. `run_sim.sh` and `bringup.sh` render before every start, and
+`apply_config.py --check` regenerates into memory and diffs, so drift fails a test rather than
+a flight.
+
+**The ROS target is the path the launch file already defaults to**, and that is not
+incidental. Rendering anywhere else leaves a second parameter file that
+`ros2 launch bringup testbed.launch.py` silently prefers over the generated one — which is
+exactly what happened for three days after the unification claimed to be done, and is why the
+render target is a package path rather than a tidier `configs/generated/`.
+
+Sections are named for **when a change takes effect** — `simulator:` costs a ~60 s restart,
+`sensors:`/`sidecar:` ~5 s, `graph:` is live via `ros2 param set` — because that is the
+distinction that costs time, and a flat file hides it.
+
+## What a ROS 2 client can reach
+
+A node importing only `rclpy`, `px4_msgs` and `sensor_msgs` can fly the aircraft and read
+every instrument. `examples/ros2_full_control.py` does exactly that and is the executable
+version of this table.
+
+| | topic | message |
+|---|---|---|
+| **takeoff / land** | `/fmu/in/vehicle_command` | `VehicleCommand` (`NAV_TAKEOFF` 22, `NAV_LAND` 21) |
+| **position** | `/fmu/in/trajectory_setpoint` | `TrajectorySetpoint`, position set, velocity NaN |
+| **velocity** | `/fmu/in/trajectory_setpoint` | `TrajectorySetpoint`, velocity set — velocity wins over position |
+| **attitude** | `/fmu/in/vehicle_attitude_setpoint` | `VehicleAttitudeSetpoint`, quaternion `q_d` |
+| odometry | `/fmu/out/vehicle_odometry` | `VehicleOdometry` |
+| IMU | `/fmu/out/sensor_combined` | `SensorCombined` |
+| barometer | `/fmu/out/vehicle_air_data` | `VehicleAirData` |
+| magnetometer | `/fmu/out/vehicle_magnetometer` | `VehicleMagnetometer` |
+| GPS | `/fmu/out/sensor_gps` | `SensorGps` |
+| semantic LiDAR | `/sensors/lidar/points` | `PointCloud2`, with object id and tag per point |
+| cameras | `/camera/{rgb,depth}/image_raw` | `Image` + `CameraInfo` |
+
+**Two traps that only a real run exposes**, both found that way:
+
+- **The autonomy loop outranks a manual command.** `offboard_control` publishes its own
+  setpoints at 10 Hz and wins: a takeoff commanded to 35 m settled at 15.6 m until the
+  example disabled that node via `SetParameters` and restored it on exit. Nothing about the
+  message was wrong; the graph was fighting the command.
+- **Zeros are not "no opinion".** A `TrajectorySetpoint` with zeroed velocity means *hold
+  still*, not *ignore velocity*. Unused fields must be NaN.
+
+**What is NOT reachable from ROS 2**, and is the subject of R-01: world control. `reset`,
+`spawn_traffic`, `set_weather`, `destroy_actors`, `collision` and the chase camera exist only
+as sidecar RPC methods, which is why `scripts/run_episode.py` and `webui/server.py` both still
+open the Unix socket directly.
+
 ## The loop
 
 See-Point-Fly's shape is a slow generator over a fast controller, and every node boundary
@@ -196,7 +263,8 @@ So the two levers are different things:
 * **RGB throughput is rendering-bound.** Hardware rendering buys 9×.
 * **Depth and segmentation throughput are transport-bound.** Only shrinking them helps.
 
-Hence `configs/sim/settings.json`: RGB 640×480 with depth and segmentation at 320×240 — 4:3
+Hence `simulator.cameras` in `configs/testbed.yaml`: RGB 640×480, depth 160×120,
+segmentation 320×240 — 4:3
 throughout so the pixel scale is an exact 2:1, and small enough that the readback stays
 affordable. The requirement is **equal aspect ratio, not equal resolution**.
 
@@ -229,7 +297,7 @@ drone time. For air-ground scenarios, which is the entire reason to use this sim
 makes results meaningless. The ROS 2 graph is wall-clock driven too, so the VLM would also
 get a third of the sim-time budget to think in.
 
-`ClockSpeed` stays at 1.0 in `configs/sim/settings.json`. **N-seed sweeps here run in real
+`simulator.clock_speed` stays at 1.0. **N-seed sweeps here run in real
 time, and that is the throughput ceiling** — budget roughly (episode timeout x seeds) of
 wall clock. Faster-than-real-time evaluation needs a lane where one clock drives everything;
 Gazebo does this and CARLA-Air cannot.
@@ -246,6 +314,10 @@ place so the workaround cannot drift.
 | Traffic-manager vehicles stall constantly (4–11 of 15 moving; watchdog restarts 4–9 per tick) | `World.tick_watchdog()`, called at 1 Hz by the bridge |
 | Pedestrians need an AI controller and a destination | `World.spawn_traffic()` |
 | AirSim NED origin on Town10HD is **offshore** | `frames.carla_to_ned()`; scenarios are in NED |
+| NED altitude is **not** AGL — the origin sits 27.45 m above the street, so `z = -50` is 77.45 m over the ground. Every original scenario flew above the whole city and no "obstacle" was ever in the path | `scripts/survey_buildings.py --check` reports it per scenario |
+| The controller's `[15, 120] m` altitude clamp is in NED, so the real floor is **42.45 m AGL** | `tests/test_scenarios.py` lints it; `--propose` only searches legal altitudes |
+| Every camera buffer must share ONE aspect ratio: `FOV_Degrees` is horizontal, so a 16:9 RGB buffer against a 4:3 depth buffer covers a different vertical field and `frames.scale_to()` silently samples the wrong depth pixel. 16:9 would also narrow VFOV 73.7deg -> 58.7deg, pushing the level-flight row from 13.7% of the frame to 1.5% | `simulator.cameras` in `configs/testbed.yaml`, all 4:3; `tests/test_config.py` enforces it |
+| ROS-side python packages must go to **3.12**, not the 3.10 `.venv` — `pip install anthropic` into the wrong interpreter fails as a `ModuleNotFoundError` that reads like a missing package | `scripts/fetch_vendor.sh` installs into `vendor/py312`; `bringup.sh` appends it to `PYTHONPATH` |
 | System NVIDIA Vulkan ICD has a host-only library path: pinning it kills the sim, leaving it unset silently falls back to CPU rendering | `scripts/run_sim.sh` exports `configs/vulkan/nvidia_icd.container.json` and checks VRAM after startup |
 | `pkill -f` matches the calling shell's own command line | `scripts/stop.sh` |
 
@@ -254,13 +326,27 @@ Full evidence for each: [`worklog/2026-07-31-carla-air-probe-run.md`](worklog/20
 ## Adding a VLM backend
 
 Implement `vlm_client.backends.base.VlmBackend` — one method, image and instruction in,
-pixel out — and register it in `BACKENDS` in `vlm_node.py`. Three ship today:
+pixel out — and register it in `BACKENDS` in `vlm_node.py`. Four ship today:
 
 - `mock` — seeded random pixels. The floor.
 - `scripted` — a fixed pixel sequence. The regression backend: a change in episode outcome
   is unambiguously a change in the stack, not the model.
 - `geometric` — steers toward the most open column in the depth band, with a left/right
   keyword bias. **The baseline a real VLM has to beat to be worth its latency.**
+- `claude` — the Anthropic API, and the first real model in the loop. Sees the same frame
+  and instruction as the three above, which is what makes its score comparable. Three
+  things about it are worth knowing before reading a number from it:
+  - The reply is **schema-constrained** (`output_config.format`), so the pixel arrives as an
+    integer rather than something parsed out of prose. The schema cannot express numeric
+    bounds, so `u`/`v` are clamped on our side.
+  - It runs at **`effort: low`** by default. This is a control loop: 40 steps in 300 s is
+    7.5 s per decision, and a higher effort can spend that on one call — which turns every
+    episode into a timeout that measures the budget, not the navigation.
+  - Its SDK is a **python 3.12** dependency in `vendor/py312`, *not* the 3.10 `.venv`. That
+    is the same interpreter seam as everything else here, wearing a different hat.
+
+  The key comes from `ANTHROPIC_API_KEY` and is deliberately not a ROS parameter — those are
+  readable from the graph and are written into launch logs, which this repo commits.
 
 And one that is **not a backend to compare against**:
 

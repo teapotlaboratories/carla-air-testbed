@@ -35,7 +35,7 @@ Kept inline so they survive even if the import above is truncated. Full reasonin
 1. **Stop every process when a flight test is done.** Any run that puts the aircraft in
    motion — `run_episode.py`, `run_conformance.sh`, `record_flight.py`, or a manual
    `bringup.sh` — ends with `./scripts/stop.sh --all`, then `./scripts/status.sh` to
-   verify every count is 0 and GPU 0 is back to ~113 MiB. The simulator holds ~3.3 GB of
+   verify every count is 0 and GPU 1 (where the simulator renders) is back to ~33 MiB. The simulator holds ~3.3 GB of
    VRAM while idle, and a leftover graph **stacks** on the next bringup so two controllers
    fight over the aircraft while `ros2 node list` still looks correct. Keep it up only if
    the operator asked, or mid-sweep — and say so.

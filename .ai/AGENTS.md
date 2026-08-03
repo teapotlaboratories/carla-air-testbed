@@ -213,6 +213,15 @@ never sufficient. Pick the verification that fits:
   first: it is handed the goal and flies straight at it, so an oracle failure means the
   *scenario* is broken and every result from it is noise. It is a diagnostic and must never
   be reported beside a real model's number.
+  - **Exception — scenarios with an obstacle in them.** The oracle is a straight-line
+    policy, so anything built to block the straight line fails it *by construction*, and
+    reading that as a broken scenario gets it exactly backwards. `avoid_the_block` is the
+    first of these: the oracle scores 0/5 there on purpose. For such a scenario, prove the
+    goal is reachable geometrically instead —
+    `./.venv/bin/python scripts/survey_buildings.py --route` runs A* at flight altitude and
+    reports the shortest legal path against the straight-line distance. Quote that ratio
+    when you add one; if it is above ~2x, the scenario is probably measuring a bigger detour
+    than its instruction describes.
 - **Simulator behaviour changed? → `scripts/run_conformance.sh`.** Three probes are
   *expected* to fail (`p09_hover_hold` the post-reset runaway, `p06_air_ground_sync` stalling traffic, `p07_ros2_interop` the
   Jazzy/cpython-310 wall). If one of those starts passing, the substrate changed and the
@@ -299,9 +308,22 @@ conclusion.
   `<drive-root>/Developments/projects/carla-air_testing/`.** Mirror the project path from
   that drive's root. Never create a top-level directory on a drive you do not own — these
   volumes are shared with the host and unrelated data.
-- **The two GPUs are not interchangeable.** The simulator renders on GPU 0 (RTX 3080,
-  10 GB, ~3.3 GB in use). GPU 1 (RTX 5060 Ti, 16 GB) is deliberately free for VLM
-  inference — the reference plan's main worry was UE and a model contending for one card,
-  and this machine does not have that problem. Keep it that way.
+- **Run the simulator on GPU 1, with `TESTBED_GPU=1`.** GPU 0 is the **RTX 3080 (10 GB)** and
+  GPU 1 is the **RTX 5060 Ti (16 GB)**. The operator regularly uses GPU 0 for UnrealEditor
+  and other work — twice in one session a run had to be stopped because the 3080 was wanted
+  back — so the simulator's ~3.3 GB belongs on the uncontended card.
+
+  ```bash
+  TESTBED_GPU=1 ./scripts/run_sim.sh          # or an nvidia-smi index, or vendor:device
+  ```
+
+  `run_sim.sh` prints the device it selected and the VRAM it ended up using, so a mis-pin is
+  visible immediately rather than showing up later as unexplained slowness.
+
+  > **Corrected 2026-08-02.** This rule previously said the opposite — simulator on GPU 0,
+  > GPU 1 held free for VLM inference. That was written before `TESTBED_GPU` existed and
+  > before the operator asked for the 5060 Ti, and it stayed wrong long enough to contradict
+  > the project memory that recorded the actual decision. If a rule here disagrees with what
+  > the operator has asked for, **say so rather than quietly following one of them.**
 - **Secrets stay off the tree and off history** — pass tokens via env or the command line,
   never committed.

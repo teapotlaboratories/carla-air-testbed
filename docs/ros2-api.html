@@ -1,0 +1,509 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>carla-air testbed - ROS 2 API quickstart</title>
+<style>
+  :root{
+    --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
+    --ink:#161A18; --ink-soft:#4A524C; --ink-faint:#6B736C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --air-wash:#DCEAF2;
+    --ground:#C8892B; --ground-wash:#F2E8D6;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+    --code-key:#7FD8DF; --code-str:#C9B981; --code-num:#9CC77F;
+    --display:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;
+    --body:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#111512; --panel:#171C19; --sunk:#0D110F;
+      --ink:#E4E7E0; --ink-soft:#9BA49C; --ink-faint:#7C857D;
+      --rule:#2C332E; --rule-soft:#232925;
+      --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+      --air:#3BA5D4; --air-wash:#132A36;
+      --ground:#E0A643; --ground-wash:#2A2416;
+      --ok:#5FA351; --stop:#D25638;
+      --thead:#0B0E0C; --thead-ink:#D8DCD4;
+      --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
+    --ink:#161A18; --ink-soft:#4A524C; --ink-faint:#6B736C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --air-wash:#DCEAF2;
+    --ground:#C8892B; --ground-wash:#F2E8D6;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+  }
+  :root[data-theme="dark"]{
+    --paper:#111512; --panel:#171C19; --sunk:#0D110F;
+    --ink:#E4E7E0; --ink-soft:#9BA49C; --ink-faint:#7C857D;
+    --rule:#2C332E; --rule-soft:#232925;
+    --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+    --air:#3BA5D4; --air-wash:#132A36;
+    --ground:#E0A643; --ground-wash:#2A2416;
+    --ok:#5FA351; --stop:#D25638;
+    --thead:#0B0E0C; --thead-ink:#D8DCD4;
+    --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:var(--body);font-size:16px;line-height:1.6}
+  .wrap{max-width:1080px;margin:0 auto;padding:2.2rem clamp(1rem,4vw,2.5rem) 6rem;
+        display:flex;flex-direction:column;gap:2.4rem}
+  .prose{max-width:68ch;display:flex;flex-direction:column;gap:.9rem}
+  .prose > *{margin:0}
+
+  .topbar{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;max-width:none}
+  .eyebrow{font-family:var(--display);font-size:.68rem;font-weight:700;letter-spacing:.16em;
+           text-transform:uppercase;color:var(--ground);margin:0}
+  h1{font-family:var(--display);font-size:clamp(1.8rem,4.4vw,2.5rem);font-weight:800;
+     letter-spacing:-.018em;line-height:1.07;margin:.3rem 0 0;text-wrap:balance}
+  .lede{font-size:1.04rem;color:var(--ink-soft);max-width:64ch;text-wrap:pretty;margin:.5rem 0 0}
+  h2{font-family:var(--display);font-size:1.18rem;font-weight:800;letter-spacing:.015em;
+     margin:0 0 .2rem;padding-bottom:.38rem;border-bottom:2px solid var(--chrome);
+     text-wrap:balance;display:flex;align-items:baseline;gap:.6rem}
+  h3{font-family:var(--display);font-size:.9rem;font-weight:700;letter-spacing:.03em;margin:0}
+  p{text-wrap:pretty}
+  strong{font-weight:700}
+  code{font-family:var(--mono);font-size:.86em;background:var(--sunk);
+       border:1px solid var(--rule-soft);border-radius:2px;padding:.05em .32em}
+  section{display:flex;flex-direction:column;gap:1rem}
+
+  .themer{margin-left:auto;display:inline-flex;border:1px solid var(--rule);
+          border-radius:3px;overflow:hidden;background:var(--panel)}
+  .themer button{font-family:var(--display);font-size:.62rem;font-weight:700;
+          letter-spacing:.1em;text-transform:uppercase;padding:.32rem .6rem;
+          border:0;border-right:1px solid var(--rule);background:transparent;
+          color:var(--ink-soft);cursor:pointer;line-height:1.6}
+  .themer button:last-child{border-right:0}
+  .themer button:hover{color:var(--ink)}
+  .themer button[aria-pressed="true"]{background:var(--chrome);color:#fff}
+  .themer button:focus-visible{outline:2px solid var(--chrome);outline-offset:-2px}
+
+  .tw{overflow-x:auto;border:1px solid var(--rule);border-radius:4px}
+  table{border-collapse:collapse;width:100%;font-size:.83rem;font-variant-numeric:tabular-nums}
+  thead th{background:var(--thead);color:var(--thead-ink);text-align:left;
+           font-family:var(--display);font-size:.63rem;letter-spacing:.11em;
+           text-transform:uppercase;padding:.5rem .7rem;font-weight:700;white-space:nowrap}
+  td,tbody th{padding:.45rem .7rem;border-top:1px solid var(--rule-soft);
+              text-align:left;vertical-align:top}
+  tbody th{font-weight:600;font-family:var(--mono);font-size:.8rem;white-space:nowrap}
+  tbody tr:nth-child(even){background:var(--panel)}
+  td code,tbody th code{background:transparent;border:0;padding:0}
+  .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  .mono{font-family:var(--mono);font-size:.8rem}
+
+  .pill{display:inline-block;font-family:var(--display);font-size:.58rem;font-weight:700;
+        letter-spacing:.08em;text-transform:uppercase;padding:.1rem .38rem;border-radius:2px;
+        color:#fff;white-space:nowrap}
+  .pill.ok{background:var(--ok)} .pill.air{background:var(--air)}
+  .pill.ground{background:var(--ground)} .pill.stop{background:var(--stop)}
+
+  pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);
+      font-size:.78rem;line-height:1.62;margin:0;padding:.9rem 1rem;border-radius:3px;
+      overflow-x:auto}
+  pre .c{color:var(--code-dim)} pre .k{color:var(--code-key)}
+  pre .s{color:var(--code-str)} pre .n{color:var(--code-num)}
+  pre b{color:#fff;font-weight:600}
+
+  .note{border-left:3px solid var(--chrome);background:var(--panel);
+        padding:.75rem 1rem;border-radius:0 3px 3px 0;font-size:.92rem;
+        display:flex;flex-direction:column;gap:.45rem}
+  .note.trap{border-left-color:var(--stop)}
+  .note.why{border-left-color:var(--ground)}
+  .note > *{margin:0}
+  .note .t{font-family:var(--display);font-size:.63rem;font-weight:700;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--ink-soft)}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));gap:1px;
+         background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+  .stat{background:var(--panel);padding:.65rem .8rem;display:flex;flex-direction:column;gap:.1rem}
+  .stat .k{font-family:var(--display);font-size:.58rem;letter-spacing:.1em;
+           text-transform:uppercase;color:var(--ink-faint)}
+  .stat .v{font-family:var(--mono);font-size:1.1rem;font-weight:600}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <header class="prose">
+    <div class="topbar">
+      <p class="eyebrow">carla-air testbed &middot; ROS 2 API</p>
+      <div class="themer" role="group" aria-label="Colour theme">
+        <button type="button" data-theme-set="auto"  aria-pressed="true">Auto</button>
+        <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+        <button type="button" data-theme-set="dark"  aria-pressed="false">Dark</button>
+      </div>
+    </div>
+    <h1>Commanding and reading the aircraft over ROS 2</h1>
+    <p class="lede">
+      Five commands, twelve sensor streams, all PX4 messages on PX4 topics. Every row in the
+      tables below was executed against the running simulator and the result measured &mdash;
+      the "verified" column is what actually happened, not what the code intends.
+    </p>
+    <div class="stats" style="max-width:none">
+      <div class="stat"><span class="k">Commands</span><span class="v">5</span></div>
+      <div class="stat"><span class="k">Sensor streams</span><span class="v">12</span></div>
+      <div class="stat"><span class="k">DDS domain</span><span class="v">42</span></div>
+      <div class="stat"><span class="k">Extra deps</span><span class="v">0</span></div>
+    </div>
+  </header>
+
+  <!-- ============ COMMANDS ============ -->
+  <section>
+    <h2>What you can send</h2>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Topic</th><th>Message type</th><th>Does</th><th>Verified</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>/fmu/in/vehicle_command</th>
+            <td class="mono">px4_msgs/msg/VehicleCommand</td>
+            <td>Take off &mdash; <code>command = 22</code>, <code>param7</code> = altitude</td>
+            <td><span class="pill ok">NED 40 &rarr; 40.4</span></td>
+          </tr>
+          <tr>
+            <th>/fmu/in/vehicle_command</th>
+            <td class="mono">px4_msgs/msg/VehicleCommand</td>
+            <td>Land &mdash; <code>command = 21</code></td>
+            <td><span class="pill ok">0.4 m AGL</span></td>
+          </tr>
+          <tr>
+            <th>/fmu/in/trajectory_setpoint</th>
+            <td class="mono">px4_msgs/msg/TrajectorySetpoint</td>
+            <td>Position target &mdash; <code>position</code> set, <code>velocity</code> NaN</td>
+            <td><span class="pill ok">+45.0 &rarr; +45.5 m</span></td>
+          </tr>
+          <tr>
+            <th>/fmu/in/trajectory_setpoint</th>
+            <td class="mono">px4_msgs/msg/TrajectorySetpoint</td>
+            <td>Velocity target &mdash; <code>velocity</code> set, <code>position</code> NaN</td>
+            <td><span class="pill ok">5 m/s x 5 s &rarr; 27.9 m</span></td>
+          </tr>
+          <tr>
+            <th>/fmu/in/vehicle_attitude_setpoint</th>
+            <td class="mono">px4_msgs/msg/VehicleAttitudeSetpoint</td>
+            <td>Roll / pitch / yaw &mdash; quaternion in <code>q_d</code></td>
+            <td><span class="pill ok">+/-15 deg exact, all axes</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note trap">
+      <span class="t">Both target types share one topic, and velocity wins</span>
+      <p>
+        The bridge checks <code>velocity</code> first, so a message with both fields finite is a
+        <strong>velocity</strong> command and the position is ignored. Unused fields must be
+        <code>NaN</code>, not <code>0.0</code> &mdash; zeros are a command to hold still, so a
+        position setpoint sent with a zeroed velocity field is silently a "stop".
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ SENSORS ============ -->
+  <section>
+    <h2>What you can read</h2>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Topic</th><th>Message type</th><th class="num">Rate</th><th>Carries</th></tr>
+        </thead>
+        <tbody>
+          <tr><th>/fmu/out/vehicle_odometry</th><td class="mono">px4_msgs/msg/VehicleOdometry</td>
+              <td class="num">20 Hz</td><td>position, velocity, orientation quaternion &mdash; NED</td></tr>
+          <tr><th>/fmu/out/vehicle_local_position</th><td class="mono">px4_msgs/msg/VehicleLocalPosition</td>
+              <td class="num">20 Hz</td><td>the same state in PX4's local-position form</td></tr>
+          <tr><th>/fmu/out/vehicle_status</th><td class="mono">px4_msgs/msg/VehicleStatus</td>
+              <td class="num">20 Hz</td><td><code>arming_state</code>, <code>nav_state</code></td></tr>
+          <tr><th>/fmu/out/sensor_combined</th><td class="mono">px4_msgs/msg/SensorCombined</td>
+              <td class="num">5 Hz</td><td><code>accelerometer_m_s2[3]</code>, <code>gyro_rad[3]</code> &mdash; FRD, with noise</td></tr>
+          <tr><th>/fmu/out/vehicle_air_data</th><td class="mono">px4_msgs/msg/VehicleAirData</td>
+              <td class="num">5 Hz</td><td><code>baro_alt_meter</code>, <code>baro_pressure_pa</code>, <code>ambient_temperature</code> (C), <code>rho</code></td></tr>
+          <tr><th>/fmu/out/vehicle_magnetometer</th><td class="mono">px4_msgs/msg/VehicleMagnetometer</td>
+              <td class="num">5 Hz</td><td><code>magnetometer_ga[3]</code> &mdash; Gauss</td></tr>
+          <tr><th>/fmu/out/sensor_gps</th><td class="mono">px4_msgs/msg/SensorGps</td>
+              <td class="num">5 Hz</td><td><code>latitude_deg</code>, <code>longitude_deg</code>, <code>altitude_msl_m</code>, <code>fix_type</code>, <code>eph</code>/<code>epv</code>, <code>satellites_used</code></td></tr>
+          <tr><th>/sensors/lidar/points</th><td class="mono">sensor_msgs/msg/PointCloud2</td>
+              <td class="num">10 Hz</td><td>24 B/point: <code>x y z cos_inc_angle object_idx object_tag</code> <span class="pill ground">CARLA</span></td></tr>
+          <tr><th>/camera/rgb/image_raw</th><td class="mono">sensor_msgs/msg/Image</td>
+              <td class="num">~8 Hz</td><td>640x480, <code>bgr8</code>, step 1920</td></tr>
+          <tr><th>/camera/depth/image_raw</th><td class="mono">sensor_msgs/msg/Image</td>
+              <td class="num">~8 Hz</td><td>160x120, <code>32FC1</code> &mdash; metres, planar z-depth</td></tr>
+          <tr><th>/camera/rgb/camera_info</th><td class="mono">sensor_msgs/msg/CameraInfo</td>
+              <td class="num">~8 Hz</td><td>fx 320.5, fy 320.5, cx 320.0, cy 240.0</td></tr>
+          <tr><th>/camera/pose</th><td class="mono">geometry_msgs/msg/PoseStamped</td>
+              <td class="num">20 Hz</td><td>camera pose in NED &mdash; use this, not the vehicle pose</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="font-size:.87rem;color:var(--ink-soft)">
+        Live sample from the running graph: GPS <code>47.640735, -122.139852</code> fix 3, 12
+        satellites; lidar 644 points at 24 B each; camera <code>640x480 bgr8</code>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ SETUP ============ -->
+  <section>
+    <h2>Setup</h2>
+<pre><span class="c"># terminal 1 - simulator and the whole graph</span>
+./scripts/bringup.sh --backend geometric
+
+<span class="c"># terminal 2 - your client</span>
+<span class="k">source</span> /opt/ros/jazzy/setup.bash
+<span class="k">source</span> ros2_ws/install/setup.bash
+<span class="k">export</span> ROS_DOMAIN_ID=<span class="n">42</span></pre>
+
+    <div class="note trap">
+      <span class="t">Two things that make everything silently fail</span>
+      <p>
+        <strong><code>ROS_DOMAIN_ID=42</code>.</strong> On the default domain this graph merges
+        with a sibling project publishing real PX4 topics of the same name. You will see topics
+        and read another aircraft's data.
+      </p>
+      <p>
+        <strong>QoS must be best-effort and transient-local.</strong> A <code>RELIABLE</code>
+        subscription receives <em>nothing</em> from these publishers, with no error and no
+        warning &mdash; the topic simply looks connected and never delivers.
+      </p>
+    </div>
+
+<pre><span class="k">from</span> rclpy.qos <span class="k">import</span> (QoSDurabilityPolicy, QoSHistoryPolicy,
+                       QoSProfile, QoSReliabilityPolicy)
+
+PX4_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.<b>BEST_EFFORT</b>,
+    durability=QoSDurabilityPolicy.<b>TRANSIENT_LOCAL</b>,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=<span class="n">5</span>,
+)</pre>
+  </section>
+
+  <!-- ============ SENDING ============ -->
+  <section>
+    <h2>Sending commands</h2>
+
+    <h3>Take off and land</h3>
+<pre><span class="k">from</span> px4_msgs.msg <span class="k">import</span> VehicleCommand
+
+pub = node.create_publisher(VehicleCommand, <span class="s">"/fmu/in/vehicle_command"</span>, PX4_QOS)
+
+msg = VehicleCommand()
+msg.timestamp = <span class="k">int</span>(node.get_clock().now().nanoseconds / <span class="n">1000</span>)
+msg.command   = VehicleCommand.VEHICLE_CMD_NAV_TAKEOFF   <span class="c"># 22</span>
+msg.param7    = <span class="n">40.0</span>                                  <span class="c"># altitude, metres NED</span>
+msg.target_system = <span class="n">1</span>
+msg.from_external = <span class="k">True</span>
+pub.publish(msg)
+
+<span class="c"># land: same message, command = VehicleCommand.VEHICLE_CMD_NAV_LAND  (21)</span></pre>
+
+    <h3>Position target</h3>
+<pre><span class="k">import</span> math
+<span class="k">from</span> px4_msgs.msg <span class="k">import</span> TrajectorySetpoint
+
+pub = node.create_publisher(TrajectorySetpoint, <span class="s">"/fmu/in/trajectory_setpoint"</span>, PX4_QOS)
+
+msg = TrajectorySetpoint()
+msg.timestamp    = <span class="k">int</span>(node.get_clock().now().nanoseconds / <span class="n">1000</span>)
+msg.position     = [<span class="n">150.0</span>, <span class="n">-159.4</span>, <span class="n">-40.0</span>]   <span class="c"># north, east, DOWN (NED)</span>
+msg.velocity     = [math.nan] * <span class="n">3</span>            <span class="c"># NaN, not 0.0 - see the trap above</span>
+msg.acceleration = [math.nan] * <span class="n">3</span>
+msg.jerk         = [math.nan] * <span class="n">3</span>
+msg.yaw          = math.nan                <span class="c"># or radians to face a heading</span>
+msg.yawspeed     = math.nan
+pub.publish(msg)                           <span class="c"># fire once; it flies there and holds</span></pre>
+
+    <h3>Velocity target</h3>
+<pre>msg = TrajectorySetpoint()
+msg.timestamp    = <span class="k">int</span>(node.get_clock().now().nanoseconds / <span class="n">1000</span>)
+msg.position     = [math.nan] * <span class="n">3</span>
+msg.velocity     = [<span class="n">0.0</span>, <span class="n">5.0</span>, <span class="n">0.0</span>]          <span class="c"># 5 m/s east, NED</span>
+msg.acceleration = [math.nan] * <span class="n">3</span>
+msg.jerk         = [math.nan] * <span class="n">3</span>
+msg.yaw = msg.yawspeed = math.nan
+pub.publish(msg)   <span class="c"># STREAM this at ~10 Hz - see below</span></pre>
+
+    <h3>Roll / pitch / yaw</h3>
+<pre><span class="k">from</span> px4_msgs.msg <span class="k">import</span> VehicleAttitudeSetpoint
+
+<span class="k">def</span> <span class="k">euler_to_quaternion</span>(roll, pitch, yaw):     <span class="c"># radians, FRD</span>
+    cr, sr = math.cos(roll/<span class="n">2</span>),  math.sin(roll/<span class="n">2</span>)
+    cp, sp = math.cos(pitch/<span class="n">2</span>), math.sin(pitch/<span class="n">2</span>)
+    cy, sy = math.cos(yaw/<span class="n">2</span>),   math.sin(yaw/<span class="n">2</span>)
+    <span class="k">return</span> [cr*cp*cy + sr*sp*sy, sr*cp*cy - cr*sp*sy,
+            cr*sp*cy + sr*cp*sy, cr*cp*sy - sr*sp*cy]
+
+pub = node.create_publisher(
+    VehicleAttitudeSetpoint, <span class="s">"/fmu/in/vehicle_attitude_setpoint"</span>, PX4_QOS)
+
+msg = VehicleAttitudeSetpoint()
+msg.timestamp        = <span class="k">int</span>(node.get_clock().now().nanoseconds / <span class="n">1000</span>)
+msg.q_d              = euler_to_quaternion(<span class="n">0.0</span>, math.radians(<span class="n">15.0</span>), <span class="n">0.0</span>)
+msg.yaw_sp_move_rate = <span class="n">0.0</span>
+msg.thrust_body      = [<span class="n">0.0</span>, <span class="n">0.0</span>, <span class="n">-0.5</span>]
+pub.publish(msg)   <span class="c"># STREAM this at ~10 Hz</span></pre>
+
+    <div class="note why">
+      <span class="t">Velocity and attitude must be streamed; position and takeoff must not</span>
+      <p>
+        A velocity or attitude command has a <strong>lifetime</strong> (0.5 s by default) and
+        the aircraft stops when it lapses. Send one and it is obeyed for half a second. That is
+        deliberate: a client that dies mid-command leaves an aircraft that coasts to a halt
+        rather than one that keeps flying.
+      </p>
+      <p>
+        Position, takeoff and land are one-shot &mdash; they run to completion on their own.
+      </p>
+    </div>
+
+    <div class="note trap">
+      <span class="t">Take the aircraft off the autonomy loop first</span>
+      <p>
+        <code>bringup.sh</code> starts the VLM &rarr; grounding &rarr; control chain, and that
+        controller streams <em>its own</em> setpoints at 10 Hz onto
+        <code>/fmu/in/trajectory_setpoint</code>. Two publishers on one topic is not a conflict
+        either can detect: the bridge forwards whichever arrived last, and at 10 Hz the
+        autonomy loop wins. Measured symptom &mdash; a takeoff commanded to NED 40 m reached
+        <strong>15.6 m</strong> and the aircraft flew where the VLM wanted, with no error
+        anywhere.
+      </p>
+<pre><span class="c"># from a shell</span>
+ros2 param set /offboard_control enabled false
+
+<span class="c"># or from your node, and set it back when you are done</span>
+<span class="k">from</span> rcl_interfaces.srv <span class="k">import</span> SetParameters</pre>
+    </div>
+  </section>
+
+  <!-- ============ RECEIVING ============ -->
+  <section>
+    <h2>Reading sensors</h2>
+<pre><span class="k">from</span> px4_msgs.msg <span class="k">import</span> SensorCombined, SensorGps, VehicleAirData, \
+                          VehicleMagnetometer, VehicleOdometry
+<span class="k">from</span> sensor_msgs.msg <span class="k">import</span> PointCloud2
+
+node.create_subscription(VehicleOdometry, <span class="s">"/fmu/out/vehicle_odometry"</span>, on_odom, PX4_QOS)
+node.create_subscription(SensorCombined,  <span class="s">"/fmu/out/sensor_combined"</span>,  on_imu,  PX4_QOS)
+node.create_subscription(VehicleAirData,  <span class="s">"/fmu/out/vehicle_air_data"</span>, on_baro, PX4_QOS)
+node.create_subscription(VehicleMagnetometer, <span class="s">"/fmu/out/vehicle_magnetometer"</span>, on_mag, PX4_QOS)
+node.create_subscription(SensorGps,       <span class="s">"/fmu/out/sensor_gps"</span>,       on_gps,  PX4_QOS)
+
+<span class="c"># The lidar comes from CARLA, not from the flight-controller shim,</span>
+<span class="c"># so it uses an ordinary QoS depth rather than PX4_QOS.</span>
+node.create_subscription(PointCloud2, <span class="s">"/sensors/lidar/points"</span>, on_lidar, <span class="n">1</span>)
+
+<span class="k">def</span> <span class="k">on_odom</span>(msg):
+    north, east, down = msg.position          <span class="c"># metres, NED</span>
+    w, x, y, z        = msg.q                 <span class="c"># orientation quaternion</span>
+
+<span class="k">def</span> <span class="k">on_lidar</span>(msg):
+    <span class="c"># 24 bytes per point: 4f (x, y, z, cos_inc_angle) + 2I (object_idx, object_tag)</span>
+    <span class="k">import</span> struct
+    <span class="k">for</span> i <span class="k">in</span> <span class="k">range</span>(msg.width):
+        x, y, z, cos_inc, obj_idx, obj_tag = struct.unpack_from(
+            <span class="s">"&lt;ffffII"</span>, msg.data, i * msg.point_step)</pre>
+
+    <div class="note">
+      <span class="t">Two frame facts that cause real bugs</span>
+      <p>
+        <strong>NED altitude is not height above ground.</strong> On Town10HD the origin sits
+        <strong>27.45 m above the street</strong>, so <code>-position[2] = 40</code> means
+        67.45 m AGL. Confusing these has already broken a scenario in this project.
+      </p>
+      <p>
+        <strong>LiDAR points are in CARLA's frame</strong> relative to the sensor &mdash; x
+        forward, y <em>right</em>, z <em>up</em> &mdash; while everything else in the graph is
+        NED with z down.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ VERIFICATION ============ -->
+  <section>
+    <h2>How these numbers were obtained</h2>
+    <div class="prose">
+      <p>
+        Every command was published from a ROS node, from a known reset state, and the effect
+        measured from <code>/fmu/out/vehicle_odometry</code>. Nothing here is copied from a
+        message definition and hoped for.
+      </p>
+    </div>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Test</th><th class="num">Commanded</th><th class="num">Achieved</th></tr></thead>
+        <tbody>
+          <tr><th>takeoff</th><td class="num">NED 40 m</td><td class="num">40.4</td></tr>
+          <tr><th>land</th><td class="num">&mdash;</td><td class="num">0.4 m AGL</td></tr>
+          <tr><th>position</th><td class="num">+45.0 m north</td><td class="num">+45.5</td></tr>
+          <tr><th>velocity</th><td class="num">5 m/s x 5 s</td><td class="num">+27.9 m</td></tr>
+          <tr><th>attitude roll</th><td class="num">+12 deg</td><td class="num">+12.0</td></tr>
+          <tr><th>attitude pitch</th><td class="num">+15 deg</td><td class="num">+15.0</td></tr>
+          <tr><th>attitude pitch</th><td class="num">-15 deg</td><td class="num">-15.0</td></tr>
+          <tr><th>attitude yaw</th><td class="num">+40 deg</td><td class="num">+40.0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note why">
+      <span class="t">Testing found a bug that reading the code would not have</span>
+      <p>
+        The first attitude run returned <strong>pitch +15 commanded, -15.0 achieved</strong>,
+        and yaw likewise inverted while roll was correct. Symmetric and exact on both signs, so
+        a convention mismatch rather than drift: AirSim's <code>moveByRollPitchYawZAsync</code>
+        does not use the same handedness for pitch and yaw that its own orientation reporting
+        does. It is corrected at that one call, so everything above it &mdash; PX4 messages,
+        the ROS graph, this page &mdash; speaks one consistent NED/FRD convention.
+      </p>
+    </div>
+    <div class="prose">
+      <p style="font-size:.87rem;color:var(--ink-soft)">
+        A complete working client is in <code>examples/ros2_full_control.py</code>. It imports
+        nothing from this project &mdash; only <code>rclpy</code>, <code>px4_msgs</code> and
+        <code>sensor_msgs</code> &mdash; which is the test that the ROS surface is genuinely
+        self-sufficient.
+      </p>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-theme-set]'));
+  var KEY = 'carla-air-theme';
+  function apply(choice) {
+    if (choice === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', choice);
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === choice));
+    });
+  }
+  var stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) {}
+  if (stored === 'light' || stored === 'dark' || stored === 'auto') apply(stored);
+  else if (root.getAttribute('data-theme')) {
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed',
+        String(b.dataset.themeSet === root.getAttribute('data-theme')));
+    });
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      apply(b.dataset.themeSet);
+      try { localStorage.setItem(KEY, b.dataset.themeSet); } catch (e) {}
+    });
+  });
+})();
+</script>

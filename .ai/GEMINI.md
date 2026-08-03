@@ -17,7 +17,7 @@ Key rules:
 Any run that puts the aircraft in motion — `scripts/run_episode.py`,
 `scripts/run_conformance.sh`, `scripts/record_flight.py`, or a manual `bringup.sh` — ends
 with `./scripts/stop.sh --all`, then `./scripts/status.sh` to verify every count is 0 and
-GPU 0 is back to ~113 MiB. Not at the end of the session — at the end of *that test*.
+GPU 1 (where the simulator renders) is back to ~33 MiB. Not at the end of the session — at the end of *that test*.
 
 The simulator holds ~3.3 GB of VRAM while idle on a machine the operator uses for other
 work, and a leftover graph **stacks** on the next bringup: two controllers then publish
@@ -94,4 +94,4 @@ unverified rather than guessing. Install into the container, never the host; too
 top-level directory on a drive you don't own. **Ask the operator first — every time —
 before any command that escapes the container** (`distrobox-host-exec`, `flatpak-spawn
 --host`, `chroot`/`nsenter` into `/run/host`, host-side `podman`/`distrobox`); approval is
-per command and never carries over. GPU 0 renders; GPU 1 stays free for VLM inference.
+per command and never carries over. GPU 1 renders the simulator (TESTBED_GPU=1); GPU 0 is the operator's.

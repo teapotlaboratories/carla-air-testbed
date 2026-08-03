@@ -8,9 +8,252 @@ Status: **open** · **next** (agreed, not started) · **blocked** · **done**
 
 ---
 
+## Repositioning — a drone simulator first, a VLM testbed second
+
+Agreed 2026-08-03. The project's product is **a ROS 2-driven drone simulator**; VLM navigation
+becomes the flagship *example* of what you can build on it, not the thing it is. Everything in
+this section serves that, and the recommended order is at the end.
+
+The line that decides every question here: **the only interface to the aircraft and the world
+is ROS 2.** If something needs the sidecar socket, it is not finished.
+
+### R-01 · Put world control on ROS 2 — **half done** *(2026-08-03)*
+
+The keystone, and the item that is not obvious from the outside. [S-04](#sensors) closed
+*aircraft* commanding — takeoff, land, position, velocity, attitude all have `/fmu/in/*`
+topics. **World** control has no ROS surface at all. `sim_bridge/server.py` exposes ~30 RPC
+methods; these are the ones a scenario needs and ROS cannot reach:
+
+| method | what it does | why it must be on ROS |
+|---|---|---|
+| `reset` | teleport and hold at an NED pose | every example starts with one |
+| `spawn_traffic` | vehicles + walkers | scenario setup |
+| `set_weather` | CARLA weather preset | scenario setup |
+| `destroy_actors` | clear traffic between runs | scenario teardown |
+| `chase_view` / `chase_jpeg` | the exterior follow camera | the web console's second video pane |
+
+> **Corrected before starting:** `collision` was in this table and should not have been.
+> `/sim/collision` (`Bool`) and `/sim/traffic_stats` (`String`) are already published at 1 Hz
+> from `_tick_world` (`bridge_node.py:503`). I listed them from reading the RPC surface
+> instead of the publisher list. Read state is therefore already on ROS; what is missing is
+> the *commands* above and the chase camera.
+
+Consequences, both of which are real work rather than plumbing:
+
+- **The chase camera needs a ROS topic.** It is a sidecar-only concern today; the web console
+  gets JPEGs over the socket (`webui/server.py:286`). It has to become an
+  `image_transport`-shaped publisher like the onboard camera, or R-03 cannot happen.
+- **Services or topics, decided per method.** `reset` and `spawn_traffic` are request/response
+  with a meaningful failure — services. `collision` is state — a topic. Guessing uniformly
+  either way will be wrong for half of them.
+
+`ros2_ws/src/interfaces` already exists for exactly this kind of definition — four messages
+and one service (`SetEpisode.srv`) today, all of them VLM/evaluation-shaped, which is itself a
+hint that the world-control definitions were never written.
+
+- **Verify:** a node importing only `rclpy` and the interface package resets the aircraft,
+  spawns traffic, sets weather, subscribes to the chase camera and reads collisions. Then
+  **`scripts/run_episode.py` is rewritten to use it** — that script is the honest test,
+  because it is the heaviest current user of the socket (`scripts/run_episode.py:95-118`).
+
+**Landed 2026-08-03 — the four services.** `ros2_ws/src/interfaces/srv/` gains
+`ResetVehicle`, `SpawnTraffic`, `SetWeather` and `DestroyActors`, served by the bridge on
+`/sim/*`. Services as agreed, and **not** PX4 messages: nothing on a real Pixhawk teleports an
+airframe or spawns pedestrians, so borrowing `VehicleCommand` would imply a portability these
+calls do not have. `/fmu/*` is what survives the move to hardware, `/sim/*` is what does not.
+
+`examples/ros2_world_control.py` is the proof — imports `rclpy`, `interfaces` and `std_msgs`,
+nothing else. Against a live simulator, **8/8 checks passed**:
+
+| check | result |
+|---|---|
+| `destroy_actors` | destroyed 0, then 26 on teardown |
+| `set_weather ClearNoon` | applied |
+| `set_weather NoSuchWeather` | **rejected**, valid list returned — not a silent fallback |
+| `reset_vehicle` | settled `[66.4, -106.0, -60.9]`, 8.8 m from commanded |
+| `spawn_traffic` | 12 vehicles, 7 of 8 walkers |
+| `/sim/collision` | `has_collided=False` |
+| `/sim/traffic_stats` | `spawned=12 moving=12 walkers=7` |
+
+**Two things only the run could tell me:**
+
+- **`reset` blocks for 16.2 s**, not the ~5 s I wrote in the comments — 3 s of AirSim reset,
+  the flight itself, then a 2 s settle. A client on rclpy's default 5 s timeout would report a
+  failure that did not happen. Every comment now carries the measurement.
+- **The blocking call does not stall telemetry**, which was the design risk. Measured
+  *during* that 16.2 s reset: `/fmu/out/vehicle_odometry` held **19.9 Hz** against a 20 Hz
+  target. That is what the fourth `SimBridgeClient` connection and the fifth executor thread
+  bought; on `self.sim` it would have stalled odometry and the world tick for the whole call.
+
+Also fixed on the way: `client.spawn_traffic` silently dropped `near_ned` and `radius_m`, so
+every ROS-side spawn would have been map-wide — a scenario asking for busy streets getting an
+empty city, with nothing to indicate it.
+
+**Still open, and R-03 is blocked on it:** the **chase camera has no ROS topic**. It remains
+sidecar-only (`chase_jpeg` over the socket), so the web console cannot yet drop its second
+video pane onto ROS. And `scripts/run_episode.py` still opens the socket directly — rewriting
+it onto these services is the honest end of this item.
+
+### R-02 · Decouple the VLM from the core — **next**
+
+Today `vlm_client` and `grounding` are launched unconditionally
+(`ros2_ws/src/bringup/launch/testbed.launch.py:50-58`) and their settings are core config —
+`graph.vlm_client` and `graph.grounding` in `configs/testbed.yaml`, including six
+`claude_*` keys. Someone who wants a drone simulator is reading an Anthropic model name in
+the config file of the thing they installed.
+
+**The move:**
+
+- `graph.vlm_client` and `graph.grounding` leave `configs/testbed.yaml` entirely. The example
+  carries its own config.
+- The default launch starts the bridge and the controller. Nothing else.
+- `vlm_client` + `grounding` become `examples/vlm_navigation/`, run **after** the simulator is
+  up, against the ROS 2 interface only — the same rule `examples/ros2_full_control.py` already
+  follows.
+
+**Two decisions this forces, and neither is cosmetic:**
+
+- **Where does `evaluation` go?** `episode_runner` and the scenario scoring exist to score
+  *VLM* episodes. But `recorder` (flight video) is generally useful, and a
+  non-VLM user still wants "fly this and tell me if it worked". My reading: `recorder`
+  stays core, `episode_runner` + `scenarios/` go with the example. Worth disagreeing with.
+- **`grounding` is not VLM-specific.** It turns a pixel and a depth frame into an NED
+  waypoint — useful to anyone doing vision. It may deserve to stay core as a *library* while
+  only its node moves.
+
+**This is the item most likely to break something quietly**, because the launch file, the
+config, the params renderer, `run_sweep.sh`, `run_conformance.sh` and the E-01 baselines all
+assume the current layout. The 40-episode results must reproduce afterwards.
+
+- **Verify:** `./scripts/bringup.sh` with no arguments brings up a simulator with **no VLM
+  node running** and `ros2 node list` proves it; then the example is started separately and
+  `cross_the_plaza` scores what it scored before. Re-run the E-01 sweep, not one seed.
+
+### R-03 · The web console talks ROS 2 only — **open**, needs R-01
+
+`webui/server.py` currently dispatches *arbitrary* sidecar RPC methods over the Unix socket
+(`webui/server.py:316-319`) and imports no ROS at all. Every button — velocity, yaw, hold,
+land, takeoff — bypasses the interface this project claims is the interface.
+
+Once R-01 lands, the console has no reason to be on the 3.10 side: nothing it does needs
+`libcarla`. It moves to 3.12 and becomes an `rclpy` node serving HTTP.
+
+**One honest carve-out.** *Start the simulator* and *stop everything* cannot be ROS calls —
+there is no graph to call into before the simulator exists, and the stop button's whole job is
+to destroy the graph. Those stay process management, and keep shelling out to `run_sim.sh` /
+`stop.sh` so the Vulkan ICD repair, the GPU pin and the path-scoped process matching are not
+reimplemented. Flying the aircraft is the part that must be ROS.
+
+- **Verify:** `grep -c 'socket' webui/server.py` reaches zero for the control and video paths,
+  and every control still works over NetBird. Both video panes come from ROS topics.
+
+### R-04 · One command to install — **done** *(2026-08-03)*
+
+`./scripts/install.sh` runs all four steps with a step counter, per-step timing, and one
+failure path that names the step and says re-running resumes. `--skip-release` omits the
+6.85 GB download; a positional argument puts the release somewhere with room.
+
+**The export was the real problem, and it is gone rather than automated.** Four scripts each
+inlined the same `${CARLAAIR_RELEASE:-${CARLAAIR_HOME:-<default>}}` expression — they agreed
+by luck, not by construction, and `run_sweep.sh` hard-failed without the variable set.
+`scripts/release_path.sh` is now the single resolver, with an explicit precedence:
+
+    1. $CARLAAIR_RELEASE   an override for one command
+    2. .release-path       written by install.sh, git-ignored
+    3. $CARLAAIR_HOME
+    4. next to the repo
+
+So a non-default install location survives with **no shell-profile edit at all**, and
+`fetch_release.sh` no longer prints an export line for the user to copy.
+
+**Verified**, not assumed:
+
+- `install.sh --skip-release` on this tree: 3/3 steps green in 8 s (everything already
+  satisfied), then 117 tests pass. Run twice — idempotent.
+- The failure path exercised directly with a failing step: prints
+  `INSTALL FAILED at step 1`, names the command, exits 1, does not continue.
+- The resolver at all four precedence levels, each returning the expected path.
+- `bash -n` on all five touched scripts.
+
+**Found while doing it, and worth recording:** `CARLAAIR_RELEASE` was **unset** in a fresh
+shell on this machine, and the built-in default points at a directory that does not exist —
+the real release is on the external drive. Every script that needed it was one un-exported
+variable away from failing, and `.release-path` is what fixes that here.
+
+- **Still unverified:** the clean-clone path, including the actual 6.85 GB download. Only a
+  fresh machine proves that, and this one already has everything.
+
+### R-05 · Headless or windowed, from the config — **open**
+
+`scripts/run_sim.sh:194` hardcodes `-RenderOffScreen`. A `simulator.display:` key selects
+`headless` (current behaviour, video via the web console) or `windowed` (an actual Unreal
+window on the operator's screen).
+
+Small change, but with a **verification risk worth stating up front**: this development
+container has no display, and `run_sim.sh:6` records that `-windowed` needs one. So the
+windowed path may only be testable from the host, and that is an "ask the operator first"
+action under the environment rule rather than something to just try.
+
+Note the interaction with the GPU pin — a window has to open on a display that GPU 1 can
+actually drive, and GPU 0 is the operator's card.
+
+- **Verify:** both values start a working simulator; headless is unchanged and windowed
+  produces a visible window without breaking the VRAM check.
+
+### R-06 · Camera resolution, configurable — **mostly already true, needs a decision**
+
+`simulator.cameras` in `configs/testbed.yaml` already sets width, height and FOV for all
+three buffers, renders into AirSim's `CaptureSettings`, and the intrinsics are **derived**
+rather than fixed (`sim_bridge/carla_air/frames.py:62-84` computes fx/fy/cx/cy from width and
+HFOV) with `grounding` reading them off `/camera/rgb/camera_info`
+(`ros2_ws/src/grounding/grounding/grounding_node.py:128`). So changing the resolution should
+already work end to end.
+
+What is left is the constraint, and it is a real one: **all three buffers must share an aspect
+ratio**, because `fov` is horizontal, so equal FOV at different aspects covers different
+*vertical* fields and `scale_to()` then maps an RGB pixel onto the wrong depth pixel —
+silently, on every waypoint. A test enforces it today.
+
+Two options, and this is a decision rather than code:
+
+1. **Keep the constraint**, and make the failure loud and early — a clear error at config
+   render time naming the offending buffer, instead of a test failure.
+2. **Lift it**, by computing each buffer's vertical FOV and scaling correctly. More flexible,
+   and it removes a footgun; also touches the one code path where a silent error costs a
+   whole flight.
+
+- **Verify:** run an episode at 1280x960 and confirm the grounding residual is unchanged
+  (~3 m on a 64 m ray) — the number that would move if the depth hop broke.
+
+### Recommended order
+
+1. ~~**R-04**~~ — **done 2026-08-03.**
+2. **R-01** next — the keystone. R-02 and R-03 are both blocked on it in practice, and
+   rewriting `run_episode.py` onto it is what proves the ROS surface is real.
+3. **R-02**, then **R-03** — the repositioning proper, in that order, because decoupling the
+   VLM makes clear which node the console should actually be talking to.
+4. **R-05** and **R-06** any time — small, independent, and neither blocks anything.
+
+Deliberately **not** started until the above lands: the camera-pitch decision, and V-01's
+Claude flights. Both are VLM work, and R-02 moves the code they live in.
+
+---
+
 ## Sensors
 
-### S-01 · Bridge GPS to a ROS 2 topic — **open**
+### S-01 · Bridge GPS to a ROS 2 topic — **done** *(2026-08-02)*
+
+**Decided:** ship AirSim's default origin, and make it settable at simulator start rather than
+baked in. `scripts/run_sim.sh` already copies `configs/sim/settings.json` into place, so that
+copy is the hook — `TESTBED_ORIGIN_LAT/LON/ALT` patch an `OriginGeopoint` into it at launch.
+With nothing set, AirSim uses its own default and behaviour is unchanged.
+
+Probed live rather than assumed: GPS answers today with `47.639686, -122.138289`, fix 3,
+eph/epv 0.10 — Redmond, Washington, exactly as this entry predicted.
+
+_Original entry follows._
+
+
 
 `Vehicle.state()` returns position, velocity, angular velocity, orientation, yaw, landed and
 armed, and stops there. A grep for `gps|geo_point|latitude|longitude` across `sim_bridge/`,
@@ -36,20 +279,113 @@ consistent, and is the same hook the reference plan wants for Cesium real-world 
 - **Verify:** round-trip a known NED point through the geodetic conversion and back to
   <1 m; confirm the topic tracks the aircraft during a flight rather than sitting static.
 
-### S-02 · Bridge IMU, and decide about LiDAR — **open**
+### S-02 · Bridge IMU, barometer, magnetometer — **done** *(2026-08-02)*
 
-Same shape as S-01: AirSim exposes IMU, barometer and magnetometer, and CARLA has its own
-sensor suite. None is bridged because nothing in the loop needed it. IMU is the cheap and
-obviously useful one (it is a real sensor stream at high rate); LiDAR is a much larger
-payload on a transport that is already the bottleneck for depth, so it needs a throughput
-measurement before it is promised.
+Probed on the running simulator: `settings.json` declares **no sensors at all**, so AirSim
+created its multirotor defaults, and IMU, barometer, magnetometer and GPS have been answering
+all along while publishing nowhere.
 
-- **Verify:** publish rate holds under a flight, and the image path does not regress —
-  re-measure RGB+depth after adding it.
+They are real instruments, not ground truth — two IMU reads 0.4 s apart differ by 1.0e-1, so
+the noise model is active. That makes them usable for exercising estimator behaviour rather
+than merely reporting state.
+
+`px4_msgs` already builds every message needed, so nothing new is generated:
+
+| source | topic | message |
+|---|---|---|
+| IMU | `/fmu/out/sensor_combined` | `SensorCombined` |
+| barometer + environment | `/fmu/out/vehicle_air_data` | `VehicleAirData` |
+| magnetometer | `/fmu/out/vehicle_magnetometer` | `VehicleMagnetometer` |
+| GPS | `/fmu/out/sensor_gps` | `SensorGps` |
+
+One RPC call returns all four — four separate calls would quadruple the round trips for data
+that is read from the same client in the same millisecond.
+
+- **Verify:** publish rates hold under a flight, and the image path does not regress —
+  re-measure RGB+depth afterwards.
+
+### S-02b · LiDAR via CARLA, and a config-driven sensor list — **done** *(2026-08-02)*
+
+**Chosen:** `sensor.lidar.ray_cast_semantic` — a point cloud where every point carries the
+object id and semantic tag of what it hit. Strictly more than depth for obstacle work, and
+the natural instrument for the E-02 avoidance scenario.
+
+**The sensor list becomes configuration, not code.** A YAML list declares which CARLA sensors
+to spawn, their attributes, and their offset from the aircraft; the sidecar reads it at startup
+and spawns what is enabled. Adding a radar or an event camera later is then a config edit, not
+a patch.
+
+> **Superseded — see C-01.** This shipped as its own file, `configs/sim/carla_sensors.yaml`,
+> on the argument that AirSim's `settings.json` is read by the simulator at launch while these
+> are CARLA actors spawned afterwards, so one file would imply one reader. That argument was
+> about *rendering*, and it confused rendering with *authoring*: a reader can still get its own
+> generated file. The sensor list now lives in the `sensors:` section of `configs/testbed.yaml`
+> alongside the AirSim ones, with a `source:` field carrying the distinction that used to be
+> carried by which file you were in.
+
+Following reuses what the chase camera proved: a free-floating actor whose transform is
+rewritten each tick from the aircraft's NED pose. One follow thread drives the chase camera
+and every configured sensor from a single pose read, rather than one thread each.
+
+**Verified.** PointCloud2 on `/sensors/lidar/points` at 10.6 Hz with semantic tags intact
+(Building 34.9%, Vegetation 2.2%, Static 0.8% over the plaza) and object ids preserved. Cost to
+the image path: **none measurable** — 6.494 Hz with lidar on against 6.324 off, run-to-run
+variance larger than the effect, versus 28% for the AirSim sensors at 20 Hz. The CARLA route
+was the right call.
+
+**`points_per_second` is rays CAST, not points returned**, and the binding constraint is
+`range` combined with `lower_fov`. Measured:
+
+| position | AGL | points/msg |
+|---|---|---|
+| plaza | 107 m | 390 |
+| plaza | 67 m | 735 |
+| plaza | 47 m | **1584** |
+| offshore, no buildings | 67 m | 443 |
+
+The geometry explains it exactly. With `lower_fov: -50` and a level sensor, the steepest
+available ray is 50 degrees below horizontal, so the slant range to the ground is
+`AGL / sin(50)`. Against `range: 80`:
+
+    107 m AGL -> 140 m slant   ground unreachable
+     67 m AGL ->  87 m slant   ground unreachable
+     47 m AGL ->  61 m slant   ground in range
+
+**The ground is only visible below about 61 m AGL.** Above that the lidar sees buildings and
+nothing else — which is fine for obstacle avoidance and useless for terrain. Worth knowing
+before trusting it in a scenario: `avoid_the_block` flies at **120 m AGL**, where this sensor
+sees the tower and no ground at all.
+
+**Two robustness fixes came out of this.** At 120000 points/second CARLA's own RPC began
+timing out at 30 s and `carla::client::TimeoutException` escaped as an uncaught C++ exception
+that terminated the sidecar mid-flight; the config is now 16 channels at 30000 points/second,
+and `CarlaSensorRig.follow` catches broadly rather than `RuntimeError` — which would never
+have caught it.
+
+**Known limitation:** `drain()` is destructive, so the lidar supports exactly ONE consumer. A
+second reader steals arcs from the first rather than seeing the same data.
+
+- **Still open:** whether a wider `lower_fov` (or pitching the sensor down) is a better answer
+  than a longer `range` for terrain work. Both cost rays.
+
+`getLidarData` throws an RPC error today, and the reason is configuration rather than absence:
+AirSim auto-creates only IMU, barometer, magnetometer and GPS for a multirotor. LiDAR and the
+distance sensor exist only if declared in a `Sensors` block in `settings.json`, which is read
+**at startup** — so enabling it costs a simulator restart, and the point cloud then travels the
+AirSim RPC path that is already this project's bottleneck for depth.
+
+**CARLA offers a way around that.** This build exposes 25 sensors including
+`sensor.lidar.ray_cast` and `sensor.lidar.ray_cast_semantic`. The chase camera already proved
+the pattern — a free-floating CARLA sensor that follows the aircraft by writing a transform
+each tick — and CARLA sensors render in-process and push asynchronously, so they never queue
+behind a `simGetImages` call.
+
+- **Verify:** points per second delivered, and whether RGB+depth capture regresses. Measure
+  both routes before choosing; the AirSim one may still win on fidelity to a real airframe.
 
 ### S-03 · Segmentation is published but disabled — **open**
 
-`publish_segmentation: false` in `configs/.../testbed.yaml`. It works (15–21 classes measured)
+`graph.carla_air_bridge.publish_segmentation: false` in `configs/testbed.yaml`. It works (15–21 classes measured)
 but costs ~77 ms per capture, so it is off for the flight loop. Either leave it as an
 analysis-only flag and say so in the docs, or find out whether a smaller segmentation buffer
 makes it affordable to leave on.
@@ -68,19 +404,309 @@ noise floor. `scripts/run_sweep.sh` reproduces it; see the 2026-08-01 sweep work
 Also exercised, forty times each, two paths that had previously run once: bearing-only
 grounding and the three-way AirSim client split. Neither stalled.
 
-### E-02 · `avoid_the_block` does not test what its name claims — **open**
+**The `avoid_the_block` row of that sweep no longer stands** — E-02 re-sited that scenario on
+2026-08-02 and the oracle now scores 0/5 on it by design. The other three scenarios are
+unchanged and their numbers still hold.
 
-The oracle solved it in **9 steps on a near-straight line**, so no building was ever in the
-path. It currently measures the same thing as `follow_the_avenue` while advertising obstacle
-avoidance. More broadly, **none of the four scenarios require avoiding anything.**
+### E-02 · `avoid_the_block` does not test what its name claims — **done** *(2026-08-02)*
 
-- Query CARLA for real building footprints and re-site start/goal so the straight line
-  genuinely intersects one.
-- **Verify:** the naive oracle's success rate *drops* on it — that is the signal the
-  obstacle is real. It would also be the first scenario where depth-following could
-  plausibly beat a straight-line policy.
+Re-sited against a real building footprint. **The oracle went 5/5 → 0/5**, which was the
+agreed signal that the obstacle is real.
+
+The cause was not siting but **altitude**: all four scenarios flew at 72–107 m AGL, above
+every rooftop in Town10HD. NED altitude is not AGL — the AirSim origin sits 27.45 m above the
+street, so the old `z = -50` was 77.45 m over the ground. The aircraft was flying over the
+entire city.
+
+Now: NED (210, −230) → (210, −340) at 120 m AGL, blocked by `ProceduralBuilding_94`, a 30 × 30 m
+tower with a 154.3 m roof. Contact 41.8 m in, 33.9 m of solid on the line, ~15 m of lateral
+detour, and **going over needs NED altitude 126.8 — above the controller's own 120 m clamp**,
+so the vertical escape is closed by the envelope rather than by luck.
+
+Tooling: `scripts/survey_buildings.py` — `--check` (does a straight line already solve this
+scenario?), `--route` (A* proof that the goal is reachable, and what the detour costs),
+`--propose` (search for legs a straight line cannot solve), `--top`. 23 offline tests.
+
+Note the rule collision this created, now written into
+[`.ai/AGENTS.md`](../.ai/AGENTS.md#verifying-changes): the oracle is a straight-line policy,
+so it fails an obstacle scenario *by construction* and can no longer serve as that scenario's
+validator. `--route` is the replacement proof.
+
+### V-01b · Local vLLM on GPU 1 — **open, and now the unblocked path**
+
+The other half of the V-01 fork. It needs no API credentials and no per-call cost, which is
+the deciding factor if the operator has a Claude.ai subscription rather than API access —
+those are separately billed products (see V-01).
+
+**GPU 1 (RTX 5060 Ti, 16 GB) is idle by design** — the simulator renders on it only during a
+sweep, and the project rule reserves it for inference. 16 GB fits a quantised 7B-class VLM
+comfortably.
+
+The backend contract is the same narrow one, so this is a sibling of `backends/claude.py`
+rather than a rewrite: image and instruction in, pixel out. Two things carry over directly and
+are worth keeping — a **schema-constrained reply** (vLLM supports guided decoding, so the
+pixel can still arrive as an integer rather than something regexed out of prose), and
+**clamping `u`/`v` on our side**, since a schema cannot express numeric bounds.
+
+- Serving has to be up before anything works — unlike the API backend, that is a second
+  process to supervise and a second thing that can be down mid-sweep.
+- **Verify:** same 5 seeds x 4 scenarios as E-01, plus p50/p95 decision latency. A local model
+  changes the latency budget in both directions — no network round trip, but no server-side
+  batching either — so re-check that a decision still fits the 7.5 s per-step budget before
+  reading anything into the success rate.
+
+### E-02b · The other three scenarios still have nothing in the way — **open**
+
+`--check` reports `cross_the_plaza`, `follow_the_avenue` and `rain_descent` as CLEAR: a
+straight line solves all three, and the 100% oracle rate on them measures the harness, not the
+scenarios. That is honest as a baseline and thin as a benchmark.
+
+Deliberately left alone for now — changing them would invalidate the E-01 numbers that the
+first real VLM backend (V-01) is meant to be compared against. Revisit once there is a model
+in the loop and a reason to want a harder set.
+
+- **Verify:** same as E-02 — the oracle's rate drops, and `--route` shows a detour ratio
+  under ~2x so the scenario still matches its own instruction.
+
+### S-04 · Close the ROS command surface: takeoff, land, attitude, waypoint — **done** *(2026-08-03)*
+
+Auditing what a ROS-only client can actually do today found three gaps. Sensors are fully
+readable, but **commanding is not** — takeoff and land exist only as sidecar RPC methods
+reachable from the 3.10 side, and there is no attitude channel at all. A node written against
+this graph could read everything and could not take off.
+
+| capability | before | after |
+|---|---|---|
+| takeoff / land | sidecar RPC only, invisible to ROS | `/fmu/in/vehicle_command` |
+| roll / pitch / yaw | **absent** | `/fmu/in/vehicle_attitude_setpoint` |
+| waypoint | `/vlm/grounded_waypoint`, the VLM's own channel | `/fmu/in/trajectory_setpoint` with a position |
+| sensors | already complete | unchanged |
+
+**PX4 messages, not invented ones.** `VehicleCommand` with `VEHICLE_CMD_NAV_TAKEOFF` and
+`NAV_LAND` is exactly how a real Pixhawk is commanded over uXRCE-DDS, and
+`VehicleAttitudeSetpoint` carries a quaternion `q_d` rather than three Euler angles for the
+same reason. Inventing a friendlier `/testbed/takeoff` would break the property this whole
+shim exists for: that a node written here ports to hardware by deleting one node.
+
+- **Verify:** a standalone ROS 2 node — no sidecar import, no carla, no airsim — takes off,
+  flies a waypoint, holds an attitude, lands, and prints every sensor stream. If it needs
+  anything from the 3.10 side, the surface is not closed.
+
+**Done, and the verification is the interesting part.** `examples/ros2_full_control.py`
+imports only `rclpy`, `px4_msgs` and `sensor_msgs`, and does all five. Two things only a real
+run could have found:
+
+- **The autonomy loop fights a manual command.** A takeoff to 35 m settled at 15.6 m, because
+  `offboard_control` is still publishing its own setpoints at 10 Hz and wins. The example now
+  disables that node via `SetParameters` on entry and restores it on exit. Nothing about the
+  message surface was wrong; the *graph* was.
+- **Attitude signs were inverted for two of three axes.** Commanded roll +12 deg came back
+  +12.0, pitch +15 came back **-15.0**, yaw +40 came back **-40.0**. Fixed in
+  `Vehicle.attitude()` by negating pitch and yaw, with the measurement in the comment.
+
+I had claimed this working off a log tail before either was found. It was not; the operator
+asking "is that working?" is what produced the re-test. **Read the numbers, not the fact that
+output appeared.**
+
+The tested surface is written up in [`docs/ros2-api.html`](ros2-api.html) — every command and
+sensor with its message type, generated only after the calls above were run.
+
+### C-01 · One config file instead of three — **done** *(2026-08-03)*
+
+"Where do I set X" currently needs a read of three scripts. Settings live in
+`configs/sim/settings.json` (AirSim's own schema), `configs/sim/carla_sensors.yaml` (ours) and
+`ros2_ws/src/bringup/config/testbed.yaml` (ROS's schema) — and **two of those formats are not
+ours to change**: the first is read by the CarlaUE4 binary, the second by rclpy's parameter
+system.
+
+So: one **source**, `configs/testbed.yaml`, rendered into the formats each reader demands by
+`scripts/apply_config.py`. The machinery is half there already — `run_sim.sh` copies
+`settings.json` into place and patches it, and the launch file already accepts `params:=`.
+
+**Sensors are the sharpest case.** They are split across two files today purely by which
+simulator provides them, which is an implementation detail leaking into the user's head. In
+the unified file they are one `sensors:` list with a `source:` field, and the generator routes
+each entry.
+
+**Sections are named for WHEN a setting takes effect**, not for which file it lands in:
+
+| section | changing it costs |
+|---|---|
+| `simulator:` | a simulator restart, ~60 s |
+| `sidecar:` | a sidecar restart, ~5 s |
+| `graph:` | nothing — live via `ros2 param set` |
+
+That distinction is load-bearing and a flat file would hide it. This project has been bitten
+repeatedly by exactly that shape of flattening: `min_altitude_m: 15` reads as 15 m AGL and is
+42.45; `points_per_second` reads as points and is rays.
+
+**Done.** `configs/testbed.yaml` is the source; `scripts/apply_config.py` renders
+`configs/sim/settings.json` and `ros2_ws/src/bringup/config/testbed.yaml`, both with a DO-NOT-EDIT
+header. `run_sim.sh` and `bringup.sh` render before every start, so editing the source is
+enough and nobody has to remember a build step. Argument and environment overrides still win,
+so a one-off run needs no edit.
+
+Verified with a full bringup and `TESTBED_GPU` deliberately unset: GPU 1 selected from the
+config, hardware rendering confirmed, lidar spawned from the unified `sensors:` list
+(5022 measurements), all five sensor topics live, ROS parameters matching the source.
+
+`configs/sim/carla_sensors.yaml` is gone — its contents are the `source: carla` entries.
+
+> **Corrected 2026-08-03 — this entry overclaimed, and the flaw survived it.** C-01 said three
+> config files became one. It actually left **four**: the renderer wrote to a
+> `configs/generated/params.yaml` of its own invention, while
+> `ros2_ws/src/bringup/config/testbed.yaml` — the old ROS parameter file — stayed in the repo,
+> stayed git-tracked, stayed installed into the package share, and remained the **default value
+> of the launch file's `params` argument** (`testbed.launch.py:23`). `bringup.sh` passed
+> `params:=` explicitly so the normal path was correct and nothing ever looked wrong; a bare
+> `ros2 launch bringup testbed.launch.py` silently read the stale copy. They had already
+> diverged — the stale one was missing `recorder.crf: 26`.
+>
+> Fixed by rendering into the path the launch file already defaults to and deleting
+> `configs/generated/` entirely, so there is exactly one parameter file and the bare launch
+> command is correct. **Found by verifying the doc, not the code** — the check "does every path
+> this document names still exist" is what turned it up, three days after the entry claimed
+> done.
+
+13 offline tests, including one that regenerates into memory and diffs, so a stale generated
+file fails a test rather than a flight. The rest encode constraints the format cannot: all
+camera buffers share one aspect ratio, ClockSpeed is 1.0, the altitude clamp sits above the
+NED ground, an unset GPS origin is omitted rather than written as {0,0} (which AirSim would
+treat as the Atlantic), and `ros_domain_id` never leaks into the ROS parameter file.
+
+## Tooling
+
+### T-02 · H.264 recording, and cheaper live streams — **in progress** *(2026-08-02)*
+
+**Why there was no H.264.** Not a missing feature — a licensing boundary. `opencv-python`
+bundles its *own* FFmpeg (avcodec 59.37.100) built without `libx264`, because x264 is GPL and
+the wheel ships under Apache/MIT. The system has `libx264.so.164` and avcodec 60 installed;
+OpenCV simply does not link them. **PyAV** bundles an FFmpeg that does — `libx264`, `libx265`,
+`libvpx-vp9` and `h264_nvenc`. Installed into `.venv` and `vendor/py312`, no system change and
+no permission needed.
+
+**Measured three times, because the first two benchmarks lied.** The number depends almost
+entirely on how much the scene moves, and both of my first attempts measured an easier
+workload than the real one:
+
+| benchmark | mp4v | h264 crf26 | gain | why it was wrong |
+|---|---|---|---|---|
+| frames decoded from an existing mp4v file | 57.9 KB/f | 27.5 | 2.1x | mp4v had already discarded the detail x264 would have had to encode |
+| raw frames, **static** camera | 53.7 KB/f | 12.2 | 4.4x | a fixed camera lets inter-frame prediction do nearly all the work |
+| **raw frames, camera moving** | **81.9 KB/f** | **36.4** | **2.25x** | this is the chase camera's actual workload |
+
+On the real workload, per 1102-frame episode at 1920x1080:
+
+| encoder | KB/frame | per episode |
+|---|---|---|
+| cv2 `mp4v` (was) | 81.9 | 88 MB |
+| h264 crf23 | 53.4 | 57 MB |
+| **h264 crf26 (chosen)** | **36.4** | **39 MB** |
+| h264 crf28 | 28.4 | 31 MB |
+| h264 crf30 | 22.4 | 24 MB |
+
+CRF is the only lever worth touching — `preset slow` beat `medium` by 2% for 40% of the encode
+speed. `h264_nvenc` was no smaller than x264 and would load the GPU rendering the simulator,
+so **CPU x264**: ~140 fps encode against a 10 fps capture is ample headroom.
+
+**Size is the lesser win. `mp4v` (MPEG-4 Part 2) does not play in browsers** — H.264 does,
+which is what makes a recording viewable in the console instead of only after a download.
+
+- **Verify:** an episode produces playable H.264 for both views; `ffprobe`-equivalent confirms
+  the codec; file sizes drop as measured; the recorder still drops frames rather than
+  buffering under backlog, and still closes cleanly on a killed sweep.
+
+### T-01 · A web console: start the sim, watch both cameras, fly it by hand — **done** *(2026-08-02)*
+
+Everything here is currently driven by a scripted episode. There is no way to just *look* at
+the simulator, or to fly somewhere and see what the camera sees — which is exactly what
+scenario design needs, and what turned three flight-test failures into log archaeology.
+
+A single page at `http://localhost:8080`:
+
+- **start / stop** the simulator and the 3.10 sidecar, with live status
+- **two live views** — the drone's own camera (what a model would be scored on) and the HD
+  chase camera following it
+- **manual control** — translate, climb/descend, yaw, hold, reset to a point, land
+- **world controls** — spawn clustered traffic, set weather
+
+**Design constraints, each with a reason:**
+
+- **Stdlib `ThreadingHTTPServer`, no new dependency.** `tornado` is importable but only as a
+  transitive dependency of `msgpackrpc`, which runs its own IOLoop for the AirSim
+  connection. Building the web server on the same library invites the class of bug that cost
+  a flight test this morning.
+- **MJPEG (`multipart/x-mixed-replace`), not WebRTC or websockets.** It renders in a plain
+  `<img>`, needs no client-side decoding, and both sources are ~10 Hz — the frame rate a
+  video codec would be buying back does not exist here.
+- **Its own UDS connections to the sidecar, one per concern** — streaming and control must
+  not share a socket. Same lesson as the chase follower.
+- **It captures directly from AirSim, so it contends with the ROS graph.** The image path is
+  this project's bottleneck; a web client capturing at 10 Hz while an episode runs would
+  halve the rate the model sees. The console is for manual flying and inspection with the
+  graph **down**, and must say so rather than silently degrading a scored run.
+
+**Built.** `webui/server.py` + `webui/index.html`. Measured: onboard stream 6.0 Hz, chase
+stream 10.0 Hz, both over NetBird; simulator starts and stops from the page; `reset` flies the
+aircraft and telemetry follows.
+
+**Remote access** — `--bind netbird` resolves the `wt0` address from `ip` and binds *only*
+that interface, so the console is not also exposed on `docker0` or `tap0`. Off loopback a
+token is generated automatically and required on every `/api` and `/stream` request; the URL
+carrying it is printed and written to `out/webui-url.txt` (mode 0600). Verified: 401 without a
+token, 401 with a wrong one, 200 with the right one, including on the streams. `--no-token`
+exists for the deliberate case and says what it costs.
+
+The token travels as `?k=` rather than a header because MJPEG is rendered by an `<img>`, and
+an `<img>` cannot send an Authorization header.
+
+**Controls** are both in the sidebar and as a touch-friendly pad overlaid on the chase view
+(toggleable), so the page is usable from a tablet or phone over the mesh. Velocity commands
+carry their own duration — a press is a nudge and the aircraft stops itself. A page that
+*must* deliver a "stop" is one dropped request away from an aircraft that never gets one.
+
+Two stops: **Stop simulator** (`run_sim.sh --kill`, matches the process name) and **Stop
+everything** (`stop.sh --all`).
+
+### E-05 · Record every flight test, from both views — **done** *(2026-08-02)*
+
+> **Filed after the fact, which is the wrong order.** The "plan first" rule at the top of this
+> file exists so a reader can see what was intended before it was built; writing the entry
+> afterwards turns it into a changelog. Recorded here rather than quietly backdated.
+
+An episode used to leave a JSON and nothing to look at. `141.9 m from goal` says nothing about
+*why*, and the first real VLM flight made that expensive: diagnosing a 40 m descent meant
+reading the offboard node's target log and reconstructing the geometry by hand. Two recorders
+now run, and the failure was obvious on video within seconds.
+
+| | resolution | shows |
+|---|---|---|
+| `out/videos/<episode_id>.mp4` | camera-native (640x480) | what the model was shown, with its annotation crosshair, confidence, latency and its own rationale |
+| `out/chase/<episode_id>.mp4` | **1920x1080** | the aircraft in the world, from an exterior camera that follows it |
+
+Both are on by default — `record:=false` for the onboard one, `--no-chase` for the exterior.
+
+**Neither may cost a flight, and neither may perturb the measurement.** The onboard recorder
+*subscribes* to `/camera/rgb/image_raw` rather than capturing its own frames, so it adds no
+simulator load and records exactly the pixels that were scored. The chase camera is a **CARLA
+sensor**, not an AirSim capture — AirSim's image path is the project's bottleneck and a 1080p
+grab there would contend with the frames the model needs; a CARLA `sensor.camera.rgb` renders
+in the same UE4 process and pushes frames asynchronously. Measured: 1102 frames at 1920x1080,
+**0 dropped**, with the model flying normally.
+
+- **Verify:** an episode produces both files; they play; the chase file's `dropped` count is 0;
+  a killed sweep still leaves the final episode playable. All confirmed.
+- **Known limit:** there is no H.264 encoder on this box (no system ffmpeg, and OpenCV's build
+  has no libx264), so recording falls back to `mp4v` at roughly 3-4x the size. ~80 MB per
+  episode across both views, ~1.6 GB for a 20-episode sweep. Installing ffmpeg in the
+  container would fix it and is a container change, so it has not been done.
 
 ### E-03 · Record an MCAP bag per episode — **open**
+
+*(Partly overtaken by E-05: "a failed episode leaves a JSON and nothing to look at" is no
+longer true. What a bag still adds over video is **replayability** — feeding the recorded
+topics back through `grounding` to check it produces the same waypoints, which no video can
+do.)*
 
 A failed episode currently leaves a JSON and nothing to look at. Recording the annotation,
 grounded-waypoint, odometry and camera topics would make failures diagnosable rather than
@@ -100,23 +726,48 @@ instruction.
 
 ## VLM
 
-### V-01 · First real backend — **blocked on a decision**
+### V-01 · First real backend — **built, awaiting a flight test** *(2026-08-02)*
 
-Four backends exist, none is a model: `mock`, `scripted`, `geometric`, `oracle`. The
-interface is deliberately narrow — image and instruction in, pixel out — so a real backend is
-a single method plus a `BACKENDS` entry.
+Decision made: **Claude API**, not local vLLM. `ros2_ws/src/vlm_client/vlm_client/backends/claude.py`
+implements the same narrow contract as the baselines — one BGR frame and one instruction in,
+one pixel out — so its score is comparable with theirs. Registered as `claude` in `BACKENDS`;
+run it with `./scripts/bringup.sh --backend claude`.
 
-The fork:
+Design decisions worth keeping:
 
-| | |
-|---|---|
-| **Claude API** | no serving setup, no VRAM budgeting; network-dependent, per-call cost across sweeps |
-| **local vLLM** | free to run, and **GPU 1 (RTX 5060 Ti, 16 GB) is completely idle** — the reference plan's worry about UE and a model contending for one card does not apply on this machine; needs a server up before anything works |
+- **Structured outputs**, not prose parsing. `output_config.format` pins the reply to a JSON
+  schema, so the pixel arrives as an integer. The schema cannot express numeric bounds, so
+  `u`/`v` are clamped on our side.
+- **`effort: low` by default.** 40 steps in 300 s is 7.5 s per decision; a higher effort can
+  spend that on one call and turn every episode into a timeout that measures the budget
+  rather than the navigation. Raise `claude_effort` when measuring quality.
+- **Adaptive thinking stays on.** Disabling it is legal at low effort, but on this model a
+  thinking-disabled reply can leak internal tags — with a schema in play that is a parse
+  failure, not a cosmetic one. Buy latency with `effort` instead.
+- **The API key is not a ROS parameter.** It comes from `ANTHROPIC_API_KEY` in the launching
+  shell; parameters are readable from the graph and land in launch logs, which this repo
+  commits.
+- **The SDK is a python 3.12 dependency** and lives in `vendor/py312` (installed by
+  `scripts/fetch_vendor.sh`, put on `PYTHONPATH` by `scripts/bringup.sh`) — *not* in the 3.10
+  `.venv` that owns the carla/airsim clients. Installing it into the wrong interpreter
+  produces a `ModuleNotFoundError` that reads like a missing package.
 
-Do E-01 first so there is a baseline worth comparing against.
+22 offline tests cover the request shape and reply handling against a stubbed SDK — no
+network, no key. See `tests/test_claude_backend.py`.
 
-- **Verify:** success rate over the same seeds as E-01, plus p50/p95 decision latency. The
-  bar to clear is `geometric`, not zero.
+- **Still to do:** the flight test — **blocked on API credentials.** Checked 2026-08-02: this
+  machine has a Claude.ai subscription (Claude Code's `~/.claude/.credentials.json`) and no
+  API credential. Those are different products — the subscription covers claude.ai and Claude
+  Code, the API is billed separately with its own credits, and Claude Code's OAuth token has
+  the wrong audience and scopes for the SDK. The backend accepts `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, or an `ant auth login` profile, and fails at construction naming all
+  three if it finds none.
+- **If paying per call is not wanted**, the other half of this fork is still open and needs no
+  API credentials — see V-01b.
+- **Verify:** success rate over the same 5 seeds x 4 scenarios as E-01, plus p50/p95 decision
+  latency (the backend tallies both, and logs them on shutdown). The bar to clear is
+  `geometric` on the three open scenarios; `avoid_the_block` is the one where it has room to
+  beat the oracle too, since a straight-line policy cannot solve it (see E-02).
 
 ---
 
