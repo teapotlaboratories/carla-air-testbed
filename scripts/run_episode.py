@@ -1,55 +1,69 @@
 #!/usr/bin/env python3
 """Set the world up for an episode, then hand scoring to the ROS 2 episode runner.
 
-Runs on the **Python 3.10** side, because resetting the aircraft, spawning traffic and
-setting weather all go through the sim_bridge socket. The split is deliberate: this script
-owns the world, the ROS 2 graph owns the flight, and `evaluation/episode_runner` owns the
-score. No component does two of those.
+    ./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1 2 3
 
-    ./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1 2 3
+The ROS 2 graph must already be running (`./scripts/bringup.sh`).
 
-The ROS 2 graph must already be running (`./scripts/bringup.sh`). This script drives the
-`/episode/set` service through `ros2 service call`, which is the one place the two Python
-versions have to talk without the socket — a subprocess, not an import.
+**This is now a plain ROS 2 client, and that is the point of it.** It used to run on the
+Python 3.10 side and open the sim_bridge socket directly, because resetting the aircraft,
+spawning traffic and setting weather had no ROS surface — and it shelled out through
+`bash -lc` to `ros2 service call` and `ros2 param set` for the parts that did. All of that is
+gone: every interaction here is a service call, a parameter set or a subscription, so this
+script is now exactly what any user's own harness would look like. If it ever needs the
+socket again, the ROS surface has a hole in it.
+
+Two consequences worth knowing:
+
+* It runs under **ROS 2's python (3.12)**, not `./.venv/bin/python`. Use
+  `scripts/run_episode.sh`, which sources the workspace and picks the interpreter.
+* The division of labour is unchanged: this script owns the world, the ROS 2 graph owns the
+  flight, `evaluation/episode_runner` owns the score. No component does two of those.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
-import re
-import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "sim_bridge"))
+import yaml
 
-import protocol  # noqa: E402
-import socket as _socket  # noqa: E402
+try:
+    import rclpy
+    from rcl_interfaces.srv import SetParameters
+    from rclpy.node import Node
+    from rclpy.parameter import Parameter
+    from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
+                           QoSReliabilityPolicy)
+    from px4_msgs.msg import VehicleOdometry
 
-import yaml  # noqa: E402
+    from interfaces.msg import Collision
+    from interfaces.srv import (ChaseRecording, DestroyActors, ResetVehicle, SetCameraPose,
+                                SetEpisode, SetWeather, SpawnTraffic)
+except ImportError as exc:                                             # pragma: no cover
+    raise SystemExit(
+        f"{exc}\n\n"
+        "This is a ROS 2 client now and needs the workspace sourced:\n"
+        "    source /opt/ros/jazzy/setup.bash\n"
+        "    source ros2_ws/install/setup.bash\n"
+        "    export ROS_DOMAIN_ID=42\n"
+        "Or use the wrapper, which does all three: ./scripts/run_episode.sh") from exc
 
 PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENARIOS = os.path.join(PROJ, "ros2_ws", "src", "evaluation", "scenarios", "default.yaml")
 
+#: `reset` flies the aircraft to the start pose and settles — 16.2 s measured for a ~60 m
+#: move — and traffic spawning is slower still on a busy map. Neither fits a default timeout.
+SLOW_CALL_S = 120.0
 
-class Sim:
-    """Minimal synchronous client — the ROS-side one lives in carla_air_bridge/client.py."""
-
-    def __init__(self, path=protocol.DEFAULT_SOCKET, timeout=120.0):
-        self.s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        self.s.settimeout(timeout)
-        self.s.connect(path)
-        self.n = 0
-
-    def call(self, method, **args):
-        self.n += 1
-        protocol.send(self.s, {"id": self.n, "method": method, "args": args})
-        r = protocol.recv(self.s)
-        if not r.get("ok"):
-            raise RuntimeError(f"{method}: {r.get('error')}\n{r.get('traceback', '')}")
-        return r.get("result")
+#: PX4 publishes BEST_EFFORT + TRANSIENT_LOCAL. A RELIABLE subscriber receives nothing, and
+#: receives it silently: no error, no warning, just a topic that never fires.
+PX4_QOS = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                     history=QoSHistoryPolicy.KEEP_LAST, depth=5)
 
 
 def load_scenario(name):
@@ -62,129 +76,76 @@ def load_scenario(name):
                      f"{[s['name'] for s in doc['scenarios']]}")
 
 
-def ros_param(node, name, value):
-    """Set a ROS parameter from the 3.10 side, via the CLI (the one unavoidable subprocess)."""
-    return subprocess.run(
-        ["bash", "-lc",
-         f"export ROS_DOMAIN_ID=${{TESTBED_ROS_DOMAIN_ID:-42}} && "
-         "source /opt/ros/jazzy/setup.bash && "
-         f"source {PROJ}/ros2_ws/install/setup.bash && "
-         f"ros2 param set {node} {name} {value}"],
-        capture_output=True, text=True, timeout=30)
+class EpisodeDriver(Node):
+    """Everything this script needs from the graph, and nothing else."""
 
+    def __init__(self):
+        super().__init__("run_episode")
+        # NOT `self.clients` — rclpy's Node owns that name as a read-only property.
+        self.srv = {
+            "destroy": self.create_client(DestroyActors, "/sim/destroy_actors"),
+            "weather": self.create_client(SetWeather, "/sim/set_weather"),
+            "traffic": self.create_client(SpawnTraffic, "/sim/spawn_traffic"),
+            "reset": self.create_client(ResetVehicle, "/sim/reset_vehicle"),
+            "camera": self.create_client(SetCameraPose, "/sim/set_camera_pose"),
+            "chase": self.create_client(ChaseRecording, "/sim/chase_recording"),
+            "episode": self.create_client(SetEpisode, "/episode/set"),
+        }
+        self.odom = None
+        self.collision = None
+        self.create_subscription(VehicleOdometry, "/fmu/out/vehicle_odometry",
+                                 self._on_odom, PX4_QOS)
+        self.create_subscription(Collision, "/sim/collision", self._on_collision, 5)
 
-def ros_service_call(scenario, seed, instruction=""):
-    payload = (f"{{scenario: '{scenario}', seed: {seed}, "
-               f"instruction: '{instruction}', start: true}}")
-    return subprocess.run(
-        ["bash", "-lc",
-         # Same DDS domain as scripts/bringup.sh, or the service is simply not found —
-         # and on domain 0 you would reach drone-sim's graph instead. See bringup.sh.
-         f"export ROS_DOMAIN_ID=${{TESTBED_ROS_DOMAIN_ID:-42}} && "
-         "source /opt/ros/jazzy/setup.bash && "
-         f"source {PROJ}/ros2_ws/install/setup.bash && "
-         f"ros2 service call /episode/set interfaces/srv/SetEpisode \"{payload}\""],
-        capture_output=True, text=True, timeout=60)
+    def _on_odom(self, msg):
+        self.odom = msg
 
+    def _on_collision(self, msg):
+        self.collision = msg
 
-def run_one(sim, scen, seed, camera_pitch, chase=True):
-    print(f"\n=== {scen['name']} seed={seed} ===", flush=True)
+    def wait_for_graph(self, timeout_s=60.0):
+        missing = [n for n, c in self.srv.items()
+                   if not c.wait_for_service(timeout_sec=timeout_s)]
+        if missing:
+            raise SystemExit(
+                f"these services never appeared: {', '.join(missing)}\n"
+                "Is the graph up (./scripts/bringup.sh) and ROS_DOMAIN_ID=42?")
 
-    # World first, aircraft second: traffic spawning moves actors around and the reset
-    # must be the last thing that touches the vehicle before the clock starts.
-    sim.call("destroy_actors")
-    sim.call("set_weather", preset=scen.get("weather", "ClearNoon"))
-    # Cluster the traffic around where the aircraft actually starts. Map-wide spawning put
-    # ~4 of 15 cars and ~2 of 10 pedestrians within 60 m of the start; the camera only ever
-    # sees the neighbourhood, so the rest was scenery for nobody.
-    traffic = sim.call("spawn_traffic",
-                       vehicles=int(scen.get("traffic_vehicles", 15)),
-                       walkers=int(scen.get("traffic_walkers", 10)),
-                       near_ned=list(scen["start_ned"][:2]),
-                       radius_m=float(scen.get("traffic_radius_m", 150.0)))
-    print(f"  traffic: {traffic}", flush=True)
+    def call(self, name, request, timeout_s=30.0):
+        future = self.srv[name].call_async(request)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_s)
+        if not future.done():
+            raise RuntimeError(f"{name}: no response after {timeout_s}s")
+        return future.result()
 
-    start = list(scen["start_ned"])
-    # The reset must own the aircraft exclusively. The offboard controller streams setpoints
-    # at 10 Hz and will happily drag the vehicle toward the previous episode's waypoint
-    # while reset() is trying to fly it to the start.
-    ros_param("/offboard_control", "enabled", "false")
-    time.sleep(0.5)
+    def pump(self, seconds):
+        """Spin so the subscriptions actually receive while we wait."""
+        end = time.time() + seconds
+        while time.time() < end:
+            rclpy.spin_once(self, timeout_sec=0.05)
 
-    # reset() leaves the aircraft holding a setpoint — never merely armed. Skipping that is
-    # how a session ends up at -1566 m NED.
-    sim.call("reset", hold_ned=start, speed=10.0)
-    sim.call("set_camera_pose", xyz=[0.5, 0.0, 0.1], pitch=camera_pitch, roll=0.0, yaw=0.0)
-    state = sim.call("state")
-    err = sum((a - b) ** 2 for a, b in zip(state["position"], start)) ** 0.5
-    print(f"  start pose: {[round(c, 1) for c in state['position']]} "
-          f"(commanded {start}, error {err:.1f} m)", flush=True)
-    if err > 15.0:
-        print("  WARNING: reset did not reach the start — episode will not be comparable",
-              flush=True)
-
-    ros_param("/offboard_control", "enabled", "true")
-
-    r = ros_service_call(scen["name"], seed, scen["instruction"])
-    if r.returncode != 0 or "accepted=True" not in r.stdout.replace(" ", ""):
-        print(f"  episode/set failed:\n{r.stdout}\n{r.stderr}", flush=True)
-        return None
-
-    # Wait for THIS episode's file, by id. Matching on a scenario+seed prefix returns the
-    # previous run of the same seed the instant it is checked — a sweep would silently
-    # report stale results and never notice, because they look entirely plausible.
-    m = re.search(r"episode_id\s*=\s*'([^']+)'", r.stdout)
-    if not m:
-        print(f"  could not read episode_id from the service reply:\n{r.stdout}", flush=True)
-        return None
-    episode_id = m.group(1)
-    print(f"  episode running [{episode_id}] — {scen['instruction']!r}", flush=True)
-
-    # Exterior HD view, following the aircraft. A CARLA sensor, so it does not compete with
-    # the AirSim captures the model depends on. Recording must never be able to fail a
-    # flight, so every call here is guarded — worst case you lose the video.
-    chase_path = None
-    if chase:
+    def set_param(self, node_name, name, value, timeout_s=15.0):
+        """Replaces a `bash -lc … ros2 param set` subprocess with the service it wrapped."""
+        cli = self.create_client(SetParameters, f"{node_name}/set_parameters")
         try:
-            os.makedirs(os.path.join(PROJ, "out", "chase"), exist_ok=True)
-            chase_path = os.path.join(PROJ, "out", "chase", f"{episode_id}.mp4")
-            sim.call("chase_start", path=chase_path,
-                     width=int(scen.get("chase_width", 1280)),
-                     height=int(scen.get("chase_height", 720)),
-                     fps=float(scen.get("chase_fps", 30.0)))
-        except Exception as exc:  # noqa: BLE001
-            print(f"  chase camera unavailable ({exc}); flying without it", flush=True)
-            chase_path = None
-
-    try:
-        deadline = time.time() + float(scen.get("timeout_s", 240.0)) + 30.0
-        while time.time() < deadline:
-            time.sleep(5.0)
-            s = sim.call("state")
-            c = sim.call("collision")
-            print(f"    alt {abs(s['position'][2]):5.1f} m  "
-                  f"pos {[round(v, 1) for v in s['position']]}"
-                  f"{'  COLLIDED: ' + c['object_name'] if c['has_collided'] else ''}", flush=True)
-            result = result_for(episode_id)
-            if result:
-                return result
-        print("  runner did not report a result before the deadline", flush=True)
-        return None
-    finally:
-        # In `finally` so a timeout or an exception still closes the file. Without this the
-        # video of the run that went wrong is the one left unplayable.
-        if chase_path:
-            try:
-                info = sim.call("chase_stop")
-                print(f"    chase: {info.get('frames', 0)} frames "
-                      f"({info.get('seconds', 0)}s), {info.get('dropped', 0)} dropped "
-                      f"-> {chase_path}", flush=True)
-            except Exception as exc:  # noqa: BLE001
-                print(f"  chase camera did not stop cleanly: {exc}", flush=True)
+            if not cli.wait_for_service(timeout_sec=timeout_s):
+                return False
+            req = SetParameters.Request()
+            req.parameters = [Parameter(name=name, value=value).to_parameter_msg()]
+            future = cli.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_s)
+            return bool(future.done() and future.result().results[0].successful)
+        finally:
+            self.destroy_client(cli)
 
 
 def result_for(episode_id):
-    """The result file for exactly this episode, or None if it has not landed yet."""
+    """The result file for exactly this episode, or None if it has not landed yet.
+
+    By id, never by a scenario+seed prefix: that would return the PREVIOUS run of the same
+    seed the instant it is checked, and a sweep would report stale results that look
+    entirely plausible.
+    """
     path = os.path.join(PROJ, "out", "episodes", f"{episode_id}.json")
     if not os.path.exists(path):
         return None
@@ -192,12 +153,129 @@ def result_for(episode_id):
         return json.load(f)
 
 
+def run_one(drv: EpisodeDriver, scen, seed, camera_pitch, chase=True):
+    print(f"\n=== {scen['name']} seed={seed} ===", flush=True)
+
+    # World first, aircraft second: traffic spawning moves actors around, and the reset must
+    # be the last thing that touches the vehicle before the clock starts.
+    drv.call("destroy", DestroyActors.Request())
+
+    r = drv.call("weather", SetWeather.Request(preset=scen.get("weather", "ClearNoon")))
+    if not r.success:
+        raise SystemExit(f"weather: {r.message}")
+
+    # Cluster the traffic around where the aircraft actually starts. Map-wide spawning put
+    # ~4 of 15 cars and ~2 of 10 pedestrians within 60 m of the start; the camera only ever
+    # sees the neighbourhood, so the rest was scenery for nobody.
+    treq = SpawnTraffic.Request()
+    treq.vehicles = int(scen.get("traffic_vehicles", 15))
+    treq.walkers = int(scen.get("traffic_walkers", 10))
+    treq.near_ned = [float(v) for v in scen["start_ned"]]
+    treq.radius_m = float(scen.get("traffic_radius_m", 150.0))
+    r = drv.call("traffic", treq, timeout_s=SLOW_CALL_S)
+    print(f"  traffic: {r.spawned} vehicles, {r.walkers_spawned} walkers"
+          f"{'  (' + r.message + ')' if r.message else ''}", flush=True)
+    if not r.success:
+        raise SystemExit(f"traffic: {r.message}")
+
+    start = [float(v) for v in scen["start_ned"]]
+    # The reset must own the aircraft exclusively. The offboard controller streams setpoints
+    # at 10 Hz and will happily drag the vehicle toward the previous episode's waypoint while
+    # reset is trying to fly it to the start.
+    if not drv.set_param("/offboard_control", "enabled", False):
+        print("  WARNING: could not disable offboard_control; the reset may be fought",
+              flush=True)
+    time.sleep(0.5)
+
+    # reset leaves the aircraft HOLDING a setpoint, never merely armed. Skipping that is how
+    # a session ends up at -1566 m NED.
+    rreq = ResetVehicle.Request()
+    rreq.hold_ned = start
+    rreq.speed = 10.0
+    r = drv.call("reset", rreq, timeout_s=SLOW_CALL_S)
+    if not r.success:
+        raise SystemExit(f"reset: {r.message}")
+
+    cam = SetCameraPose.Request()
+    cam.xyz = [0.5, 0.0, 0.1]
+    cam.pitch = float(camera_pitch)
+    got = drv.call("camera", cam)
+    if not got.success:
+        print(f"  WARNING: camera pose not applied ({got.message})", flush=True)
+
+    pos = [float(v) for v in r.position_ned]
+    err = math.dist(pos, start)
+    print(f"  start pose: {[round(v, 1) for v in pos]} "
+          f"(commanded {[round(v, 1) for v in start]}, error {err:.1f} m)", flush=True)
+    if err > 15.0:
+        print("  WARNING: reset did not reach the start — episode will not be comparable",
+              flush=True)
+
+    drv.set_param("/offboard_control", "enabled", True)
+
+    ep = SetEpisode.Request()
+    ep.scenario = scen["name"]
+    ep.seed = int(seed)
+    ep.instruction = scen.get("instruction", "")
+    ep.start = True
+    r = drv.call("episode", ep, timeout_s=60.0)
+    if not r.accepted:
+        print(f"  episode/set refused: {r.message}", flush=True)
+        return None
+    episode_id = r.episode_id
+    print(f"  episode running [{episode_id}] — {ep.instruction!r}", flush=True)
+
+    # Exterior HD view, following the aircraft. A spectator, scored on nothing, so it must
+    # never be able to fail a flight — worst case you lose the video, not the run.
+    chase_path = None
+    if chase:
+        try:
+            os.makedirs(os.path.join(PROJ, "out", "chase"), exist_ok=True)
+            chase_path = os.path.join(PROJ, "out", "chase", f"{episode_id}.mp4")
+            creq = ChaseRecording.Request()
+            creq.start, creq.path = True, chase_path
+            creq.width = int(scen.get("chase_width", 1280))
+            creq.height = int(scen.get("chase_height", 720))
+            creq.fps = float(scen.get("chase_fps", 30.0))
+            got = drv.call("chase", creq, timeout_s=60.0)
+            if not got.success:
+                raise RuntimeError(got.message)
+        except Exception as exc:                                       # noqa: BLE001
+            print(f"  chase camera unavailable ({exc}); flying without it", flush=True)
+            chase_path = None
+
+    try:
+        deadline = time.time() + float(scen.get("timeout_s", 240.0)) + 30.0
+        while time.time() < deadline:
+            drv.pump(5.0)
+            if drv.odom is not None:
+                p = [float(v) for v in drv.odom.position]
+                hit = ""
+                if drv.collision is not None and drv.collision.has_collided:
+                    hit = f"  COLLIDED: {drv.collision.object_name or 'unnamed actor'}"
+                print(f"    alt {abs(p[2]):5.1f} m  pos {[round(v, 1) for v in p]}{hit}",
+                      flush=True)
+            result = result_for(episode_id)
+            if result:
+                return result
+        print("  runner did not report a result before the deadline", flush=True)
+        return None
+    finally:
+        # In `finally` so a timeout or an exception still closes the file. Without this, the
+        # video of the run that went wrong is the one left unplayable.
+        if chase_path:
+            try:
+                got = drv.call("chase", ChaseRecording.Request(start=False), timeout_s=60.0)
+                print(f"    chase: {got.frames} frames ({got.seconds:.0f}s), "
+                      f"{got.dropped} dropped -> {chase_path}", flush=True)
+            except Exception as exc:                                   # noqa: BLE001
+                print(f"    chase stop failed: {exc}", flush=True)
+
+
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--seeds", type=int, nargs="+", default=[1])
-    ap.add_argument("--socket", default=protocol.DEFAULT_SOCKET)
     ap.add_argument("--camera-pitch", type=float, default=-0.5,
                     help="radians; must match grounding's camera_pitch_deg")
     ap.add_argument("--no-chase", action="store_true",
@@ -205,20 +283,25 @@ def main():
     args = ap.parse_args()
 
     scen = load_scenario(args.scenario)
-    sim = Sim(args.socket)
-    print(f"connected to sim_bridge: {sim.call('describe')['map']}")
-
+    rclpy.init()
+    drv = EpisodeDriver()
     results = []
     try:
+        drv.wait_for_graph()
         for seed in args.seeds:
-            r = run_one(sim, scen, seed, args.camera_pitch, chase=not args.no_chase)
+            r = run_one(drv, scen, seed, args.camera_pitch, chase=not args.no_chase)
             if r:
                 results.append(r)
                 print(f"  -> {'SUCCESS' if r['success'] else 'FAILURE (' + r['failure_mode'] + ')'}"
                       f"  {r['final_distance_m']:.1f} m from goal, {r['steps']} steps",
                       flush=True)
     finally:
-        sim.call("destroy_actors")
+        try:
+            drv.call("destroy", DestroyActors.Request(), timeout_s=30.0)
+        except Exception:                                              # noqa: BLE001
+            pass
+        drv.destroy_node()
+        rclpy.try_shutdown()
 
     if results:
         ok = sum(1 for r in results if r["success"])

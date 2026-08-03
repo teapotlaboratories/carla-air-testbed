@@ -6,7 +6,12 @@
 # the cross_the_plaza start.
 int32 vehicles
 int32 walkers
-float64[3] near_ned             # concentrate around here; leave empty for map-wide
+# UNBOUNDED on purpose. `float64[3]` is a FIXED-size array: it is always length 3, so
+# "empty means map-wide" becomes unreachable, an unset request silently means the NED origin
+# (which is offshore on Town10HD), and assigning [] serialises to uninitialised memory rather
+# than erroring. Length 0 has to be expressible, and [0,0,0] is a real coordinate so it
+# cannot double as the sentinel.
+float64[] near_ned              # 3 values to concentrate around; EMPTY for map-wide
 float64 radius_m                # <= 0 uses the sidecar default
 ---
 bool success

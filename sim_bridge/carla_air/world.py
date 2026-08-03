@@ -73,6 +73,7 @@ class World:
 
         cars = [b for b in bp.filter("vehicle.*") if int(b.get_attribute("number_of_wheels")) == 4]
         points = self.spawn_points()
+        clustered, near_candidates = near_ned is None, len(points)
         if near_ned is not None:
             cx, cy = float(near_ned[0]), float(near_ned[1])
             near = [p for p in points
@@ -80,8 +81,13 @@ class World:
                         carla_to_ned(p.location.x, p.location.y, p.location.z)[:2], (cx, cy))))
                     <= radius_m]
             # Fall back rather than spawn nothing: a scenario sited away from roads should
-            # still get traffic, just not clustered.
-            points = near if len(near) >= vehicles else points
+            # still get traffic, just not clustered. REPORTED, not silent — the difference
+            # is 20 cars within 60 m of the aircraft versus 5, and a caller that asked for
+            # a busy neighbourhood and quietly got a sparse city scores a number that does
+            # not mean what it looks like.
+            clustered = len(near) >= vehicles
+            near_candidates = len(near)
+            points = near if clustered else points
         self._rng.shuffle(points)
         batch = []
         for i, sp in enumerate(points[:vehicles]):
@@ -141,7 +147,8 @@ class World:
                         break
             c.go_to_location(target or self._w.get_random_location_from_navigation())
 
-        return {"vehicles": len(self.vehicle_ids), "walkers": len(self.walker_ids)}
+        return {"vehicles": len(self.vehicle_ids), "walkers": len(self.walker_ids),
+                "clustered": bool(clustered), "near_candidates": int(near_candidates)}
 
     def tick_watchdog(self):
         """Re-arm autopilot on stalled vehicles. Call at ~1 Hz for the life of an episode."""
@@ -203,6 +210,15 @@ class World:
                 pass
         ids = self.controller_ids + self.walker_ids + self.vehicle_ids
         if ids:
-            self._c.apply_batch([carla.command.DestroyActor(i) for i in ids])
+            # apply_batch_SYNC, not apply_batch. Fire-and-forget leaves destruction in
+            # flight, and a spawn_traffic immediately afterwards attaches walker
+            # controllers to walkers that are half-reaped. CARLA then throws
+            #     set_actor_simulate_physics: Actor could not be found in the registry
+            # as an uncaught C++ std::runtime_error, which calls terminate() and takes the
+            # whole sidecar down mid-episode. Observed doing exactly that.
+            #
+            # The batch is small (tens of actors) and this runs during scenario setup, so
+            # waiting costs nothing that matters.
+            self._c.apply_batch_sync([carla.command.DestroyActor(i) for i in ids], True)
         self.vehicle_ids, self.walker_ids, self.controller_ids = [], [], []
         return len(ids)

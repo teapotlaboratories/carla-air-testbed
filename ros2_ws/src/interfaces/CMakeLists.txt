@@ -11,6 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroundedWaypoint.msg"
   "msg/EpisodeStatus.msg"
   "msg/EpisodeResult.msg"
+  "msg/Collision.msg"
   "srv/SetEpisode.srv"
   # World control. These are what let a ROS-only client set up a scenario without
   # reaching for the sidecar socket - see todo.md R-01.
@@ -18,6 +19,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SpawnTraffic.srv"
   "srv/SetWeather.srv"
   "srv/DestroyActors.srv"
+  "srv/SetCameraPose.srv"
+  "srv/ChaseRecording.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

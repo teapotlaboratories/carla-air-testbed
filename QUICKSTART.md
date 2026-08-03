@@ -94,7 +94,7 @@ GPU 0 is the workstation's display card. **On a single-GPU machine set `simulato
 
 ```bash
 cd carla-air_testing
-./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1
+./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
 ```
 
 Expected output:
@@ -113,6 +113,12 @@ Expected output:
 ```
 
 The result lands in `out/episodes/<episode_id>.json`.
+
+> **Why a wrapper and not `./.venv/bin/python` here?** `run_episode.py` is a plain ROS 2
+> client — it drives the simulator entirely through services and topics, so it runs under
+> ROS's python 3.12 rather than the 3.10 venv that owns the carla/airsim clients.
+> `run_episode.sh` sources the workspace and sets `ROS_DOMAIN_ID` so neither can be
+> forgotten.
 
 **A ~9 m start-pose error is normal.** The aircraft relaxes about 4 m after reaching a
 setpoint; that is the station-keeping floor, which is why success radii are 20 m.
@@ -214,14 +220,14 @@ Try the baseline and see the contrast:
 ./scripts/stop.sh
 ./scripts/bringup.sh --backend geometric
 # then, in terminal 2:
-./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1
+./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
 ```
 
 Other things to try:
 
 ```bash
 # all four scenarios, three seeds each
-./.venv/bin/python scripts/run_episode.py --scenario follow_the_avenue --seeds 1 2 3
+./scripts/run_episode.sh --scenario follow_the_avenue --seeds 1 2 3
 
 # record a flight video (out/flight.mp4)
 ./.venv/bin/python scripts/record_flight.py 60

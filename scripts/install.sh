@@ -70,6 +70,10 @@ else
     default_parent="$(dirname "$PROJ")/carla-air-release"
     chosen="${DEST:-${CARLAAIR_HOME:-$default_parent}}/$VERSION"
     if [ "$chosen" != "$default_parent/$VERSION" ]; then
+        # ABSOLUTE, always. release_path.sh prints what it is given verbatim and every
+        # caller resolves it against its OWN cwd, so a relative DEST ("./big-disk") would
+        # produce an install that works from the repo root and nowhere else.
+        chosen="$(realpath -m "$chosen")"
         printf '%s\n' "$chosen" > "$PROJ/.release-path"
         echo "    remembered in .release-path (no shell profile edit needed)"
     fi

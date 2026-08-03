@@ -345,7 +345,7 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
 ./scripts/bringup.sh --backend oracle
 
 <span class="c"># terminal 2 — one scored episode</span>
-./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1
+./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
 <span class="c">#   -&gt; </span><span class="g">SUCCESS  18.6 m from goal, 14 steps</span>
 
 <span class="c"># always, when the test is done</span>
@@ -564,7 +564,7 @@ sim_bridge up on /tmp/carla_air_testbed.sock
       <li>
         <h3 id="q-fly">Fly a scored episode</h3>
 <pre>cd carla-air_testing
-./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1</pre>
+./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1</pre>
 <pre>=== cross_the_plaza seed=1 ===
   traffic: {'vehicles': 15, 'walkers': 9}
   start pose: [113.0, -167.1, -55.7] (commanded [107.6, -159.4, -55.0], error 9.4 m)
@@ -913,7 +913,7 @@ ros2 topic echo /fmu/out/sensor_gps --once    <span class="c"># now a London coo
 <span class="c"># then in terminal 2, the same episode command</span>
 
 <span class="c"># other things to try</span>
-./.venv/bin/python scripts/run_episode.py --scenario follow_the_avenue --seeds 1 2 3
+./scripts/run_episode.sh --scenario follow_the_avenue --seeds 1 2 3
 ./.venv/bin/python scripts/record_flight.py 60   <span class="c"># -&gt; out/flight.mp4</span>
 ./scripts/run_conformance.sh                     <span class="c"># ~15 min; p06/p07/p09 </span><span class="y">expected to fail</span></pre>
 

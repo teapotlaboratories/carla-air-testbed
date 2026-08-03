@@ -60,7 +60,7 @@ git clone <this repo> carla-air_testing && cd carla-air_testing
 ./scripts/bringup.sh --backend oracle
 
 # terminal 2 — one scored episode
-./.venv/bin/python scripts/run_episode.py --scenario cross_the_plaza --seeds 1
+./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
 #   -> SUCCESS  18.6 m from goal, 14 steps
 
 # always, when the test is done
