@@ -18,7 +18,7 @@ Most important rules:
 - **Stop every process when a flight test is done.** Any run that puts the aircraft in
   motion — `run_episode.py`, `run_conformance.sh`, `record_flight.py`, a manual
   `bringup.sh` — ends with `./scripts/stop.sh --all`, then `./scripts/status.sh` to confirm
-  every count is 0 and GPU 0 is back to ~113 MiB. The simulator holds ~3.3 GB of VRAM while
+  every count is 0 and GPU 1 (where the simulator renders) is back to ~33 MiB. The simulator holds ~3.3 GB of VRAM while
   idle, and a leftover graph **stacks** on the next bringup so two controllers fight over
   the aircraft while `ros2 node list` still looks correct. Keep it up only if the operator
   asked, or mid-sweep — and say so. See
@@ -80,5 +80,8 @@ Most important rules:
   `<drive-root>/Developments/projects/carla-air_testing/`. **Ask the operator first — every
   time — before any command that escapes the container.** See
   [AGENTS.md → Environment & storage](AGENTS.md#environment--storage).
-- **GPU 1 stays free.** The simulator renders on GPU 0 (RTX 3080); the RTX 5060 Ti is
-  reserved for VLM inference. Keep it uncontended.
+- **Run the simulator on GPU 1** — `TESTBED_GPU=1`. GPU 0 (RTX 3080) is the operator's, and
+  is regularly busy with UnrealEditor; GPU 1 (RTX 5060 Ti, 16 GB) is uncontended. See
+  [AGENTS.md → Environment & storage](AGENTS.md#environment--storage). *(This said the
+  reverse until 2026-08-02 — if a rule here contradicts what the operator asked for, say so
+  instead of quietly picking one.)*

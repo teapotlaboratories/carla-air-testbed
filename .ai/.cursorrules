@@ -77,5 +77,5 @@ packages in .venv/, scratch in /tmp, the 18 GB simulator and datasets on the 7 T
 under <drive-root>/Developments/projects/carla-air_testing/ — never a top-level directory on
 a drive you don't own. Ask the operator first, every time, before any command that escapes
 the container (distrobox-host-exec, flatpak-spawn --host, chroot/nsenter into /run/host,
-host-side podman/distrobox); approval is per command and never carries over. GPU 0 renders;
-GPU 1 stays free for VLM inference.
+host-side podman/distrobox); approval is per command and never carries over. GPU 1 renders
+the simulator (TESTBED_GPU=1); GPU 0 is the operator's and is regularly busy.

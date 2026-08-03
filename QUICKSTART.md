@@ -32,28 +32,35 @@ source /opt/ros/jazzy/setup.bash && ros2 --help >/dev/null && echo "ros2 ok"
 ls /usr/share/vulkan/icd.d/nvidia_icd*.json  # a Vulkan ICD exists
 ```
 
-## 1. Install — four commands
+## 1. Install — one command
 
 ```bash
 git clone <this repo> carla-air_testing && cd carla-air_testing
-
-bash scripts/setup_env.sh          # ~2 min   CPython 3.10 venv (uv, no conda)
-bash scripts/fetch_release.sh      # ~5 min   6.85 GB simulator -> 18 GB unpacked
-bash scripts/fetch_vendor.sh       # ~30 s    px4_msgs pinned to 392e831c
-bash scripts/build_ros.sh          # ~3 min   colcon: px4_msgs + 7 packages
+./scripts/install.sh                       # ~10 min
 ```
 
-`fetch_release.sh` prints an `export CARLAAIR_RELEASE=…` line at the end. **Run it, and put
-it in your shell profile** — every other script reads it.
+Four steps, printed as it goes: the CPython 3.10 venv (~2 min, uv, no conda), the 6.85 GB
+simulator unpacked to 18 GB (~5 min), the pinned upstreams — `px4_msgs` at `392e831c` plus the
+anthropic SDK (~40 s) — and the colcon build of 7 packages (~3 min).
+
+**It is resumable.** Every step is idempotent, so if one fails, fix it and re-run: completed
+steps are skipped and you land back where you stopped.
+
+Put the simulator somewhere with room, and it is remembered — **no `export` to copy into your
+shell profile:**
 
 ```bash
-export CARLAAIR_RELEASE=/path/it/printed/CarlaAir-v0.1.7
+./scripts/install.sh /mnt/big-disk         # needs ~30 GB free
+```
+
+```bash
+./scripts/install.sh --skip-release        # everything but the download
 ```
 
 Verify without touching the simulator:
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q     # expect: 50 passed
+./.venv/bin/python -m pytest tests/ -q     # expect: 117 passed
 ```
 
 Why a separate Python: the CARLA-Air client is an ABI-tagged `cpython-310` extension and
@@ -71,13 +78,17 @@ is deliberately two processes. See [`docs/architecture.md`](docs/architecture.md
 Wait for these three lines (~90 s, mostly Unreal loading the map):
 
 ```
-GPU 0: 3342 MiB in use — hardware rendering confirmed
+GPU 1 (NVIDIA GeForce RTX 5060 Ti): 3342 MiB in use — hardware rendering confirmed
 sim_bridge up on /tmp/carla_air_testbed.sock
 [bridge_node-1] bridged to CARLA-Air — map=Town10HD hfov=89.9deg
 ```
 
 > **`3342 MiB` matters.** If it says a few hundred MiB, you are rendering on the CPU —
 > see [Troubleshooting](#troubleshooting).
+
+The index is whichever card `simulator.gpu` asked for — `1` in the shipped config, because
+GPU 0 is the workstation's display card. **On a single-GPU machine set `simulator.gpu: 0`**
+(or `null` to let the driver choose) before the first run.
 
 **Terminal 2 — fly a scored episode:**
 
@@ -110,7 +121,7 @@ setpoint; that is the station-keeping floor, which is why success radii are 20 m
 
 ```bash
 ./scripts/stop.sh --all
-./scripts/status.sh          # every count 0, GPU back to ~110 MiB
+./scripts/status.sh          # every count 0, the sim's GPU back to idle (tens of MiB)
 ```
 
 **This is a project rule, not tidiness.** The simulator holds 3.3 GB of VRAM while idle, and
@@ -118,13 +129,84 @@ a leftover graph *stacks* on the next bringup — two controllers then fight ove
 while `ros2 node list` still looks correct. See
 [`.ai/AGENTS.md`](.ai/AGENTS.md#1-stop-every-process-when-a-flight-test-is-done).
 
+## 4. Change something
+
+Everything is configured in **one file**: [`configs/testbed.yaml`](configs/testbed.yaml). Its
+three sections are named for **when a change takes effect**, which is the difference that
+actually costs you time:
+
+| section | what lives there | cost to change |
+|---|---|---|
+| `simulator:` | map, GPU, camera buffers, GPS origin, clock speed | restart the simulator, ~60 s |
+| `sensors:` | every sensor on the aircraft, both simulators | restart the sidecar, ~5 s |
+| `sidecar:` | the chase camera | restart the sidecar, ~5 s |
+| `graph:` | rates, backend, controller limits, recording | **live** — `ros2 param set` |
+
+Try it — put the aircraft somewhere else in the world:
+
+```yaml
+# configs/testbed.yaml
+simulator:
+  gps_origin:
+    lat: 51.5074        # London instead of AirSim's default (Redmond, Washington)
+    lon: -0.1278
+    alt: 11.0
+```
+
+```bash
+./scripts/bringup.sh --backend geometric      # renders the config, then starts
+ros2 topic echo /fmu/out/sensor_gps --once    # now reports a London coordinate
+```
+
+### Adding a sensor
+
+All of them are one list, whichever simulator provides them. Flip `enabled` and restart:
+
+```yaml
+sensors:
+  - name: lidar
+    source: carla                  # pushed from inside UE4 - costs the image path nothing
+    enabled: true
+    blueprint: sensor.lidar.ray_cast_semantic
+    topic: /sensors/lidar/points
+    offset: {x: 0.0, y: 0.0, z: -0.4}   # metres, body FRD; negative z is ABOVE
+    attributes: {channels: "16", range: "80.0", points_per_second: "30000"}
+
+  - name: radar
+    source: carla
+    enabled: false                 # <- flip this
+    blueprint: sensor.other.radar
+```
+
+**`source` is not cosmetic.** `airsim` sensors are polled over RPC on the same path as image
+capture, and that costs measurable frame rate — 5 Hz costs 1.7%, 20 Hz costs 28%. `carla`
+sensors are pushed asynchronously from inside the simulator and cost nothing measurable. The
+comments in the file carry the numbers.
+
+`radar`, `events` (an event camera) and `instances` (instance segmentation) are already
+written out and disabled, so enabling one is a one-word edit.
+
+### Two files you must not edit
+
+`configs/sim/settings.json` and `ros2_ws/src/bringup/config/testbed.yaml` are **generated** — AirSim's
+schema is read by the simulator binary and the parameter file by rclpy, and neither will
+accept a unified file. Both carry a DO-NOT-EDIT header, `run_sim.sh` and `bringup.sh` re-render
+them on every start, and a test fails if they drift from their source.
+
 ---
 
 ## What you just ran
 
 `oracle` is not a VLM. It is handed the goal and flies straight at it, so it answers one
-question: **is this scenario navigable at all?** Its 4/4 is the ceiling; the `geometric`
-depth-following baseline scores 0/4, and that gap is the space a real model has to fill.
+question: **is this scenario navigable at all?** On the three open scenarios it is the ceiling
+at 5/5 each, while the `geometric` depth-following baseline scores 0/5 — and that gap is the
+space a real model has to fill.
+
+It scores **0/5 on `avoid_the_block`**, which is that scenario working as intended: there is a
+154 m tower sitting on the straight line, and a straight-line policy cannot get past it. For a
+scenario like that the oracle cannot be the validator, so reachability is proven geometrically
+instead — `./.venv/bin/python scripts/survey_buildings.py --route` finds a way around at 1.18x
+the direct distance.
 
 Try the baseline and see the contrast:
 
@@ -186,6 +268,18 @@ source /opt/ros/jazzy/setup.bash && source ros2_ws/install/setup.bash
 **A code change has no effect.**
 `colcon --symlink-install` still needs a rebuild for `ament_python` packages — the symlink
 is made at build time. Re-run `scripts/build_ros.sh`.
+
+**A config change has no effect.**
+Three possibilities, in order of likelihood. You edited a **generated** file
+(`configs/sim/settings.json` or `ros2_ws/src/bringup/config/testbed.yaml`) instead of
+`configs/testbed.yaml` — the next start overwrites it. Or the setting lives in `simulator:`
+and needs the simulator restarted, not just the graph. Or an environment variable is
+overriding it: `TESTBED_GPU`, `TESTBED_ORIGIN_LAT/LON/ALT` and the `bringup.sh` flags all win
+over the file, deliberately, so a one-off run needs no edit.
+
+```bash
+./.venv/bin/python scripts/apply_config.py --check   # are the generated files current?
+```
 
 **`import carla` fails.**
 Use `./.venv/bin/python`, not the system one. The client module is `cpython-310`; the system
