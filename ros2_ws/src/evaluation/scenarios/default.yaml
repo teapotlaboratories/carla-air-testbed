@@ -17,8 +17,8 @@ scenarios:
     max_steps: 25
     timeout_s: 180.0
     weather: ClearNoon
-    traffic_vehicles: 15
-    traffic_walkers: 10
+    traffic_vehicles: 30
+    traffic_walkers: 20
 
   - name: follow_the_avenue
     instruction: "follow the main road ahead, keeping above the traffic"
@@ -28,8 +28,8 @@ scenarios:
     max_steps: 30
     timeout_s: 240.0
     weather: ClearNoon
-    traffic_vehicles: 20
-    traffic_walkers: 12
+    traffic_vehicles: 30
+    traffic_walkers: 20
 
   - name: rain_descent
     instruction: "descend toward the intersection below and hold above it"
@@ -39,16 +39,45 @@ scenarios:
     max_steps: 20
     timeout_s: 180.0
     weather: HardRainSunset      # p06 measured a 45.8 mean pixel delta vs ClearNoon
-    traffic_vehicles: 15
-    traffic_walkers: 8
+    traffic_vehicles: 30
+    traffic_walkers: 20
 
+  # Re-sited 2026-08-02. The previous coordinates flew at 77.5 m AGL, which is above every
+  # rooftop in Town10HD, so the "block" was never in the path and the oracle solved it on a
+  # near-straight line — it measured the same thing as follow_the_avenue. Confirmed with
+  # `scripts/survey_buildings.py --check`, which reported all four scenarios CLEAR.
+  #
+  # The obstacle is ProceduralBuilding_94, a 30 x 30 m tower whose roof is 154.3 m AGL,
+  # footprint NED x 195.4..225.3, y -303.7..-273.8. On this leg, at 120 m AGL:
+  #
+  #   in the way      exactly one building — 4 pieces, all of it
+  #   first contact   41.8 m in — far enough to see it and still turn
+  #   solid depth     33.9 m of tower on the straight line
+  #   around it       14.6 m west or 15.3 m east; A* at 8 m clearance
+  #                   finds 129.9 m against a 110 m straight line, i.e. 1.18x
+  #   over it         needs NED altitude 126.8, ABOVE the controller's own
+  #                   120 m clamp — the vertical escape is closed by the
+  #                   controller, not by luck
+  #   the goal        36.3 m past the far face, so the 20 m success ball
+  #                   stops 16.3 m clear of the wall
+  #
+  # **The altitude is load-bearing and 50 m AGL is the wrong answer**, even though the tower
+  # blocks the line there too. Down at 50 m the neighbouring high-rises are also solid and
+  # form a near-continuous wall, so the cheapest legal route is 348 m — 3.17x — and the task
+  # stops being "go around the tower" and becomes "go around the whole block", which is not
+  # what the instruction says. By 120 m AGL the neighbours have dropped away and the tower is
+  # the only thing left. Verified with `scripts/survey_buildings.py --route`.
+  #
+  # Two floors constrain altitude and they are easy to confuse: the controller clamps NED
+  # altitude to [15, 120] m, and NED altitude is measured from the AirSim origin, which sits
+  # 27.45 m ABOVE the street — so the legal band is 42.45..147.45 m AGL, not 15..120.
   - name: avoid_the_block
-    instruction: "fly north but go around the tall building, do not fly through it"
-    start_ned: [107.6, -159.4, -50.0]
-    goal_ned: [107.6, -229.4, -50.0]
+    instruction: "fly to the far side of the tall tower ahead, going around it rather than through it"
+    start_ned: [210.0, -230.0, -92.55]
+    goal_ned: [210.0, -340.0, -92.55]
     success_radius_m: 20.0
-    max_steps: 30
-    timeout_s: 240.0
+    max_steps: 40
+    timeout_s: 300.0
     weather: CloudyNoon
-    traffic_vehicles: 10
-    traffic_walkers: 6
+    traffic_vehicles: 30
+    traffic_walkers: 20
