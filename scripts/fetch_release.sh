@@ -23,7 +23,6 @@ PY="$PROJ/.venv/bin/python"
 
 if [ -d "$DEST/CarlaAir-v0.1.7/CarlaUE4" ]; then
     echo "already unpacked: $DEST/CarlaAir-v0.1.7"
-    echo "export CARLAAIR_RELEASE=$DEST/CarlaAir-v0.1.7"
     exit 0
 fi
 

@@ -1,0 +1,15 @@
+# Populate the map with vehicles and pedestrians.
+#
+# `near_ned` concentrates them: without it, spawn points are shuffled map-wide and a small
+# fleet spreads across the whole of Town10HD, so a scenario that wanted busy streets gets an
+# empty one. Measured on Town10HD: of 155 map-wide spawn points only ~45 lie within 60 m of
+# the cross_the_plaza start.
+int32 vehicles
+int32 walkers
+float64[3] near_ned             # concentrate around here; leave empty for map-wide
+float64 radius_m                # <= 0 uses the sidecar default
+---
+bool success
+int32 spawned                   # vehicles actually created - the map may refuse some
+int32 walkers_spawned
+string message

@@ -41,8 +41,14 @@ import rclpy
 from cv_bridge import CvBridge
 from px4_msgs.msg import (
     OffboardControlMode,
+    VehicleAttitudeSetpoint,
+    VehicleCommand,
+    SensorCombined,
+    SensorGps,
     TrajectorySetpoint,
+    VehicleAirData,
     VehicleLocalPosition,
+    VehicleMagnetometer,
     VehicleOdometry,
     VehicleStatus,
 )
@@ -50,8 +56,9 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from std_msgs.msg import Bool, String
+from interfaces.srv import DestroyActors, ResetVehicle, SetWeather, SpawnTraffic
 
 from .client import SimBridgeClient, SimBridgeError
 
@@ -84,6 +91,21 @@ class CarlaAirBridge(Node):
 
         self.declare_parameter("socket_path", "/tmp/carla_air_testbed.sock")
         self.declare_parameter("odometry_rate_hz", 20.0)
+        # AirSim creates IMU, barometer, magnetometer and GPS automatically for a multirotor,
+        # so publishing them needs no simulator config — but it is NOT free. Measured against
+        # /camera/rgb/image_raw, which is this project's bottleneck:
+        #
+        #     off     baseline        5 Hz    -1.7%
+        #     10 Hz   -14%           20 Hz    -28%
+        #
+        # The cost is RPC round trips on a single-threaded Python sidecar, not the sensors
+        # themselves. 5 Hz is the default because it is nearly free and is already faster than
+        # a real GPS; raise it only if something actually consumes IMU at rate. 0 disables.
+        self.declare_parameter("sensor_rate_hz", 5.0)
+        # CARLA semantic LiDAR, spawned from configs/sim/carla_sensors.yaml. Unlike the AirSim
+        # sensors this does NOT ride the RPC image path — the sensor pushes asynchronously
+        # inside UE4 and we only fetch the newest sweep. 0 disables the publisher.
+        self.declare_parameter("lidar_rate_hz", 10.0)
         self.declare_parameter("image_rate_hz", 4.0)
         self.declare_parameter("publish_depth", True)
         self.declare_parameter("publish_segmentation", False)
@@ -101,6 +123,11 @@ class CarlaAirBridge(Node):
         # a 20 Hz setting, 1107 unique timestamps in 10 s. That burst is not free telemetry:
         # every firing is a blocking RPC that competes with the image path for the sidecar.
         # Collapse a backlog to a single firing.
+        # Newest NED altitude, kept for attitude commands: PX4 carries thrust rather
+        # than a height, so an attitude setpoint holds wherever the aircraft already is.
+        # Initialised here so a setpoint arriving before the first odometry hits the
+        # None guard instead of raising AttributeError.
+        self._last_z = None
         self._next_odom = 0.0
         self._next_image = 0.0
 
@@ -109,10 +136,16 @@ class CarlaAirBridge(Node):
         self.sim = SimBridgeClient(socket_path)      # telemetry + world
         self.media = SimBridgeClient(socket_path)    # image capture only
         self.ctrl = SimBridgeClient(socket_path)     # setpoint forwarding only
+        # A fourth, for the world-control services. `reset` blocks for **16.2 s measured**
+        # while the aircraft arms, flies to the pose and settles; on `self.sim` that would
+        # stall odometry and the world tick for the whole of it. With this split, odometry
+        # held 19.9 Hz against a 20 Hz target THROUGH that reset. Same reasoning as above.
+        self.world = SimBridgeClient(socket_path)    # world-control services only
         try:
             self.sim.connect()
             self.media.connect()
             self.ctrl.connect()
+            self.world.connect()
         except OSError as exc:
             self.get_logger().error(
                 f"cannot reach sim_bridge at {socket_path}: {exc}. "
@@ -128,6 +161,12 @@ class CarlaAirBridge(Node):
         self.pub_local = self.create_publisher(
             VehicleLocalPosition, "/fmu/out/vehicle_local_position", PX4_QOS)
         self.pub_status = self.create_publisher(VehicleStatus, "/fmu/out/vehicle_status", PX4_QOS)
+        self.pub_imu = self.create_publisher(SensorCombined, "/fmu/out/sensor_combined", PX4_QOS)
+        self.pub_air = self.create_publisher(VehicleAirData, "/fmu/out/vehicle_air_data", PX4_QOS)
+        self.pub_mag = self.create_publisher(
+            VehicleMagnetometer, "/fmu/out/vehicle_magnetometer", PX4_QOS)
+        self.pub_gps = self.create_publisher(SensorGps, "/fmu/out/sensor_gps", PX4_QOS)
+        self.pub_lidar = self.create_publisher(PointCloud2, "/sensors/lidar/points", 1)
 
         # ---- sensors (ordinary ROS types; nothing PX4 about a camera) ----
         self.pub_rgb = self.create_publisher(Image, "/camera/rgb/image_raw", 5)
@@ -152,6 +191,35 @@ class CarlaAirBridge(Node):
         self.create_subscription(
             OffboardControlMode, "/fmu/in/offboard_control_mode", self._on_offboard, PX4_QOS,
             callback_group=setpoint_group)
+        # The command surface a ROS-only client needs. These are PX4's own messages on PX4's
+        # own topics, not friendlier inventions: a node written against them ports to a real
+        # Pixhawk by deleting this bridge, which is the entire point of the shim.
+        self.create_subscription(
+            VehicleCommand, "/fmu/in/vehicle_command", self._on_command, PX4_QOS,
+            callback_group=setpoint_group)
+        self.create_subscription(
+            VehicleAttitudeSetpoint, "/fmu/in/vehicle_attitude_setpoint",
+            self._on_attitude, PX4_QOS, callback_group=setpoint_group)
+
+        # ---- world control (see todo.md R-01) ----
+        # Services, not topics, because each of these has a meaningful failure the caller
+        # must see: an unknown weather preset, a map that refused half the spawn points, a
+        # reset that could not reach its pose. A topic would drop those on the floor and a
+        # scenario would score a number that meant nothing.
+        #
+        # NOT PX4 messages, deliberately. Nothing on a real Pixhawk teleports an airframe or
+        # spawns pedestrians, so borrowing `VehicleCommand` here would imply a portability
+        # these calls do not have. The rule stays clean: `/fmu/*` is what survives the move
+        # to hardware, `/sim/*` is what does not.
+        world_group = MutuallyExclusiveCallbackGroup()
+        self.create_service(ResetVehicle, "/sim/reset_vehicle", self._srv_reset,
+                            callback_group=world_group)
+        self.create_service(SpawnTraffic, "/sim/spawn_traffic", self._srv_spawn_traffic,
+                            callback_group=world_group)
+        self.create_service(SetWeather, "/sim/set_weather", self._srv_set_weather,
+                            callback_group=world_group)
+        self.create_service(DestroyActors, "/sim/destroy_actors", self._srv_destroy_actors,
+                            callback_group=world_group)
 
         # One callback group per channel. Without this the executor serialises the timers
         # in a single thread and the two connections buy nothing.
@@ -161,6 +229,16 @@ class CarlaAirBridge(Node):
                           callback_group=MutuallyExclusiveCallbackGroup())
         self.create_timer(1.0 / img_hz, self._tick_images,
                           callback_group=MutuallyExclusiveCallbackGroup())
+        sensor_hz = float(self.get_parameter("sensor_rate_hz").value)
+        if sensor_hz > 0:
+            self._next_sensor = time.monotonic()
+            self.create_timer(1.0 / sensor_hz, self._tick_sensors,
+                              callback_group=MutuallyExclusiveCallbackGroup())
+        lidar_hz = float(self.get_parameter("lidar_rate_hz").value)
+        if lidar_hz > 0:
+            self._next_lidar = time.monotonic()
+            self.create_timer(1.0 / lidar_hz, self._tick_lidar,
+                              callback_group=MutuallyExclusiveCallbackGroup())
         self.create_timer(1.0, self._tick_world,
                           callback_group=MutuallyExclusiveCallbackGroup())
 
@@ -168,6 +246,172 @@ class CarlaAirBridge(Node):
 
     def _stamp_us(self) -> int:
         return int(self.get_clock().now().nanoseconds / 1000)
+
+    def _on_command(self, msg: VehicleCommand):
+        """PX4 VehicleCommand -> sidecar. Takeoff, land and arm/disarm.
+
+        Only the commands this simulator can honour are acted on; anything else is logged
+        rather than silently dropped, because a client sending an unsupported command and
+        seeing nothing happen has no way to tell that from a broken link.
+        """
+        try:
+            if msg.command == VehicleCommand.VEHICLE_CMD_NAV_TAKEOFF:
+                # param7 is altitude in MAVLink, metres above the origin. NED z is DOWN, so a
+                # positive requested altitude becomes a negative setpoint.
+                alt = float(msg.param7) if msg.param7 else 30.0
+                self.sim.takeoff(altitude_ned=-abs(alt))
+                self.get_logger().info(f"takeoff to NED {-abs(alt):.1f}")
+            elif msg.command == VehicleCommand.VEHICLE_CMD_NAV_LAND:
+                self.sim.land()
+                self.get_logger().info("landing")
+            elif msg.command == VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM:
+                # SimpleFlight has no separate arm step: reset() and takeoff() both arm, and
+                # land() disarms. Accepted and logged so a PX4-shaped client's startup
+                # sequence runs unchanged rather than erroring on an unknown command.
+                self.get_logger().info(
+                    f"arm/disarm {msg.param1:.0f} acknowledged (implicit in this simulator)")
+            else:
+                self.get_logger().warn(
+                    f"unsupported VehicleCommand {msg.command}", throttle_duration_sec=5.0)
+        except (SimBridgeError, OSError) as exc:
+            self.get_logger().error(f"vehicle command {msg.command} failed: {exc}")
+
+    def _on_attitude(self, msg: VehicleAttitudeSetpoint):
+        """PX4 VehicleAttitudeSetpoint -> AirSim roll/pitch/yaw hold.
+
+        PX4 carries the desired attitude as a quaternion `q_d`, not Euler angles, so it is
+        converted here rather than asking callers to send something PX4 would not.
+
+        Altitude comes from the last odometry rather than from the message: PX4 expresses the
+        vertical axis as `thrust_body`, and mapping normalised thrust onto AirSim's Z
+        controller would be a guess. Holding the current altitude is honest and is what an
+        attitude command usually means on a multirotor.
+        """
+        if self._last_z is None:
+            self.get_logger().warn("attitude setpoint before any odometry — ignoring",
+                                   throttle_duration_sec=5.0)
+            return
+        w, x, y, z = (float(v) for v in msg.q_d)
+        roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+        pitch = math.asin(max(-1.0, min(1.0, 2.0 * (w * y - z * x))))
+        yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        try:
+            self.sim.attitude(roll, pitch, yaw, self._last_z,
+                              float(self.get_parameter("setpoint_duration_s").value))
+        except (SimBridgeError, OSError) as exc:
+            self.get_logger().error(f"attitude failed: {exc}")
+
+    def _tick_lidar(self):
+        """Republish the newest semantic LiDAR sweep as PointCloud2.
+
+        The sidecar hands over CARLA's raw buffer rather than a decoded list: 24 bytes per
+        detection, and at 120000 points/second a Python list of tuples would be roughly 40x
+        the bytes across the socket for identical information.
+
+        CARLA's points are in ITS frame relative to the sensor - x forward, y RIGHT, z UP -
+        while everything else in this graph is NED (z DOWN). The two extra fields are kept as
+        they are: `object_idx` is what makes "the same building as those other 4000 points"
+        answerable, and dropping it would leave this no better than a depth image.
+        """
+        hz = float(self.get_parameter("lidar_rate_hz").value)
+        if hz <= 0.0:
+            return
+        now = time.monotonic()
+        if now < self._next_lidar:
+            return
+        self._next_lidar = _advance(self._next_lidar, now, 1.0 / hz)
+        try:
+            sweep = self.sim.lidar()
+        except (SimBridgeError, OSError) as exc:
+            self.get_logger().warn(f"lidar() failed: {exc}", throttle_duration_sec=5.0)
+            return
+        if not sweep or not sweep.get("count"):
+            return
+
+        msg = PointCloud2()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = str(self.get_parameter("frame_id").value)
+        msg.height = 1
+        msg.width = int(sweep["count"])
+        msg.is_bigendian = False
+        msg.is_dense = True
+        msg.point_step = int(sweep["stride"])
+        msg.row_step = msg.point_step * msg.width
+        F = PointField
+        msg.fields = [
+            F(name="x", offset=0, datatype=F.FLOAT32, count=1),
+            F(name="y", offset=4, datatype=F.FLOAT32, count=1),
+            F(name="z", offset=8, datatype=F.FLOAT32, count=1),
+            F(name="cos_inc_angle", offset=12, datatype=F.FLOAT32, count=1),
+            F(name="object_idx", offset=16, datatype=F.UINT32, count=1),
+            F(name="object_tag", offset=20, datatype=F.UINT32, count=1),
+        ]
+        msg.data = bytes(sweep["raw"])
+        self.pub_lidar.publish(msg)
+
+    def _tick_sensors(self):
+        """IMU, barometer, magnetometer and GPS, from one sidecar call.
+
+        These are AirSim's simulated instruments, not a second view of ground truth — the
+        noise models are active, which is what makes them worth publishing at all. Anything
+        wanting truth should read `/fmu/out/vehicle_odometry`.
+        """
+        # Read the rate first: the parameter is settable at runtime, and 0 means "stop
+        # publishing" rather than "divide by zero" — which is what the obvious version does
+        # the moment someone turns these off on a live graph to test exactly that.
+        hz = float(self.get_parameter("sensor_rate_hz").value)
+        if hz <= 0.0:
+            return
+        now = time.monotonic()
+        if now < self._next_sensor:
+            return
+        self._next_sensor = _advance(self._next_sensor, now, 1.0 / hz)
+        try:
+            s = self.sim.sensors()
+        except (SimBridgeError, OSError) as exc:
+            self.get_logger().warn(f"sensors() failed: {exc}", throttle_duration_sec=5.0)
+            return
+
+        stamp = self._stamp_us()
+
+        imu = SensorCombined()
+        imu.timestamp = stamp
+        # AirSim's body frame is already FRD, which is the frame SensorCombined documents,
+        # so the vectors go straight across with no axis permutation.
+        imu.gyro_rad = np.array(s["imu"]["gyro"], dtype=np.float32)
+        imu.accelerometer_m_s2 = np.array(s["imu"]["accel"], dtype=np.float32)
+        self.pub_imu.publish(imu)
+
+        air = VehicleAirData()
+        air.timestamp = air.timestamp_sample = stamp
+        air.baro_alt_meter = float(s["baro"]["altitude"])
+        air.baro_pressure_pa = float(s["baro"]["pressure"])
+        # AirSim reports temperature in KELVIN; this field is Celsius.
+        air.ambient_temperature = float(s["env"]["temperature_k"]) - 273.15
+        air.rho = float(s["env"]["density"])
+        self.pub_air.publish(air)
+
+        mag = VehicleMagnetometer()
+        mag.timestamp = mag.timestamp_sample = stamp
+        # Gauss on both sides — no conversion.
+        mag.magnetometer_ga = np.array(s["mag"]["field"], dtype=np.float32)
+        self.pub_mag.publish(mag)
+
+        g = s["gps"]
+        gps = SensorGps()
+        gps.timestamp = gps.timestamp_sample = stamp
+        gps.latitude_deg = float(g["lat"])
+        gps.longitude_deg = float(g["lon"])
+        gps.altitude_msl_m = float(g["alt"])
+        gps.altitude_ellipsoid_m = float(g["alt"])
+        gps.fix_type = int(g["fix"])
+        gps.eph = float(g["eph"])
+        gps.epv = float(g["epv"])
+        gps.vel_n_m_s, gps.vel_e_m_s, gps.vel_d_m_s = (float(v) for v in g["vel"])
+        gps.vel_m_s = float(math.hypot(g["vel"][0], g["vel"][1]))
+        gps.vel_ned_valid = bool(g["valid"])
+        gps.satellites_used = 12 if g["fix"] >= 3 else 0
+        self.pub_gps.publish(gps)
 
     def _tick_odometry(self):
         now = time.monotonic()
@@ -183,6 +427,7 @@ class CarlaAirBridge(Node):
 
         now = self._stamp_us()
         p, v, q = s["position"], s["velocity"], s["orientation"]
+        self._last_z = float(p[2])
 
         odom = VehicleOdometry()
         odom.timestamp = now
@@ -282,6 +527,70 @@ class CarlaAirBridge(Node):
         info.p = [fx, 0.0, w / 2.0, 0.0, 0.0, fx, h / 2.0, 0.0, 0.0, 0.0, 1.0, 0.0]
         return info
 
+    # --------------------------------------------------------- world control services
+
+    def _srv_reset(self, req, resp):
+        """Teleport and hold. Blocking - 16.2 s measured for a ~60 m move, so this needs
+        its own connection and its own executor thread or it stalls every timer."""
+        try:
+            speed = float(req.speed) if req.speed > 0.0 else 8.0
+            state = self.world.reset(hold_ned=list(req.hold_ned), speed=speed)
+            resp.success = True
+            resp.position_ned = [float(v) for v in state["position"]]
+            self.get_logger().info(
+                f"reset -> commanded {list(req.hold_ned)} settled {resp.position_ned}")
+        except (SimBridgeError, OSError, ValueError) as exc:
+            resp.success = False
+            resp.message = str(exc)
+            self.get_logger().error(f"reset failed: {exc}")
+        return resp
+
+    def _srv_spawn_traffic(self, req, resp):
+        try:
+            # An empty `near_ned` means map-wide, which is a different request from
+            # "concentrate at the origin" - so the length is what decides, not the values.
+            near = list(req.near_ned) if len(req.near_ned) == 3 else None
+            radius = float(req.radius_m) if req.radius_m > 0.0 else 70.0
+            got = self.world.spawn_traffic(vehicles=int(req.vehicles),
+                                           walkers=int(req.walkers),
+                                           near_ned=near, radius_m=radius)
+            resp.success = True
+            resp.spawned = int(got.get("vehicles", 0))
+            resp.walkers_spawned = int(got.get("walkers", 0))
+            # Asked-for and got are routinely different: the map refuses spawn points that
+            # are occupied. Saying so here beats a scenario silently running near-empty.
+            if resp.spawned < int(req.vehicles):
+                resp.message = (f"map accepted {resp.spawned} of {int(req.vehicles)} vehicles")
+        except (SimBridgeError, OSError, ValueError) as exc:
+            resp.success = False
+            resp.message = str(exc)
+            self.get_logger().error(f"spawn_traffic failed: {exc}")
+        return resp
+
+    def _srv_set_weather(self, req, resp):
+        try:
+            got = self.world.set_weather(preset=req.preset)
+            resp.success = True
+            resp.applied = str(got["weather"])
+        except (SimBridgeError, OSError, ValueError) as exc:
+            # An unknown preset must FAIL, not fall back to clear skies: a scenario called
+            # rain_descent running in sunshine scores fine and means nothing.
+            resp.success = False
+            resp.message = str(exc)
+            self.get_logger().error(f"set_weather failed: {exc}")
+        return resp
+
+    def _srv_destroy_actors(self, req, resp):
+        try:
+            got = self.world.destroy_actors()
+            resp.success = True
+            resp.destroyed = int(got.get("destroyed", 0))
+        except (SimBridgeError, OSError) as exc:
+            resp.success = False
+            resp.message = str(exc)
+            self.get_logger().error(f"destroy_actors failed: {exc}")
+        return resp
+
     def _tick_world(self):
         try:
             col = self.sim.collision()
@@ -335,8 +644,10 @@ class CarlaAirBridge(Node):
 def main(argv=None):
     rclpy.init(args=argv)
     node = CarlaAirBridge()
-    # 4 threads: odometry, images, world tick, and the setpoint subscription.
-    executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
+    # 5 threads: odometry, images, world tick, the setpoint subscription, and the
+    # world-control services - `reset` blocks for 16.2 s measured and must not hold a
+    # timer's thread while it does.
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=5)
     executor.add_node(node)
     try:
         executor.spin()

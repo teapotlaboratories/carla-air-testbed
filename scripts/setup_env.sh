@@ -17,8 +17,8 @@ set -euo pipefail
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$PROJ/.venv"
 UV="$PROJ/vendor/bin/uv"
-# Same default as scripts/fetch_release.sh and scripts/run_sim.sh.
-RELEASE_DIR="${CARLAAIR_RELEASE:-${CARLAAIR_HOME:-$(dirname "$PROJ")/carla-air-release}/CarlaAir-v0.1.7}"
+# One resolver, so this cannot disagree with run_sim.sh about where the release is.
+RELEASE_DIR="$("$PROJ/scripts/release_path.sh")"
 
 # ---------- 1. uv, into the project ----------
 if [ ! -x "$UV" ]; then

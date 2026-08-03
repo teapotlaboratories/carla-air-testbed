@@ -1,0 +1,15 @@
+# Teleport the aircraft to an NED pose and leave it HOLDING a setpoint.
+#
+# Not `VehicleCommand` — nothing on a real Pixhawk teleports an airframe, so borrowing a PX4
+# message here would imply a portability this call does not have. Every scenario starts with
+# one of these, and it is the clearest example of the seam between "simulator" and "aircraft".
+#
+# BLOCKING, and for longer than it looks: the sidecar arms, flies to the pose and settles.
+# Measured 16.2 s for a ~60 m move - 3 s of AirSim reset, the flight itself, then a 2 s settle.
+# A client using the rclpy default 5 s timeout will report a failure that did not happen.
+float64[3] hold_ned             # north, east, down. Down is NEGATIVE for altitude.
+float64 speed                   # m/s to fly there; <= 0 uses the sidecar default (8.0)
+---
+bool success
+float64[3] position_ned         # where it ACTUALLY settled - expect a few m of error
+string message                  # empty on success, the failure reason otherwise

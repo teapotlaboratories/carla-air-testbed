@@ -67,15 +67,26 @@ METHODS = frozenset({
     "describe",         # map, versions, camera intrinsics, offsets
     "reset",            # reset + leave holding a setpoint
     "state",            # vehicle kinematics
+    "sensors",          # imu + baro + mag + gps + environment, one call
     "collision",
     "capture",          # rgb / depth / segmentation
     "ground",           # pixel -> world NED
     "velocity",         # one velocity setpoint
     "goto",             # blocking position move
+    "attitude",         # roll/pitch/yaw hold at an NED altitude
     "yaw",
     "hold",
+    "takeoff",          # arm + climb, non-blocking
     "land",
     "set_camera_pose",
+    "chase_start",      # HD exterior camera that follows the aircraft
+    "chase_stop",
+    "carla_sensors",    # what CARLA sensors are spawned and following
+    "lidar",            # newest semantic lidar sweep, raw bytes
+    "chase_view",       # bring the chase camera up for live viewing only
+    "chase_jpeg",       # newest chase frame, encoded
+    "view_jpeg",        # newest drone-camera frame, encoded
+
     "spawn_traffic",
     "traffic_stats",
     "watchdog",

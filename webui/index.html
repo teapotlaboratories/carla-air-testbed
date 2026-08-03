@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>carla-air console</title>
+<style>
+  :root{
+    --paper:#E6E7E1; --panel:#EFEFEA; --ink:#161A18; --ink-soft:#4A524C;
+    --rule:#C4C6BC; --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --ground:#C8892B; --ok:#3F7A34; --stop:#A3341F;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --display:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --paper:#111512; --panel:#171C19; --ink:#E4E7E0; --ink-soft:#9BA49C;
+           --rule:#2C332E; --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+           --air:#3BA5D4; --ground:#E0A643; --ok:#5FA351; --stop:#D25638; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.5}
+  header{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
+         padding:.7rem clamp(.8rem,3vw,1.6rem);border-bottom:1px solid var(--rule)}
+  .brand{font-family:var(--display);font-weight:800;letter-spacing:.1em;
+         text-transform:uppercase;font-size:.85rem;color:var(--chrome-ink)}
+  .spacer{margin-left:auto}
+  main{display:grid;gap:1rem;padding:1rem clamp(.8rem,3vw,1.6rem) 3rem;
+       grid-template-columns:1fr;max-width:1500px;margin-inline:auto}
+  @media (min-width:1100px){ main{grid-template-columns:minmax(0,1fr) 320px} }
+  .views{display:grid;gap:1rem;grid-template-columns:1fr}
+  @media (min-width:760px){ .views{grid-template-columns:1fr 1fr} }
+  .card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+  .card h2{font-family:var(--display);font-size:.7rem;letter-spacing:.11em;
+           text-transform:uppercase;margin:0;padding:.5rem .7rem;
+           border-bottom:1px solid var(--rule);color:var(--ink-soft);
+           display:flex;align-items:center;gap:.5rem}
+  .card h2 .tag{margin-left:auto;font-size:.62rem;letter-spacing:.06em;
+                text-transform:none;color:var(--ink-soft);font-weight:600}
+  .view{display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:#0B0E0C}
+  .view.wide{aspect-ratio:16/9}
+  .pad{padding:.7rem}
+  fieldset{border:1px solid var(--rule);border-radius:3px;margin:0 0 .7rem;padding:.55rem .6rem}
+  legend{font-family:var(--display);font-size:.62rem;letter-spacing:.1em;
+         text-transform:uppercase;color:var(--ink-soft);padding:0 .3rem}
+  button{font-family:var(--display);font-size:.72rem;font-weight:700;letter-spacing:.05em;
+         padding:.42rem .6rem;border:1px solid var(--rule);border-radius:3px;
+         background:transparent;color:var(--ink);cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--chrome);color:var(--chrome-ink)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.go{background:var(--ok);border-color:var(--ok);color:#fff}
+  button.halt{background:var(--stop);border-color:var(--stop);color:#fff}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:.35rem}
+  .row{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center}
+  .dot{width:.55rem;height:.55rem;border-radius:50%;background:var(--stop);flex:none}
+  .dot.on{background:var(--ok)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.78rem;
+        font-variant-numeric:tabular-nums}
+  td{padding:.15rem .2rem}
+  td:first-child{color:var(--ink-soft)}
+  td:last-child{text-align:right}
+  .note{border-left:3px solid var(--ground);background:var(--panel);
+        padding:.5rem .6rem;font-size:.8rem;margin:0 0 .7rem;border-radius:0 3px 3px 0}
+  #log{font-family:var(--mono);font-size:.72rem;max-height:8rem;overflow-y:auto;
+       white-space:pre-wrap;color:var(--ink-soft);margin-top:.5rem}
+  label{font-size:.78rem;color:var(--ink-soft)}
+  .stage{position:relative}
+  .pad-overlay{position:absolute;right:.6rem;bottom:.6rem;
+       background:rgba(11,14,12,.55);backdrop-filter:blur(3px);
+       border:1px solid rgba(255,255,255,.18);border-radius:6px;padding:.4rem}
+  .pad-overlay[hidden]{display:none}
+  .pad-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem}
+  .pk{width:3rem;height:2.6rem;font-size:1rem;line-height:1;color:#fff;
+      background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);
+      border-radius:4px;display:flex;flex-direction:column;align-items:center;
+      justify-content:center;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+  .pk small{font-size:.5rem;letter-spacing:.06em;opacity:.75}
+  .pk:active{background:var(--chrome);border-color:var(--chrome)}
+  .pk.halt{background:rgba(163,52,31,.75);border-color:rgba(163,52,31,.9)}
+  .pad-toggle{position:absolute;right:.6rem;top:.6rem;width:2.2rem;height:2.2rem;
+      background:rgba(11,14,12,.55);color:#fff;border:1px solid rgba(255,255,255,.18);
+      border-radius:4px;font-size:.95rem}
+  @media (max-width:760px){ .pk{width:2.6rem;height:2.4rem} }
+  input[type=number]{width:5rem;font-family:var(--mono);font-size:.78rem;padding:.2rem .3rem;
+        background:transparent;color:var(--ink);border:1px solid var(--rule);border-radius:2px}
+  select{font-size:.75rem;padding:.25rem;background:transparent;color:var(--ink);
+         border:1px solid var(--rule);border-radius:2px}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">carla-air <span style="color:var(--ink-soft)">console</span></span>
+  <span class="row"><span class="dot" id="dot-sim"></span><span id="lbl-sim">simulator down</span></span>
+  <span class="spacer"></span>
+  <button class="go" id="btn-start">Start simulator</button>
+  <button id="btn-stop-sim">Stop simulator</button>
+  <button class="halt" id="btn-stop">Stop everything</button>
+</header>
+
+<main>
+  <section class="views">
+    <div class="card">
+      <h2>Drone camera <span class="tag" id="tag-onboard">what a model would be scored on</span></h2>
+      <img class="view" id="v-onboard" alt="drone camera">
+    </div>
+    <div class="card">
+      <h2>Chase camera <span class="tag">follows the aircraft</span></h2>
+      <div class="stage">
+        <img class="view wide" id="v-chase" alt="chase camera">
+        <div class="pad-overlay" id="pad">
+          <div class="pad-grid">
+            <button class="pk" data-vel="0,0,-1" title="climb (R)">▲<small>alt</small></button>
+            <button class="pk" data-vel="1,0,0"  title="forward (W)">▲</button>
+            <button class="pk" data-yaw="-30"    title="yaw left (Q)">↺</button>
+
+            <button class="pk" data-vel="0,-1,0" title="left (A)">◀</button>
+            <button class="pk halt" id="pad-hold" title="hold (space)">■</button>
+            <button class="pk" data-vel="0,1,0"  title="right (D)">▶</button>
+
+            <button class="pk" data-vel="0,0,1"  title="descend (F)">▼<small>alt</small></button>
+            <button class="pk" data-vel="-1,0,0" title="back (S)">▼</button>
+            <button class="pk" data-yaw="30"     title="yaw right (E)">↻</button>
+          </div>
+        </div>
+        <button class="pad-toggle" id="pad-toggle" title="show/hide on-screen controls">⌨</button>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="note" id="graph-warning" hidden>
+      <strong>ROS graph is running.</strong> The onboard stream is a real AirSim capture and
+      competes with it for the image path — an episode in progress will see a lower frame
+      rate while this page is open.
+    </div>
+
+    <div class="card"><div class="pad">
+      <fieldset>
+        <legend>Telemetry</legend>
+        <table>
+          <tr><td>north</td><td id="t-n">—</td></tr>
+          <tr><td>east</td><td id="t-e">—</td></tr>
+          <tr><td>altitude AGL</td><td id="t-agl">—</td></tr>
+          <tr><td>altitude NED</td><td id="t-alt">—</td></tr>
+          <tr><td>heading</td><td id="t-yaw">—</td></tr>
+          <tr><td>ground speed</td><td id="t-spd">—</td></tr>
+          <tr><td>collision</td><td id="t-col">—</td></tr>
+          <tr><td>armed</td><td id="t-armed">—</td></tr>
+        </table>
+      </fieldset>
+
+      <fieldset>
+        <legend>Fly &mdash; hold a key or press</legend>
+        <div class="grid3">
+          <button data-vel="0,-1,0">◀ left</button>
+          <button data-vel="1,0,0">▲ fwd</button>
+          <button data-vel="0,1,0">right ▶</button>
+          <button data-vel="0,0,-1">▲ climb</button>
+          <button data-vel="-1,0,0">▼ back</button>
+          <button data-vel="0,0,1">▼ descend</button>
+          <button data-yaw="-30">↺ yaw</button>
+          <button class="halt" id="btn-hold">HOLD</button>
+          <button data-yaw="30">yaw ↻</button>
+        </div>
+        <div class="row" style="margin-top:.45rem">
+          <label>speed <input type="number" id="speed" value="6" min="1" max="15" step="1"> m/s</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Position</legend>
+        <div class="row">
+          <label>N <input type="number" id="go-n" value="107.6" step="10"></label>
+          <label>E <input type="number" id="go-e" value="-159.4" step="10"></label>
+          <label>alt <input type="number" id="go-alt" value="55" step="5"></label>
+        </div>
+        <div class="row" style="margin-top:.45rem">
+          <button id="btn-goto">Reset to point</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Take off &amp; land</legend>
+        <div class="row">
+          <label>climb to NED <input type="number" id="to-alt" value="30" step="5"></label>
+        </div>
+        <div class="row" style="margin-top:.45rem">
+          <button class="go" id="btn-takeoff">Take off</button>
+          <button class="halt" id="btn-land">Land</button>
+        </div>
+        <div class="row" style="margin-top:.35rem">
+          <span id="armed-note" style="font-size:.75rem;color:var(--ink-soft)"></span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>World</legend>
+        <div class="row">
+          <label>cars <input type="number" id="n-cars" value="30" min="0" max="80"></label>
+          <label>people <input type="number" id="n-walk" value="20" min="0" max="60"></label>
+        </div>
+        <div class="row" style="margin-top:.45rem">
+          <button id="btn-traffic">Spawn near drone</button>
+          <button id="btn-clear">Clear</button>
+        </div>
+        <div class="row" style="margin-top:.45rem">
+          <select id="weather">
+            <option>ClearNoon</option><option>CloudyNoon</option><option>WetNoon</option>
+            <option>HardRainNoon</option><option>ClearSunset</option><option>HardRainSunset</option>
+          </select>
+          <button id="btn-weather">Apply</button>
+        </div>
+      </fieldset>
+
+      <div id="log"></div>
+    </div></div>
+  </aside>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+// The token rides in the page URL so <img src> streams can carry it too — an Authorization
+// header is not available to an <img>, which is what MJPEG has to be rendered by.
+const TOKEN = new URLSearchParams(location.search).get('k') || '';
+// Town10HD: the AirSim NED origin sits 27.45 m ABOVE the street, so NED altitude
+// is not height above ground. Ground level is NED z = +27.45.
+const GROUND_NED_Z = 27.45;
+const withKey = u => TOKEN ? u + (u.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(TOKEN) : u;
+const log = m => { const el = $('#log');
+  el.textContent = new Date().toLocaleTimeString() + '  ' + m + '\n' + el.textContent;
+  el.scrollTop = 0; };
+
+async function api(path, body) {
+  const opts = body ? {method:'POST', headers:{'Content-Type':'application/json'},
+                       body: JSON.stringify(body)} : {};
+  const r = await fetch(withKey(path), opts);
+  const j = await r.json().catch(() => ({error:'bad response'}));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+const cmd = (method, args={}) => api('/api/command', {method, args});
+
+// ---- streams -------------------------------------------------------------
+// Assigned only once the sidecar is up: pointing an <img> at a stream that 500s
+// leaves a broken-image icon that never recovers on its own.
+let streaming = false;
+function startStreams() {
+  if (streaming) return;
+  streaming = true;
+  const bust = '?t=' + Date.now();
+  $('#v-onboard').src = withKey('/stream/onboard' + bust);
+  $('#v-chase').src   = withKey('/stream/chase'   + bust);
+}
+function stopStreams() {
+  streaming = false;
+  $('#v-onboard').removeAttribute('src');
+  $('#v-chase').removeAttribute('src');
+}
+
+// ---- status --------------------------------------------------------------
+async function poll() {
+  try {
+    const s = await api('/api/status');
+    const up = s.socket;
+    $('#dot-sim').classList.toggle('on', up);
+    $('#lbl-sim').textContent = up ? 'simulator up' : 'simulator down';
+    $('#graph-warning').hidden = !s.graph_up;
+    if (up) startStreams(); else stopStreams();
+  } catch (e) { /* server restarting; try again next tick */ }
+
+  try {
+    const {state, collision} = await api('/api/state');
+    const [n, e, d] = state.position, v = state.velocity || [0,0,0];
+    $('#t-n').textContent   = n.toFixed(1) + ' m';
+    $('#t-e').textContent   = e.toFixed(1) + ' m';
+    // Two altitudes, because they differ by 27.45 m and confusing them has already cost
+    // this project a broken scenario. AGL is what a pilot wants; NED is what the scenarios
+    // are written in and what the controller clamps to [15, 120].
+    $('#t-agl').textContent = (GROUND_NED_Z - d).toFixed(1) + ' m';
+    $('#t-alt').textContent = (-d).toFixed(1) + ' m';
+    $('#t-yaw').textContent = (state.yaw * 180 / Math.PI).toFixed(0) + '°';
+    $('#t-spd').textContent = Math.hypot(v[0], v[1]).toFixed(1) + ' m/s';
+    $('#t-col').textContent = collision.has_collided ? (collision.object_name || 'yes') : 'clear';
+    $('#t-col').style.color = collision.has_collided ? 'var(--stop)' : '';
+    const armed = !!state.armed;
+    $('#t-armed').textContent = armed ? 'armed' : 'DISARMED';
+    $('#t-armed').style.color = armed ? '' : 'var(--stop)';
+    // After a landing the aircraft is disarmed and inert. Say so, rather than leaving the
+    // controls looking broken.
+    $('#armed-note').textContent = armed ? '' : 'disarmed — press Take off before flying';
+  } catch (e) { /* not flying yet */ }
+}
+setInterval(poll, 1000); poll();
+
+// ---- lifecycle -----------------------------------------------------------
+$('#btn-start').onclick = async () => {
+  $('#btn-start').disabled = true; log('starting simulator…');
+  try {
+    await api('/api/sim/start', {});
+    await api('/api/chase/view', {width:1280, height:720, fps:30});
+    log('simulator up');
+  } catch (e) { log('start failed: ' + e.message); }
+  $('#btn-start').disabled = false; poll();
+};
+$('#btn-stop-sim').onclick = async () => {
+  stopStreams(); log('stopping the simulator…');
+  try { await api('/api/sim/stop_sim_only', {}); log('simulator stopped'); }
+  catch (e) { log('stop: ' + e.message); }
+  poll();
+};
+$('#btn-stop').onclick = async () => {
+  stopStreams(); log('stopping…');
+  try { await api('/api/sim/stop', {}); log('stopped'); }
+  catch (e) { log('stop failed: ' + e.message); }
+  poll();
+};
+
+// ---- flying --------------------------------------------------------------
+// Velocity commands carry their own duration, so a press is a nudge and the aircraft stops
+// on its own. That is deliberate: a web page that has to send "stop" is one dropped request
+// away from an aircraft that never stops.
+const speed = () => parseFloat($('#speed').value) || 6;
+async function nudge(vx, vy, vz) {
+  const s = speed();
+  try { await cmd('velocity', {vx:vx*s, vy:vy*s, vz:vz*s, duration:0.7}); }
+  catch (e) { log('velocity: ' + e.message); }
+}
+document.querySelectorAll('[data-vel]').forEach(b => {
+  b.onclick = () => nudge(...b.dataset.vel.split(',').map(Number));
+});
+document.querySelectorAll('[data-yaw]').forEach(b => {
+  b.onclick = async () => {
+    try { await cmd('yaw', {deg: Number(b.dataset.yaw)}); }
+    catch (e) { log('yaw: ' + e.message); }
+  };
+});
+$('#btn-hold').onclick = () => cmd('hold').catch(e => log('hold: ' + e.message));
+$('#pad-hold').onclick = () => cmd('hold').catch(e => log('hold: ' + e.message));
+$('#pad-toggle').onclick = () => { const p = $('#pad'); p.hidden = !p.hidden; };
+$('#btn-land').onclick = () => cmd('land')
+  .then(() => log('landing — the aircraft disarms on touchdown; Take off to fly again'))
+  .catch(e => log('land: ' + e.message));
+$('#btn-takeoff').onclick = () => {
+  const alt = parseFloat($('#to-alt').value);
+  log(`taking off to NED ${alt} m...`);
+  cmd('takeoff', {altitude_ned: -Math.abs(alt)})
+    .then(() => log('climbing'))
+    .catch(e => log('takeoff: ' + e.message));
+};
+
+$('#btn-goto').onclick = async () => {
+  const n = parseFloat($('#go-n').value), e = parseFloat($('#go-e').value);
+  const alt = parseFloat($('#go-alt').value);
+  log(`reset to (${n}, ${e}, ${alt} m)…`);
+  try { await cmd('reset', {hold_ned:[n, e, -alt], speed:10}); log('there'); }
+  catch (err) { log('reset: ' + err.message); }
+};
+
+$('#btn-traffic').onclick = async () => {
+  const st = await api('/api/state').catch(() => null);
+  const near = st ? st.state.position.slice(0,2) : null;
+  log('spawning traffic…');
+  try {
+    const r = await cmd('spawn_traffic', {
+      vehicles: +$('#n-cars').value, walkers: +$('#n-walk').value,
+      near_ned: near, radius_m: 70});
+    log(`spawned ${r.result.vehicles} cars, ${r.result.walkers} people`);
+  } catch (e) { log('traffic: ' + e.message); }
+};
+$('#btn-clear').onclick = () => cmd('destroy_actors').then(() => log('cleared'))
+                                 .catch(e => log('clear: ' + e.message));
+$('#btn-weather').onclick = () => cmd('set_weather', {preset:$('#weather').value})
+                                  .then(() => log('weather ' + $('#weather').value))
+                                  .catch(e => log('weather: ' + e.message));
+
+// ---- keyboard ------------------------------------------------------------
+const KEYS = {w:[1,0,0], s:[-1,0,0], a:[0,-1,0], d:[0,1,0],
+              r:[0,0,-1], f:[0,0,1]};
+addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT' || ev.repeat) return;
+  if (KEYS[ev.key]) { nudge(...KEYS[ev.key]); ev.preventDefault(); }
+  else if (ev.key === 'q') cmd('yaw', {deg:-30});
+  else if (ev.key === 'e') cmd('yaw', {deg:30});
+  else if (ev.key === ' ') { cmd('hold'); ev.preventDefault(); }
+});
+log('WASD translate · R/F altitude · Q/E yaw · space holds');
+</script>
+</body>
+</html>

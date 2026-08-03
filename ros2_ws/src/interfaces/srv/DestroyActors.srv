@@ -1,0 +1,9 @@
+# Remove every vehicle and pedestrian this bridge spawned. Scenario teardown.
+#
+# Empty request: there is nothing to parameterise, and a filter would invite the caller to
+# leave half the traffic behind between runs, which is exactly the state that makes two
+# episodes with the same seed diverge.
+---
+bool success
+int32 destroyed
+string message

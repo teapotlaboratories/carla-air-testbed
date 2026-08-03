@@ -41,6 +41,11 @@ done
 
 mkdir -p "$PROJ/out"
 
+# One source of truth. Rendering here rather than trusting a checked-in copy means editing
+# configs/testbed.yaml is enough — nobody has to remember a build step.
+"$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --quiet || {
+    echo "could not render configs/testbed.yaml" >&2; exit 1; }
+
 # Clear any previous run FIRST. Without this a second bringup stacks a second graph on the
 # first: ros2 node list still shows one of each name, but /fmu/in/trajectory_setpoint comes
 # out at 20 or 30 Hz instead of 10 and two controllers fight over the aircraft. It is
@@ -96,8 +101,13 @@ source "$PROJ/ros2_ws/install/setup.bash"
 set -u
 export TESTBED_PROTOCOL="$PROJ/sim_bridge/protocol.py"
 
+# ROS-side (3.12) python packages — currently the anthropic SDK for the `claude` backend.
+# Appended, not prepended: vendor/ must never shadow a ROS-supplied module.
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PROJ/vendor/py312"
+
 echo "launching the ROS 2 graph (backend=$BACKEND)"
 ros2 launch bringup testbed.launch.py \
+    params:="$PROJ/ros2_ws/src/bringup/config/testbed.yaml" \
     backend:="$BACKEND" \
     instruction:="$INSTRUCTION" \
     evaluation:="$EVAL" \

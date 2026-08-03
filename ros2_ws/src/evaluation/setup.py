@@ -22,6 +22,7 @@ setup(
     entry_points={
         "console_scripts": [
             "episode_runner = evaluation.episode_runner:main",
+            "recorder = evaluation.recorder_node:main",
         ],
     },
 )

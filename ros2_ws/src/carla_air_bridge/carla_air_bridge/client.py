@@ -102,6 +102,23 @@ class SimBridgeClient:
     def state(self):
         return self.call("state")
 
+    def sensors(self):
+        """IMU + barometer + magnetometer + GPS + environment, one round trip."""
+        return self.call("sensors")
+
+    def attitude(self, roll, pitch, yaw, z, duration=0.2):
+        return self.call("attitude", roll=roll, pitch=pitch, yaw=yaw, z=z, duration=duration)
+
+    def takeoff(self, altitude_ned=-30.0, speed=6.0):
+        return self.call("takeoff", altitude_ned=altitude_ned, speed=speed)
+
+    def lidar(self):
+        """Newest semantic LiDAR sweep, or None if none is configured."""
+        return self.call("lidar")
+
+    def carla_sensors(self):
+        return self.call("carla_sensors")
+
     def collision(self):
         return self.call("collision")
 
@@ -136,8 +153,13 @@ class SimBridgeClient:
     def set_camera_pose(self, xyz=(0.5, 0.0, 0.1), pitch=0.0, roll=0.0, yaw=0.0):
         return self.call("set_camera_pose", xyz=list(xyz), pitch=pitch, roll=roll, yaw=yaw)
 
-    def spawn_traffic(self, vehicles=15, walkers=10):
-        return self.call("spawn_traffic", vehicles=vehicles, walkers=walkers)
+    def spawn_traffic(self, vehicles=15, walkers=10, near_ned=None, radius_m=70.0):
+        """`near_ned` concentrates the traffic; without it, spawn points are shuffled
+        map-wide and a small fleet spreads across the whole of Town10HD."""
+        args = {"vehicles": vehicles, "walkers": walkers, "radius_m": radius_m}
+        if near_ned is not None:
+            args["near_ned"] = list(near_ned)
+        return self.call("spawn_traffic", **args)
 
     def traffic_stats(self):
         return self.call("traffic_stats")

@@ -14,9 +14,12 @@ statue.
 """
 from __future__ import annotations
 
+import math
 import random
 
 import carla
+
+from .frames import carla_to_ned
 
 
 class World:
@@ -40,12 +43,45 @@ class World:
 
     # ---------- traffic ----------
 
-    def spawn_traffic(self, vehicles: int = 15, walkers: int = 10):
+    def spawn_traffic(self, vehicles: int = 15, walkers: int = 10,
+                      near_ned=None, radius_m: float = 70.0):
+        """Populate the map, optionally concentrating the traffic around a point.
+
+        Without `near_ned` this shuffles all 155 map-wide spawn points and takes the first
+        N — which spreads a small fleet across the whole of Town10HD. Measured: only about
+        45 of those points lie within 60 m of the `cross_the_plaza` start, so 15 vehicles
+        put roughly **four** cars anywhere near the aircraft, and 10 walkers about **two**.
+        The city was populated; the drone's own neighbourhood was not, and the camera only
+        ever sees the neighbourhood.
+
+        `near_ned` restricts spawning to a radius around a point — pass the scenario's start
+        and the aircraft comes up over moving traffic instead of an empty grid. Selection is
+        still shuffled within the radius, so seeds stay meaningful.
+
+        The 70 m default is measured, not guessed. Counting actors within 60 m of the
+        `cross_the_plaza` start, with 30 vehicles and 20 walkers requested:
+
+            map-wide          5 cars,  1 walker
+            radius 150 m      6 cars,  4 walkers
+            radius  90 m     17 cars,  8 walkers
+            radius  70 m     20 cars, 17 walkers      <- 28 of 30 moving
+
+        Wider radii spend the fleet on streets the camera never sees.
+        """
         bp = self._w.get_blueprint_library()
         self._tm.set_global_distance_to_leading_vehicle(2.5)
 
         cars = [b for b in bp.filter("vehicle.*") if int(b.get_attribute("number_of_wheels")) == 4]
         points = self.spawn_points()
+        if near_ned is not None:
+            cx, cy = float(near_ned[0]), float(near_ned[1])
+            near = [p for p in points
+                    if math.hypot(*(v - c for v, c in zip(
+                        carla_to_ned(p.location.x, p.location.y, p.location.z)[:2], (cx, cy))))
+                    <= radius_m]
+            # Fall back rather than spawn nothing: a scenario sited away from roads should
+            # still get traffic, just not clustered.
+            points = near if len(near) >= vehicles else points
         self._rng.shuffle(points)
         batch = []
         for i, sp in enumerate(points[:vehicles]):
@@ -60,10 +96,26 @@ class World:
 
         wbps = bp.filter("walker.pedestrian.*")
         wbatch = []
+        walker_spots = []
         for i in range(walkers):
-            loc = self._w.get_random_location_from_navigation()
+            # The navmesh sampler is map-wide with no location argument, so "near the
+            # aircraft" has to be rejection-sampled. Capped: an unreachable radius must cost
+            # a few wasted draws, not an unbounded loop inside episode setup.
+            loc = None
+            for _ in range(60 if near_ned is not None else 1):
+                candidate = self._w.get_random_location_from_navigation()
+                if candidate is None:
+                    continue
+                if near_ned is None:
+                    loc = candidate
+                    break
+                n, e, _ = carla_to_ned(candidate.x, candidate.y, candidate.z)
+                if math.hypot(n - float(near_ned[0]), e - float(near_ned[1])) <= radius_m:
+                    loc = candidate
+                    break
             if loc is None:
                 continue
+            walker_spots.append(loc)
             wbatch.append(carla.command.SpawnActor(wbps[i % len(wbps)], carla.Transform(loc)))
         self.walker_ids = [r.actor_id for r in self._c.apply_batch_sync(wbatch, True) if not r.error]
 
@@ -72,10 +124,22 @@ class World:
             r.actor_id for r in self._c.apply_batch_sync(
                 [carla.command.SpawnActor(ctrl_bp, carla.Transform(), wid)
                  for wid in self.walker_ids], True) if not r.error]
-        for cid in self.controller_ids:
+        for i, cid in enumerate(self.controller_ids):
             c = self._w.get_actor(cid)
             c.start()
-            c.go_to_location(self._w.get_random_location_from_navigation())
+            # Send them somewhere nearby. A map-wide destination makes pedestrians walk
+            # straight out of frame, which looks identical to having spawned none.
+            target = None
+            if near_ned is not None and i < len(walker_spots):
+                origin = walker_spots[i]
+                for _ in range(30):
+                    candidate = self._w.get_random_location_from_navigation()
+                    if candidate is None:
+                        continue
+                    if candidate.distance(origin) <= radius_m:
+                        target = candidate
+                        break
+            c.go_to_location(target or self._w.get_random_location_from_navigation())
 
         return {"vehicles": len(self.vehicle_ids), "walkers": len(self.walker_ids)}
 
