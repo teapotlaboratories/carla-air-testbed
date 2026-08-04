@@ -48,6 +48,7 @@ done
 # and this screen said every count was 0 the whole time.
 printf "  %-18s %s\n" "web console" "$(count "webui/server.py")"
 printf "  %-18s %s\n" "nav example"  "$(count "navigation/nav.launch.py")"
+printf "  %-18s %s\n" "trace recorder" "$(count "bag record")"
 printf "  %-18s %s\n" "vlm example"  "$(count "vlm_navigation/vlm.launch.py")"
 printf "  %-18s %s\n" "episode/sweep" \
     "$(( $(count "$PROJ/scripts/run_episode.py") + $(count "$PROJ/scripts/run_sweep.sh") ))"

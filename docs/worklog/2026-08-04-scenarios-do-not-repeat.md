@@ -68,3 +68,63 @@ really measured — but they should not be quoted as reproducible until this is 
 Deliberately not attempted today: a fix. There is nothing to fix yet, only something to
 measure, and guessing at a cause with no trace is how this project got its one confidently
 wrong conclusion.
+
+---
+
+## Update, same day: the trace exists, and it contradicts my hypothesis
+
+Built E-03 as `scripts/record_trace.sh` (an MCAP bag of state + commands, cameras excluded —
+RGB at 960x720/8 Hz is ~16 MB/s and would swamp a three-minute episode) and
+`scripts/analyse_trace.sh`. Deliberately simulator-side rather than wired into the episode
+runner, which now lives in `examples/navigation` and is out of scope.
+
+Ten traced runs of `cross_the_plaza` seed 1, oracle, defaults. **9 succeeded, 1 failed** — so
+today's overall rate on this seed is 12/17. The failure was caught with a trace.
+
+### The comparison
+
+| | net | path | ratio | travel against | waypoints |
+|---|---|---|---|---|---|
+| run8 SUCCESS | 60.6 m | 61.1 m | **1.01** | 0.0 m | 13 (**13** bearing-only) |
+| run10 SUCCESS | 61.5 m | 61.9 m | **1.01** | 0.0 m | 12 (**12** bearing-only) |
+| run9 FAILURE | 77.2 m | 124.1 m | **1.61** | **15.2 m** | 24 (**15** bearing-only) |
+
+Two things fall out, and the second is the opposite of what I had been saying:
+
+**The failure zigzags.** 15.2 m of travel directly against the net direction, where both
+successes measure exactly 0.0. Its waypoints alternate either side of the goal line
+(y = -159.4) by 15–20 m a step: -171.9, -156.9, -168.6, -156.3, -168.0, -153.5, -170.0,
+-146.8, -172.0, -153.0, -175.2, -136.6, -172.2. The successes go straight in.
+
+**Bearing-only correlates with SUCCESS, not failure.** Both successful runs are **100%**
+bearing-only. The failure is 15 of 24 — it has *more* depth-valid waypoints, and its
+depth-valid ones are the bad ones: `[351.2, -26.7, 39.0]` is a 220 m jump off the map, and
+`[82.0, -142.8, 44.6]` is behind the start and 17 m **below street level** (the origin sits
+27.45 m up, so z = +44.6 is underground). Physically impossible points, produced by the branch
+that has a real depth reading.
+
+I had been calling `bearing_only` the strongest remaining explanation for the navigation
+failures, in the review, in the PR description and twice to the operator. **On this evidence
+it is not.** The runs that were 100% bearing-only are the ones that worked.
+
+### What is established, and what is not
+
+Established: the failure is a lateral oscillation, not a longer route; it coincides with
+depth-valid waypoints resolving to impossible positions; the successes reproduce the
+documentation closely.
+
+Not established: why. A zigzag that alternates sides is what you would get from a heading or
+camera-pose lag in the projection, but the yaw slew was already cleared by A/B, and I am not
+going to name a cause on one failing trace. **The next step is more failing traces, not a
+theory** — one is a coincidence generator.
+
+### Two bugs found by using the tools
+
+- **The recorder orphans.** Four `ros2 bag record` processes survived their episodes in one
+  session, still subscribed and still writing. `stop.sh` and `status.sh` now know about them,
+  matched on the output path under this repo rather than on `bag record`, which would also
+  match a sibling project — and matched this script's own shell when I first checked by hand.
+- **The analysis windowed to nothing.** `/episode/status` is latched, so a recording that
+  starts between episodes receives the *previous* episode's terminal status first; taking the
+  first terminal message gave `hi < lo`, an empty window, and "0 odometry samples" for six
+  perfectly good bags. The end is now the first terminal status *after* the start.

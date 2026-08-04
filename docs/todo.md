@@ -1245,7 +1245,15 @@ determinism and repeatability what this repository is *for*. It also puts a cave
 result measured at N=5 x 1 seed, including E-01b and the README table: if one seed is 3/7 on
 repeat, 5/5 was a sample rather than a property.
 
-- **Blocked on E-03**, and that is the point: `out/episodes/*.json` stores `steps` as a count
+- **E-03 landed 2026-08-04** (`scripts/record_trace.sh`, `scripts/analyse_trace.sh`) and the
+  first failing trace is captured. The failure is a **lateral oscillation**, not a longer
+  route: 15.2 m of travel against the net direction where successes measure 0.0, waypoints
+  alternating 15-20 m either side of the goal line. **Bearing-only correlates with SUCCESS**
+  — both successes were 100% bearing-only, the failure 15 of 24, and its depth-valid
+  waypoints resolve to impossible points (220 m off the map; 17 m below street level). That
+  contradicts what this file and the PR previously called the likely cause.
+- Rate now **12/17** on this seed across the day. Next: more failing traces before any theory.
+- Superseded, kept for the record: `out/episodes/*.json` stores `steps` as a count
   with no per-step trace, so the shape of the doubled path cannot be recovered from what is
   recorded. Two investigations have now stalled on this same gap.
 - **Verify:** one seed x 10 repeats per scenario, reported as a rate with the spread, before

@@ -29,6 +29,11 @@ PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMES="ros2_ws/install/"
 NAMES="$NAMES|sim_bridge/server\.py|webui/server\.py"
 NAMES="$NAMES|testbed\.launch\.py|vlm_navigation/vlm\.launch\.py|navigation/nav\.launch\.py"
+# A trace recorder outlives the flight it was recording: it is started beside an episode
+# and nothing stops it when the episode ends. Four orphaned in one session on 2026-08-04,
+# each still subscribed and still writing. Matched on the OUTPUT PATH under this repo, not
+# on "bag record", which would also match a sibling project and this script's own shell.
+NAMES="$NAMES|bag record .*--output $PROJ/out|bag record .*--output out/"
 NAMES="$NAMES|scripts/run_episode\.py|scripts/run_sweep\.sh"
 
 is_ours() {
