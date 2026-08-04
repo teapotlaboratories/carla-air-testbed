@@ -42,15 +42,48 @@ printf "  %-18s %s\n" "sim_bridge" "$(count "$PROJ/sim_bridge/server.py")"
 for n in carla_air_bridge vlm_client grounding control evaluation; do
     printf "  %-18s %s\n" "$n" "$(count "$PROJ/ros2_ws/install/$n/lib")"
 done
+# Everything else stop.sh kills, reported here too. A status that checks LESS than stop
+# removes will say "clean" while something is still up: an orphaned web console from an
+# earlier session was listening on the mesh for days before `stop.sh` learned to find it,
+# and this screen said every count was 0 the whole time.
+printf "  %-18s %s\n" "web console" "$(count "webui/server.py")"
+printf "  %-18s %s\n" "vlm example"  "$(count "vlm_navigation/vlm.launch.py")"
+printf "  %-18s %s\n" "episode/sweep" \
+    "$(( $(count "$PROJ/scripts/run_episode.py") + $(count "$PROJ/scripts/run_sweep.sh") ))"
 echo "  (anything above 1 means a stacked run — ./scripts/stop.sh, then bring up again)"
 
 echo
 echo "== gpu =="
 nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used --format=csv,noheader 2>/dev/null |
     sed 's/^/  /'
-vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0 2>/dev/null | tr -d ' ')"
-if [ -n "${vram:-}" ] && [ "$vram" -lt 1000 ] && [ "$(sim_count)" -gt 0 ]; then
-    echo "  WARNING: simulator running but GPU 0 under 1 GB — probably SOFTWARE rendering."
+# Check the card the simulator was actually asked for, not a fixed index.
+#
+# This read `-i 0` until 2026-08-04, while the shipped config renders on GPU 1. That is the
+# exact mistake run_sim.sh warns about beside its own copy of this check: a fixed index is
+# wrong the moment TESTBED_GPU points elsewhere, and wrong in BOTH directions. Here it cried
+# SOFTWARE RENDERING on every correct run (GPU 0 idle at 115 MiB while the sim held 3.8 GB on
+# GPU 1) — and a warning that fires when nothing is wrong is one nobody reads when something
+# is. Reverse the GPUs and it would have stayed silent through a genuine lavapipe run, which
+# is the failure rule 5 exists for.
+GPU_TARGET="${TESTBED_GPU:-$("$PROJ/.venv/bin/python" -c "
+import yaml
+try:
+    d = yaml.safe_load(open('${TESTBED_CONFIG:-$PROJ/configs/testbed.yaml}')) or {}
+    g = (d.get('simulator') or {}).get('gpu')
+    print('' if g is None else g)
+except Exception:
+    print('')" 2>/dev/null)}"
+case "${GPU_TARGET:-}" in
+    ''|None) GPU_TARGET=0 ;;                 # driver's choice, historically device 0
+    *:*)     GPU_TARGET="" ;;                # raw vendor:device — no index to query
+esac
+if [ -n "${GPU_TARGET:-}" ]; then
+    vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits \
+            -i "$GPU_TARGET" 2>/dev/null | tr -d ' ')"
+    if [ -n "${vram:-}" ] && [ "$vram" -lt 1000 ] && [ "$(sim_count)" -gt 0 ]; then
+        echo "  WARNING: simulator running but GPU $GPU_TARGET is under 1 GB (${vram} MiB) —"
+        echo "           probably SOFTWARE rendering. See docs/architecture.md."
+    fi
 fi
 
 echo
@@ -66,7 +99,7 @@ if [ "${1:-}" = "--rates" ]; then
     source "$PROJ/ros2_ws/install/setup.bash"
     set -u
     for t in /fmu/out/vehicle_odometry /camera/rgb/image_raw /camera/depth/image_raw \
-             /vlm/annotation /vlm/grounded_waypoint /fmu/in/trajectory_setpoint; do
+             /vlm/annotation /control/waypoint /fmu/in/trajectory_setpoint; do
         hz="$(timeout 12 ros2 topic hz "$t" 2>/dev/null | grep -m1 'average rate' | awk '{print $3}')"
         printf "  %-34s %s Hz\n" "$t" "${hz:-NO DATA}"
     done
