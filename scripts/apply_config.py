@@ -116,12 +116,17 @@ def write(path, text):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--source", default=SOURCE, metavar="PATH",
+                    help="the config to render (default: configs/testbed.yaml)")
     ap.add_argument("--check", action="store_true",
                     help="exit non-zero if a generated file is out of date")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
-    cfg = load()
+    if not os.path.exists(args.source):
+        print(f"no such config: {args.source}", file=sys.stderr)
+        return 2
+    cfg = load(args.source)
     targets = [(AIRSIM_OUT, render_airsim(cfg)), (PARAMS_OUT, render_params(cfg))]
 
     if args.check:

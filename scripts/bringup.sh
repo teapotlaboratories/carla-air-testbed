@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Start the whole testbed in dependency order and tear it down cleanly on exit.
-#
-#   ./scripts/bringup.sh                                  # geometric baseline backend
-#   ./scripts/bringup.sh --backend mock --seed 3
-#   ./scripts/bringup.sh --no-sim                         # simulator already running
+# Run `./scripts/bringup.sh --help` for usage.
 #
 # Order matters: the simulator must serve both RPC ports before the 3.10 sidecar can
 # connect, and the sidecar must be listening before the ROS 2 bridge starts.
@@ -11,6 +8,61 @@ set -uo pipefail
 
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOCKET="${TESTBED_SOCKET:-/tmp/carla_air_testbed.sock}"
+
+usage() {
+    cat <<'__HELP__'
+bringup.sh - start the drone simulator and its ROS 2 graph.
+
+This starts a SIMULATOR, not a VLM. Nothing it launches interprets a camera. You get a
+quadrotor in a photorealistic city and a ROS 2 interface to it:
+
+    /fmu/out/*      odometry, IMU, barometer, magnetometer, GPS
+    /camera/*       rgb, depth, segmentation (+ camera_info)
+    /sensors/*      semantic lidar
+    /fmu/in/*       takeoff, land, position, velocity, attitude
+    /sim/*          reset, spawn traffic, set weather, teardown (services)
+
+SYNOPSIS
+  ./scripts/bringup.sh --config PATH [--no-sim] [--no-eval]
+
+REQUIRED
+  --config PATH   the testbed config. There is NO default, on purpose: it decides the map,
+                  the GPU, the camera resolutions, the sensor list and the GPS origin. A
+                  silent fallback would bring up a simulator nobody chose, and every number
+                  measured from it would belong to a configuration nobody recorded.
+
+OPTIONS
+  --no-sim        the simulator is already running; start only the sidecar and the graph
+  --no-eval       skip the episode runner (no scenario scoring)
+  -h, --help      this text
+
+EXAMPLES
+  # the usual thing
+  ./scripts/bringup.sh --config configs/testbed.yaml
+
+  # your own config, e.g. a different map or sensor set
+  ./scripts/bringup.sh --config configs/my-survey-rig.yaml
+
+  # reuse a simulator that is already up
+  ./scripts/bringup.sh --config configs/testbed.yaml --no-sim
+
+FLYING IT
+  Once this is up, the aircraft is yours over ROS 2:
+
+    python3 examples/ros2_full_control.py     takeoff -> waypoint -> attitude -> land
+    python3 examples/ros2_world_control.py    traffic, weather, teleport, teardown
+
+  For vision-language navigation - an EXAMPLE built on that interface, not part of the
+  simulator - start it separately in another terminal:
+
+    ./examples/vlm_navigation/run.sh --backend oracle
+
+STOPPING
+  Ctrl-C here tears down what this started. Then confirm nothing is left:
+
+    ./scripts/stop.sh --all && ./scripts/status.sh
+__HELP__
+}
 
 # DDS domain isolation is NOT optional here.
 #
@@ -23,28 +75,67 @@ SOCKET="${TESTBED_SOCKET:-/tmp/carla_air_testbed.sock}"
 #
 # Anything that talks to this testbed must export the same domain. scripts/status.sh does.
 export ROS_DOMAIN_ID="${TESTBED_ROS_DOMAIN_ID:-42}"
-BACKEND="geometric"
-INSTRUCTION="fly forward and stay clear of buildings"
 START_SIM=1
 EVAL=true
 
+CONFIG=""
+
+# `shift 2` on a flag whose value is missing does NOT shift - it fails and returns 1 - so
+# `while [ $# -gt 0 ]` spins forever on the same argument. `--config` with no value hung
+# indefinitely until this guard existed. Every value-taking flag goes through need_val.
+need_val() {
+    if [ "$2" -lt 2 ]; then
+        echo "ERROR: $1 needs a value" >&2
+        echo "       e.g. --config configs/testbed.yaml" >&2
+        exit 2
+    fi
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --backend) BACKEND="$2"; shift 2 ;;
-        --instruction) INSTRUCTION="$2"; shift 2 ;;
-        --no-sim) START_SIM=0; shift ;;
-        --no-eval) EVAL=false; shift ;;
-        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
-        *) echo "unknown argument: $1" >&2; exit 2 ;;
+        # --flag=value as well as --flag value: both forms are muscle memory somewhere, and
+        # rejecting one of them teaches nothing.
+        --config=*)  CONFIG="${1#*=}"; shift ;;
+        --config)    need_val "$1" $#; CONFIG="$2"; shift 2 ;;
+        --no-sim)    START_SIM=0; shift ;;
+        --no-eval)   EVAL=false; shift ;;
+        # --backend / --instruction used to live here. They belong to the VLM example now;
+        # accepted and redirected rather than failing with "unknown argument", because every
+        # doc and muscle memory in this project still reaches for them.
+        --backend=*|--instruction=*)
+            echo "note: ${1%%=*} moved to the VLM example - bring this up, then run:" >&2
+            echo "        ./examples/vlm_navigation/run.sh ${1%%=*} ${1#*=}" >&2
+            shift ;;
+        --backend|--instruction)
+            need_val "$1" $#
+            echo "note: $1 moved to the VLM example - bring this up, then run:" >&2
+            echo "        ./examples/vlm_navigation/run.sh $1 $2" >&2
+            shift 2 ;;
+        -h|--help)   usage; exit 0 ;;
+        --)          shift; break ;;
+        *)  echo "unknown argument: $1" >&2; echo >&2; usage >&2; exit 2 ;;
     esac
 done
+[ $# -eq 0 ] || { echo "unexpected extra arguments: $*" >&2; exit 2; }
+
+if [ -z "$CONFIG" ]; then
+    echo "ERROR: --config is required." >&2
+    echo >&2
+    echo "  ./scripts/bringup.sh --config configs/testbed.yaml" >&2
+    echo >&2
+    echo "There is no default on purpose: the config decides the map, the GPU, the camera" >&2
+    echo "resolutions, the sensor list and the GPS origin. See --help." >&2
+    exit 2
+fi
+[ -f "$CONFIG" ] || { echo "ERROR: no such config: $CONFIG" >&2; exit 2; }
+CONFIG="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
 
 mkdir -p "$PROJ/out"
 
 # One source of truth. Rendering here rather than trusting a checked-in copy means editing
 # configs/testbed.yaml is enough — nobody has to remember a build step.
-"$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --quiet || {
-    echo "could not render configs/testbed.yaml" >&2; exit 1; }
+"$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --source "$CONFIG" --quiet || {
+    echo "could not render $CONFIG" >&2; exit 1; }
 
 # Clear any previous run FIRST. Without this a second bringup stacks a second graph on the
 # first: ros2 node list still shows one of each name, but /fmu/in/trajectory_setpoint comes
@@ -65,7 +156,7 @@ trap cleanup EXIT INT TERM
 
 # ---- 1. simulator ----
 if [ "$START_SIM" -eq 1 ]; then
-    "$PROJ/scripts/run_sim.sh" || exit 1
+    "$PROJ/scripts/run_sim.sh" --config "$CONFIG" || exit 1
 elif ! ss -tln 2>/dev/null | grep -q ":41451 "; then
     echo "--no-sim given but nothing is listening on 41451" >&2
     exit 1
@@ -105,11 +196,9 @@ export TESTBED_PROTOCOL="$PROJ/sim_bridge/protocol.py"
 # Appended, not prepended: vendor/ must never shadow a ROS-supplied module.
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PROJ/vendor/py312"
 
-echo "launching the ROS 2 graph (backend=$BACKEND)"
+echo "launching the ROS 2 graph (simulator only — no VLM node)"
 ros2 launch bringup testbed.launch.py \
     params:="$PROJ/ros2_ws/src/bringup/config/testbed.yaml" \
-    backend:="$BACKEND" \
-    instruction:="$INSTRUCTION" \
     evaluation:="$EVAL" \
     socket_path:="$SOCKET" &
 PIDS+=($!)

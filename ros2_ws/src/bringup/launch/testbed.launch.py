@@ -19,6 +19,18 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """The simulator, and nothing that interprets a camera.
+
+    This used to start `vlm_client` and `grounding` too, which made a VLM the price of
+    admission for a drone simulator. They are an EXAMPLE now, started separately by
+    `examples/vlm_navigation/vlm.launch.py` against the ROS 2 interface like anyone else's
+    code would be. See todo.md R-02.
+
+    What stays here is what a simulator owes any user regardless of what is flying it: the
+    bridge, the offboard controller, episode running and scoring, and video recording.
+    `episode_runner` is NOT VLM-specific - it starts episodes and scores distance-to-goal
+    from odometry.
+    """
     share = get_package_share_directory("bringup")
     default_params = os.path.join(share, "config", "testbed.yaml")
     scenarios = os.path.join(
@@ -27,10 +39,6 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument("params", default_value=default_params,
                               description="parameter file applied to every node"),
-        DeclareLaunchArgument("backend", default_value="geometric",
-                              description="VLM backend: mock | scripted | geometric | oracle | claude"),
-        DeclareLaunchArgument("instruction",
-                              default_value="fly forward and stay clear of buildings"),
         DeclareLaunchArgument("evaluation", default_value="true",
                               description="run the episode runner"),
         DeclareLaunchArgument("socket_path", default_value="/tmp/carla_air_testbed.sock"),
@@ -46,15 +54,6 @@ def generate_launch_description():
             package="carla_air_bridge", executable="bridge_node", name="carla_air_bridge",
             output="screen",
             parameters=[params, {"socket_path": LaunchConfiguration("socket_path")}],
-        ),
-        Node(
-            package="vlm_client", executable="vlm_node", name="vlm_client", output="screen",
-            parameters=[params, {"backend": LaunchConfiguration("backend"),
-                                 "instruction": LaunchConfiguration("instruction")}],
-        ),
-        Node(
-            package="grounding", executable="grounding_node", name="grounding",
-            output="screen", parameters=[params],
         ),
         Node(
             package="control", executable="offboard_node", name="offboard_control",

@@ -22,6 +22,13 @@ simulator:
   gpu: 1                    # nvidia-smi index, or a "10de:2d04" vendor:device pair.
                             # GPU 0 is the operator's and is regularly busy with UnrealEditor.
 
+  # headless renders with no display server at all (-RenderOffScreen) and is what every
+  # measurement in this project was taken with. `windowed` opens an actual Unreal window and
+  # needs somewhere to put it: export DISPLAY, or give it a virtual screen with
+  #     Xvfb :99 -screen 0 1280x720x24 &
+  # Override for one run with `run_sim.sh --display windowed`.
+  display: headless
+
   # 1.0 and leave it there. AirSim's ClockSpeed accelerates SimpleFlight but NOT CARLA, so
   # anything else desynchronises the two halves of the world.
   clock_speed: 1.0
@@ -39,7 +46,12 @@ simulator:
   # `frames.scale_to()` then maps an RGB pixel onto the wrong depth pixel — silently, on every
   # waypoint. This is also why the drone camera is not 1920x1080.
   cameras:
-    rgb:          {width: 640, height: 480, fov: 90}
+    # 960x720, NOT 1280x720. 720 lines either way, but 1280x720 is 16:9 and every buffer
+    # here must share ONE aspect ratio. Beyond the depth-lookup bug that causes, 16:9 narrows
+    # the VERTICAL field 73.7 -> 58.7 deg, which pushes the level-flight row from 13.7% of
+    # the frame down to 1.5% - the camera-pitch problem, made several times worse, on the
+    # one axis a VLM has to reason about.
+    rgb:          {width: 960, height: 720, fov: 90}
     depth:        {width: 160, height: 120, fov: 90}
     segmentation: {width: 320, height: 240, fov: 90}
 
@@ -146,13 +158,38 @@ sidecar:
   # (59.8 vs 60.0) while 60 Hz costs 10 fps of simulation. Real-time factor stays 1.000
   # throughout, which is the trap — judge this by tick rate, never by RTF.
   chase_camera:
-    width: 1280
-    height: 720
-    fps: 30
+    width: 1920
+    height: 1080
+    # 20, not 30. At 1920x1080 the encoder could not keep up with 30 fps - measured 19 frames
+    # dropped in 226, and the stop timed out with the file left unplayable. 1080p is worth
+    # more here than the extra 10 fps of a spectator camera.
+    fps: 20
     distance: 14.0          # metres behind
     above: 6.0              # metres above
     crf: 26                 # x264 constant-rate-factor for recordings; 23 near-transparent,
                             # 26 is ~2.2x smaller on moving footage, 30 is ~3.7x
+
+  # Traffic. RE-READ LIVE: this block is reloaded on every spawn and on every 1 Hz steering
+  # tick, so editing it changes pedestrians already walking, within a second, with no
+  # restart. The rest of `sidecar:` needs the ~5 s restart; this does not.
+  #
+  # Counts here are DEFAULTS. A scenario's `traffic_vehicles`/`traffic_walkers` and an
+  # explicit /sim/spawn_traffic request both override them.
+  traffic:
+    vehicles: 15
+    walkers: 10
+    radius_m: 70.0          # cluster radius. Ask for more vehicles than there are spawn
+                            # points inside it and the sidecar falls back to MAP-WIDE and
+                            # says so — Town10HD has ~45 within 70 m of the plaza.
+
+    # Pedestrians are steered DIRECTLY, not by controller.ai.walker, which this build
+    # accepts and silently ignores — measured 0/8 moving with it, 6/6 without. See
+    # docs/todo.md T-03.
+    walker_speed_min: 1.0   # m/s. 1.0-1.7 spans a stroll to a brisk walk. Each walker
+    walker_speed_max: 1.7   # keeps a fixed position in this range, so widening it here
+                            # changes live walkers without making them move as one.
+    walker_arrive_m: 3.0    # how close counts as arrived; a new destination is chosen then
+    walker_roam_m: 80.0     # how far the next destination may be from where they are
 
 
 graph:
@@ -169,36 +206,50 @@ graph:
     frame_id: drone
     setpoint_duration_s: 0.5      # how long a velocity/attitude command lives
 
-  vlm_client:
-    backend: geometric      # mock | scripted | geometric | oracle | claude
-    seed: 0
-    min_period_s: 1.0
-    history_length: 5
-    instruction: "fly forward and stay clear of buildings"
-    claude_model: claude-opus-5
-    claude_effort: low      # 40 steps in 300 s is 7.5 s per decision; higher effort blows it
-    claude_max_tokens: 16000
-    claude_timeout_s: 60.0
-    claude_jpeg_quality: 90
-    claude_fallbacks: true
-
-  grounding:
-    camera_pitch_deg: -28.6       # level flight lives in the top 13.7% of the frame at this
-                                  # pitch. Any backend that does not know the goal ALTITUDE
-                                  # flies itself into the ground.
-    camera_offset_body: [0.5, 0.0, 0.1]
-    depth_history: 12
-    max_range_m: 200.0
+  # vlm_client: and grounding: USED TO BE HERE. They moved to
+  #   examples/vlm_navigation/config/vlm.yaml
+  # when the VLM became an example rather than part of the simulator (todo.md R-02).
+  # Someone installing a drone simulator should not find an Anthropic model name in its
+  # config file. The example is launched separately and talks only to the ROS 2 interface.
 
   offboard_control:
     rate_hz: 10.0
     setpoint_duration_s: 0.5
-    max_speed_mps: 5.0
-    max_step_m: 20.0
+    # 2.0, down from 5.0. The binding constraint is not the airframe, it is how far the
+    # aircraft travels BLIND between looks. Claude measured p50 5.6-6.6 s, p95 9.5 s per
+    # decision, so at 5 m/s a worst-case gap is 47 m of unobserved flight - more than twice
+    # the 20 m step cap and six times the 8 m standoff. At 2.0 it is ~12 m typical, ~19 m
+    # worst case, and the aircraft is re-observing before it has consumed its own step.
+    #
+    # `min_period_s: 1.0` in the example's config is a RATE LIMIT, not the latency; the
+    # model has never answered in 1 s.
+    max_speed_mps: 5.0        # the value E-01b was measured at. Demos override
+                              # this per scenario — see `control:` in default.yaml.
+    # Slew rate on the commanded velocity. 0 disables. Without it the velocity is recomputed
+    # from scratch each tick and steps the moment a new waypoint arrives — every ~4 s with a
+    # VLM — so the aircraft snaps onto each heading at full speed.
+    max_accel_mps2: 2.5
+    # Heading slew rate. The heading follows the instantaneous velocity, recomputed at 10 Hz,
+    # so velocity wobble became visible jitter — and the drone camera is fixed to the
+    # airframe, so the model's own view swings with it.
+    max_yaw_rate_dps: 45.0    # smoothing; demos slow this right down per scenario
+    max_step_m: 20.0          # as measured for E-01b; overridden per scenario
     standoff_m: 8.0
     arrival_radius_m: 2.0
     # THESE ARE NED, NOT AGL. The origin sits 27.45 m above the street on Town10HD, so the
     # real floor is 42.45 m AGL and the ceiling 147.45 m.
+    # -24.0 is NOT a typo. The clamp is `clip(z, -max, -min)` in NED, where altitude is -z,
+    # so a NEGATIVE min_altitude_m permits z ABOVE the origin plane - and the origin sits
+    # 27.45 m above the street. -24.0 therefore allows 3.45 m AGL, which is what street-level
+    # flight needs. At the old 15.0 the floor was 42.45 m AGL and a VLM aimed at the road
+    # was clamped twelve times above it.
+    #
+    # This is a loaded gun: the floor exists so a waypoint on the ground cannot fly the
+    # aircraft into it. Raise it back to 15.0 for anything scored above the rooftops.
+    # 15.0 = 42.45 m AGL, the value E-01b was measured at. The street-level demo needs a
+    # NEGATIVE floor to descend below the origin plane, and sets it per scenario rather than
+    # here — a setting that lets a waypoint fly the aircraft into the ground should not be
+    # the default for every scenario because one demo wants it.
     min_altitude_m: 15.0
     max_altitude_m: 120.0
     enabled: true
@@ -211,6 +262,12 @@ graph:
     record_dir: out/videos
     fps: 8.0
     draw_overlay: true
+    # Also record the depth buffer, colourised, as <episode>-depth.mp4. This is what
+    # `grounding` actually consumes — the model picks a pixel and the depth AT that pixel is
+    # what becomes a distance — so a flight that went somewhere odd is far easier to explain
+    # with this beside the RGB.
+    record_depth: true
+    depth_max_m: 200.0      # clip before colourising; AirSim writes sky as a huge value
     output_height: 0        # 0 = the camera's own size. The onboard view is evidence of what
                             # the model saw; upscaling it only inflates the file.
     crf: 26
