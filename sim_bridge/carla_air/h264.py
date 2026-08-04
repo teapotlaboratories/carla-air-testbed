@@ -45,6 +45,7 @@ class VideoWriter:
         self.path, self.width, self.height = path, int(width), int(height)
         self.fps = float(fps)
         self.frames = 0
+        self._t_first = self._t_last = None
         self._container = None
         self._stream = None
         self._cv = None
@@ -72,8 +73,20 @@ class VideoWriter:
                 raise RuntimeError(f"could not open {path} for writing")
             self.codec = "mp4v"
 
-    def write(self, frame_bgr):
+    def write(self, frame_bgr, t_s=None):
+        """Encode one frame. `t_s` is its time in SECONDS since the recording started.
+
+        Pass it whenever the source rate is not the nominal `fps`, which for a ROS image
+        topic is always. Writing frames at a fixed nominal rate makes the video play at
+        `fps / actual_rate` times real speed - measured here at 8.0 / 5.58 = **1.43x too
+        fast**, which is why a 66 s episode became a 46 s file and drifted several seconds
+        out of step with the chase camera over one clip.
+
+        With `t_s` the frame carries a real presentation timestamp and the file is
+        real-time regardless of what the source did.
+        """
         if self._cv is not None:
+            # The mp4v fallback has no PTS control; it is a fallback, not a measurement path.
             self._cv.write(frame_bgr)
             self.frames += 1
             return
@@ -81,13 +94,58 @@ class VideoWriter:
         # -> BGR crop produces) is not, and raises rather than silently misreading.
         if not frame_bgr.flags["C_CONTIGUOUS"]:
             frame_bgr = np.ascontiguousarray(frame_bgr)
-        packets = self._stream.encode(av.VideoFrame.from_ndarray(frame_bgr, format="bgr24"))
-        for packet in packets:
+        vframe = av.VideoFrame.from_ndarray(frame_bgr, format="bgr24")
+
+        # REPEAT frames rather than stamp them. Setting frame.pts by hand looked cleaner and
+        # encoded fine, then threw `av.error.ArgumentError` when close() muxed the encoder's
+        # FLUSH packets - libx264 reorders, and hand-set timestamps stopped agreeing with the
+        # DTS the muxer expects. The failure surfaced at close, i.e. after a whole episode had
+        # been recorded, and lost the file.
+        #
+        # Emitting the frame N times at the nominal rate cannot upset the muxer at all, and
+        # gets the same thing: a file whose length is real elapsed time. H.264 codes a
+        # duplicate as a near-empty P-frame, so the cost is small.
+        # Timestamps are NOT set here, deliberately. Three attempts to make this writer
+        # produce a real-time file all failed in ways that cost whole recordings:
+        #
+        #   explicit PTS          -> av.error.ArgumentError when close() muxed the encoder's
+        #                            flush packets; the file was lost AFTER a full episode
+        #   PTS with bf=0         -> same, at 1080p from the chase thread
+        #   repeat frames to fill -> doubled the encode cost; the chase queue backed up and
+        #                            dropped 615 of 889 frames
+        #
+        # So the writer stays dumb and always closes. `t_s` is recorded instead: the span it
+        # covers is written beside the file, and whatever composites the streams rescales
+        # them. A wrong timeline in a sidecar is fixable; a file that will not close is not.
+        if t_s is not None:
+            if self._t_first is None:
+                self._t_first = float(t_s)
+            self._t_last = float(t_s)
+        for packet in self._stream.encode(vframe):
             self._container.mux(packet)
         self.frames += 1
 
+    def _write_timing(self):
+        """Record what real span this file covers, beside it.
+
+        `frames / fps` is the file's PLAYBACK length; `span` is how long the flight actually
+        took. When a source cannot sustain its nominal rate - the camera at 5.58 Hz against a
+        nominal 8, the chase at ~15 against 20 - those differ, and that difference is what
+        makes two recordings of one flight drift apart.
+        """
+        if self._t_first is None or self._t_last is None:
+            return
+        try:
+            import json
+            with open(self.path + ".timing.json", "w") as fh:
+                json.dump({"frames": self.frames, "nominal_fps": float(self.fps),
+                           "span_s": round(self._t_last - self._t_first, 3)}, fh)
+        except OSError:
+            pass                              # a missing sidecar must never fail a recording
+
     def close(self):
         """Flush and finalise. Safe to call twice — a killed sweep may reach it twice."""
+        self._write_timing()
         if self._cv is not None:
             self._cv.release()
             self._cv = None

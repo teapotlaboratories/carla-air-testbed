@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 import queue
 import threading
+import time
 
 import numpy as np
 
@@ -111,6 +112,8 @@ class ChaseCamera:
 
     # ------------------------------------------------------------------ recording
 
+    _rec_t0 = None    # wall clock at the start of the current recording
+
     def start(self, path, crf=26):
         with self._lock:
             if self._writer is not None:
@@ -118,6 +121,9 @@ class ChaseCamera:
             writer = VideoWriter(path, self.width, self.height, fps=self.fps, crf=crf)
             self._writer = writer
             self.frames_written = self.frames_dropped = 0
+            # Wall clock for THIS recording, set under the lock with the writer so a frame
+            # arriving mid-start cannot be timed against the previous one.
+            self._rec_t0 = time.monotonic()
             self._thread = threading.Thread(target=self._drain, daemon=True)
             self._thread.start()
         return path
@@ -156,7 +162,12 @@ class ChaseCamera:
         if self._writer is None:
             return
         try:
-            self._queue.put_nowait(frame)
+            # Stamp at ENQUEUE, not at write: the drain thread lags behind under load, and
+            # its own clock would record when the encoder got round to a frame rather than
+            # when the camera produced it.
+            t0 = self._rec_t0
+            self._queue.put_nowait(
+                (frame, None if t0 is None else time.monotonic() - t0))
         except queue.Full:
             self.frames_dropped += 1
 
@@ -175,15 +186,25 @@ class ChaseCamera:
         return buf.tobytes() if ok else None
 
     def _drain(self):
+        """Write queued frames, each stamped with when it was CAPTURED.
+
+        Not with a nominal rate. The camera does not always deliver its configured fps -
+        under load it delivered ~15 of a requested 20 - and writing whatever arrives at the
+        nominal rate makes the file play back at (nominal / actual) times real speed. That is
+        exactly the bug fixed in the episode recorder; fixing only one of the two made the
+        two recordings of the same flight disagree by 17 s over a minute, which reads as
+        "the video is out of sync" and is really "one of them is the wrong length".
+        """
         while True:
-            frame = self._queue.get()
-            if frame is None:
+            item = self._queue.get()
+            if item is None:
                 break
             writer = self._writer
             if writer is None:
                 break
+            frame, t_s = item if isinstance(item, tuple) else (item, None)
             try:
-                writer.write(frame)
+                writer.write(frame, t_s=t_s)
                 self.frames_written += 1
             except Exception:  # noqa: BLE001
                 self.frames_dropped += 1
