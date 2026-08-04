@@ -35,6 +35,8 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from std_msgs.msg import Bool
 
+from control.limits import should_command_yaw
+
 PX4_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -223,7 +225,26 @@ class OffboardController(Node):
         sp.velocity = [float(v[0]), float(v[1]), float(v[2])]
 
         # Face where we are going; a camera pointing off-axis annotates the wrong scene.
-        if abs(v[0]) + abs(v[1]) > 0.5:
+        #
+        # The gate is a FRACTION OF THE COMMANDED SPEED, and it is a magnitude, not the L1
+        # sum this used to test. Both parts were wrong, and together they silently disabled
+        # heading control on exactly the scenario that needs it most:
+        #
+        #   * `abs(v[0]) + abs(v[1])` varies by sqrt(2) with heading for the same speed, so
+        #     the threshold was tighter for axis-aligned travel than for diagonal - a gate
+        #     whose behaviour depends on which way you are pointing.
+        #   * 0.5 was absolute. street_level overrides max_speed_mps to 0.5, so travelling
+        #     due north - which is literally what its instruction says - gave exactly 0.500
+        #     and never cleared the `> 0.5` test. Any descent put it lower still. The
+        #     aircraft flew the street without ever turning to face along it.
+        #
+        # 10% of the cap keeps the effective threshold at 0.5 m/s for the shipped 5 m/s
+        # config, which is the strict end of what the old test did, so benchmark behaviour
+        # is unchanged. The floor keeps it non-zero if a scenario asks for a crawl.
+        #
+        # The arithmetic lives in control.limits so it can be tested without ROS; see
+        # tests/test_control_limits.py, which checks it against every shipped scenario.
+        if should_command_yaw(v[0], v[1], self.get_parameter("max_speed_mps").value):
             want = float(math.atan2(v[1], v[0]))
             rate = math.radians(float(self.get_parameter("max_yaw_rate_dps").value))
             if rate > 0.0 and self._last_yaw is not None:
