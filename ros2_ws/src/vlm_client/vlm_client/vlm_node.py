@@ -76,6 +76,7 @@ class VlmNode(Node):
         if name not in BACKENDS:
             raise RuntimeError(f"unknown backend {name!r}; have {sorted(BACKENDS)}")
         self.backend = self._build(name)
+        self._decisions = 0
         self.get_logger().info(f"VLM backend: {self.backend.describe()}")
 
         self._cv = CvBridge()
@@ -173,6 +174,17 @@ class VlmNode(Node):
                 return
             self._history.append(ann)
             self.pub.publish(self._to_msg(ann, msg, latency))
+
+            # Report the backend's own counters periodically, not only at startup and
+            # shutdown. Without this you cannot tell a model that is being called from one
+            # that silently fell back: `describe()` was logged once at startup showing
+            # calls=0, the node was killed before its shutdown line, and the run was
+            # unattributable afterwards. A number that only exists at the two moments you
+            # are least likely to be watching is not observability.
+            self._decisions += 1
+            if self._decisions % 5 == 0:
+                self.get_logger().info(f"backend after {self._decisions}: "
+                                       f"{self.backend.describe()}")
         except Exception as exc:  # noqa: BLE001 — a bad backend must not kill the node
             self.get_logger().error(f"backend raised: {exc}")
         finally:

@@ -101,7 +101,7 @@ class EpisodeRunner(Node):
         self.create_subscription(VehicleOdometry, "/fmu/out/vehicle_odometry",
                                  self._on_odom, PX4_QOS)
         self.create_subscription(Annotation2D, "/vlm/annotation", self._on_annotation, 5)
-        self.create_subscription(GroundedWaypoint, "/vlm/grounded_waypoint", self._on_wp, 5)
+        self.create_subscription(GroundedWaypoint, "/control/waypoint", self._on_wp, 5)
         self.create_subscription(Collision, "/sim/collision", self._on_collision, 5)
 
         self.srv = self.create_service(SetEpisode, "/episode/set", self._on_set)

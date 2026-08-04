@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Set up a scenario from plain ROS 2 — no sidecar socket, no carla, no airsim.
 
-    ./scripts/bringup.sh --backend geometric      # terminal 1
+    ./scripts/bringup.sh --config configs/testbed.yaml --backend geometric      # terminal 1
     python3 examples/ros2_world_control.py        # terminal 2, ROS 2 python (3.12)
 
 The companion to `ros2_full_control.py`, which flies the aircraft. This one moves the *world*:
@@ -65,7 +65,8 @@ class WorldControl(Node):
         if missing:
             raise SystemExit(
                 f"no such service: {', '.join(missing)}\n"
-                "Is the bridge up? ./scripts/bringup.sh, and ROS_DOMAIN_ID=42.")
+                "Is the bridge up?  ./scripts/bringup.sh --config configs/testbed.yaml\n"
+                f"And is ROS_DOMAIN_ID=42?")
 
     def call(self, name, request, timeout_s=DEFAULT_TIMEOUT_S):
         """Blocking call that returns the response, or None on timeout."""
