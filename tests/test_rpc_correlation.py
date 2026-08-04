@@ -76,10 +76,21 @@ class FakeSidecar:
 def attach(mod, fake, patience=2.0):
     """A client wired to the fake, with its reader thread running."""
     c = mod.SimBridgeClient(path="/nonexistent", timeout=patience)
+    return _wire(c, fake)
+
+
+def _wire(c, fake):
+    """Point an existing client at a (new) fake, the way connect() would.
+
+    Mirrors `connect()` deliberately, generation bump included — a helper that skipped it
+    would make the reconnect test pass for the wrong reason.
+    """
     c._sock = fake.cli
     c._closing = False
     c._dead = None
-    c._reader = threading.Thread(target=c._read_loop, daemon=True)
+    c._generation += 1
+    c._reader = threading.Thread(target=c._read_loop, args=(fake.cli, c._generation),
+                                 daemon=True)
     c._reader.start()
     return c
 
@@ -179,5 +190,57 @@ def test_errors_still_carry_the_remote_traceback(mod):
             c.call("state")
         assert "nope" in str(exc.value)
         assert exc.value.remote_traceback == "TB HERE"
+    finally:
+        c.close(); fake.close()
+
+
+def test_a_stale_reader_cannot_condemn_the_next_connection(mod):
+    """A reader from a closed connection must not mark its replacement dead.
+
+    The race, in order: close() sets _closing, but the old reader is still blocked inside
+    recv(); connect() clears _closing and opens a fresh socket; only THEN does the old reader
+    wake with its socket error, see _closing is False, and conclude the connection has died -
+    failing every call in flight on a connection that is perfectly healthy and not its own.
+
+    Latent rather than live: nothing in the graph reconnects today (bridge_node connects each
+    client exactly once), which is the only reason it has never fired. It is guarded by a
+    generation number, so this stays true if reconnect ever becomes a real path.
+    """
+    first = FakeSidecar(mod)
+    c = attach(mod, first, patience=2.0)
+    stale_gen = c._generation
+
+    # Reconnect: the client is now on a different socket, with a different generation.
+    second = FakeSidecar(mod)
+    first.close()
+    _wire(c, second)
+    assert c._generation != stale_gen, "the helper must bump the generation, as connect does"
+
+    try:
+        # The old reader finally wakes and reports on a connection that is no longer current.
+        c._fail_all("reader stopped: [Errno 9] Bad file descriptor", stale_gen)
+
+        assert c._dead is None, "a stale reader condemned the live connection"
+        assert c.connected, "the live connection was marked disconnected by its predecessor"
+
+        # And it still actually works, which is the claim that matters.
+        threading.Thread(
+            target=lambda: (second.recv_request(),
+                            second.reply(second.requests[-1]["id"], {"ok": True})),
+            daemon=True).start()
+        assert c.call("ping") == {"ok": True}
+    finally:
+        c.close(); second.close()
+
+
+def test_the_current_reader_can_still_report_a_death(mod):
+    """The guard must not make the client unable to notice a genuine failure."""
+    fake = FakeSidecar(mod)
+    c = attach(mod, fake, patience=2.0)
+    try:
+        c._fail_all("reader stopped: the sidecar went away", c._generation)
+        assert c._dead is not None and not c.connected
+        with pytest.raises(mod.SimBridgeError):
+            c.call("ping")
     finally:
         c.close(); fake.close()
