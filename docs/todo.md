@@ -129,7 +129,7 @@ new service (452 frames, 0 dropped).
 chase camera still has no video *topic*. Nothing needs one now that recording is a service —
 the web console was the only consumer.
 
-### R-02 · Decouple the VLM from the core — **next**
+### R-02 · Decouple the VLM from the core — **done** *(2026-08-03)*
 
 Today `vlm_client` and `grounding` are launched unconditionally
 (`ros2_ws/src/bringup/launch/testbed.launch.py:50-58`) and their settings are core config —
@@ -145,6 +145,31 @@ the config file of the thing they installed.
 - `vlm_client` + `grounding` become `examples/vlm_navigation/`, run **after** the simulator is
   up, against the ROS 2 interface only — the same rule `examples/ros2_full_control.py` already
   follows.
+
+**Refined 2026-08-03, before writing any code.** Reading the actual subscriptions changed
+what this item is. The launch file is the *visible* coupling; the real one is the **topic
+namespace**:
+
+    control/offboard_node  subscribes to  /vlm/grounded_waypoint
+
+A drone simulator whose controller takes its "go here" input from a `/vlm/` topic is not
+decoupled, however few VLM nodes are running. So the first move is a rename to a neutral
+`/control/waypoint`, and only then does removing the nodes from the launch mean anything.
+Touches `grounding` (publisher), `control` and `episode_runner` (subscribers),
+`scripts/status.sh`, and two HTML docs.
+
+**And I have changed my mind about `evaluation`.** The entry below says `episode_runner`
+should go with the example. It should not: it starts and stops episodes and scores
+distance-to-goal from odometry, which is generic scenario running, not VLM work. What is
+VLM-specific is `vlm_client` (makes annotations) and `grounding` (annotation to waypoint).
+So the line is:
+
+| core | `carla_air_bridge`, `control`, `evaluation` (recorder + episode_runner) |
+| example | `vlm_client`, `grounding` |
+
+`episode_runner` keeps an optional `/vlm/annotation` subscription for step counting, and the
+recorder keeps one for its overlay. Both simply stay empty without a VLM, which is the
+correct behaviour for an optional input rather than a coupling.
 
 **Two decisions this forces, and neither is cosmetic:**
 
@@ -163,6 +188,34 @@ assume the current layout. The 40-episode results must reproduce afterwards.
 - **Verify:** `./scripts/bringup.sh` with no arguments brings up a simulator with **no VLM
   node running** and `ros2 node list` proves it; then the example is started separately and
   `cross_the_plaza` scores what it scored before. Re-run the E-01 sweep, not one seed.
+
+**Done.** `ros2 node list` after a bare `./scripts/bringup.sh`:
+
+    /carla_air_bridge  /episode_runner  /offboard_control  /recorder
+
+No `vlm_client`, no `grounding`. Then `./examples/vlm_navigation/run.sh --backend oracle`
+adds exactly those two, reading `examples/vlm_navigation/config/vlm.yaml` — confirmed live
+with `ros2 param get /grounding camera_pitch_deg` returning -28.6 from the example's own
+file, not the simulator's.
+
+**The topic rename was the substance.** `/vlm/grounded_waypoint` -> `/control/waypoint`
+across `grounding`, `control`, `episode_runner`, `status.sh` and three docs. Removing nodes
+from a launch file is cosmetic while the controller's "go here" input still sits in a `/vlm/`
+namespace.
+
+`--backend` and `--instruction` are gone from `bringup.sh`, but **accepted and redirected**
+rather than rejected — every doc and every finger in this project reached for them for
+months, so an "unknown argument" error would have been the wrong answer. `run.sh` likewise
+translates `--backend X` into the `backend:=X` that `ros2 launch` actually wants.
+
+`configs/testbed.yaml` no longer contains an Anthropic model name, which was the tell.
+
+**Scored, decoupled:** `cross_the_plaza` seed 1 -> **SUCCESS 18.0 m, 14 steps**, against a
+documented baseline of 18.6 m / 14 steps.
+
+- **Still owed:** the full E-01 sweep. **Attempted twice on 2026-08-03 and it failed both
+  times** — see E-06 below. One seed reproducing the baseline exactly remains good evidence
+  and not proof.
 
 ### R-03 · The web console talks ROS 2 only — **deferred** *(2026-08-03)*
 
@@ -227,10 +280,27 @@ shell on this machine, and the built-in default points at a directory that does 
 the real release is on the external drive. Every script that needed it was one un-exported
 variable away from failing, and `.release-path` is what fixes that here.
 
-- **Still unverified:** the clean-clone path, including the actual 6.85 GB download. Only a
-  fresh machine proves that, and this one already has everything.
+**Clean-tree install verified 2026-08-03, and it was broken.** Simulated a fresh checkout by
+copying every file `git` would carry (147 of them - tracked plus untracked-not-ignored, so
+no `.venv`, no `vendor/`, no build output) into an empty directory, then running
+`install.sh --skip-release` under `env -i` with nothing inherited.
 
-### R-07 · The offline suite dies in a ROS-sourced shell — **open**
+**Three dependencies were missing from `setup_env.sh`**, and none of it showed on this
+machine because it had acquired them outside the scripted path:
+
+| missing | consequence on a fresh machine |
+|---|---|
+| **PyYAML** | `apply_config.py` cannot read `configs/testbed.yaml`, and `bringup.sh` runs it FIRST — **the simulator could not start at all** |
+| **pytest** | the command `install.sh` prints on success, and that the README, quickstart and both guide tabs tell a new user to run next, failed with `No module named pytest` |
+| **av** (PyAV) | `h264.py` — opencv ships no libx264 (GPL vs Apache), so chase and episode recording were dead |
+
+Fixed in `setup_env.sh`. Re-verified on the same clean tree: `pytest tests/ -q` gives
+**125 passed, 1 skipped**, and `apply_config.py` renders.
+
+- **Still unverified:** the 6.85 GB download itself (`--skip-release` was used, since the
+  release is already on disk). Everything downstream of it now is.
+
+### R-07 · The offline suite dies in a ROS-sourced shell — **done** *(2026-08-03)*
 
 `./.venv/bin/python -m pytest tests/ -q` is the documented command, and it fails with
 `ModuleNotFoundError: No module named 'lark'` whenever the shell has sourced ROS — which is
@@ -249,7 +319,21 @@ Pre-existing, not introduced by the ROS-services work; found while adding
 - **Verify:** the documented command passes both in a clean shell and in one that has
   sourced ROS.
 
-### R-05 · Headless or windowed, from the config — **open**
+**Done.** A `pytest.ini` at the repo root disables the seven plugins ROS registers
+(`ament_copyright`, `ament_flake8`, `ament_lint`, `ament_pep257`, `ament_xmllint`,
+`launch_ros`, `launch_testing`). It has to live there rather than in a `conftest.py`, because
+plugin loading happens *before* collection.
+
+Verified in both shells with the documented command verbatim:
+
+    clean shell   117 passed, 1 skipped
+    ROS sourced   124 passed          (the 3.10 interpreter can reach `interfaces` via the
+                                       leaked PYTHONPATH, so test_interfaces runs too)
+
+The skip is `tests/test_interfaces.py`, which `importorskip`s the generated ROS messages —
+correct behaviour, not a gap.
+
+### R-05 · Headless or windowed, from the config — **half done, windowed blocked** *(2026-08-03)*
 
 `scripts/run_sim.sh:194` hardcodes `-RenderOffScreen`. A `simulator.display:` key selects
 `headless` (current behaviour, video via the web console) or `windowed` (an actual Unreal
@@ -265,6 +349,56 @@ actually drive, and GPU 0 is the operator's card.
 
 - **Verify:** both values start a working simulator; headless is unchanged and windowed
   produces a visible window without breaking the VRAM check.
+
+**The option exists; the windowed path does not work yet.** `simulator.display:
+headless | windowed`, with `run_sim.sh --display MODE` overriding for one run. Headless is
+unchanged and re-verified — ready in 5 s, 3240 MiB, hardware rendering confirmed.
+
+**Tested on a VIRTUAL screen rather than the operator's desktop**, which is what made it safe
+to try at all: `Xvfb :99 -screen 0 1280x720x24`, then `DISPLAY=:99 … --display windowed`.
+Result:
+
+- the process starts and **correctly pins to GPU 1** (1225 MiB against pid 176661, so the
+  GPU selection logic survives the mode change);
+- but it **never serves :2000 or :41451**, holds only ~1.2 GB against the ~3.3 GB a loaded
+  Town10HD needs, and writes a **0-byte `out/sim.log`** — this project's documented signature
+  for "rendering setup failed".
+
+Diagnosis: Xvfb is a plain software framebuffer with no Vulkan WSI, so the NVIDIA ICD has
+nowhere to create a swapchain. Nothing on this box bridges that gap — no VirtualGL, no
+`xf86-video-dummy` (there are no xorg driver modules at all).
+
+**Options, none of them free:**
+
+1. `DISPLAY=:0` against the operator's real desktop. Likely to work, but the window opens on
+   a screen driven by GPU 0 while the simulator renders on GPU 1, and it is a visible,
+   disruptive thing to do to someone's session. **Needs asking, every time.**
+2. ~~Install VirtualGL into the container, which bridges GPU rendering to a virtual X
+   screen.~~ **Ruled out 2026-08-03 — do not retry.** VirtualGL 3.1.4 ships exactly three
+   interposers (`libvglfaker.so`, `-opencl`, `-nodl`) and **all of them fake GLX/OpenGL**.
+   There is no Vulkan faker. Meanwhile the simulator binary is Vulkan-only:
+
+       strings CarlaUE4-Linux-Shipping | grep -c VulkanRHI   ->  108
+       strings CarlaUE4-Linux-Shipping | grep -c OpenGLDrv   ->    0
+
+   So VirtualGL would sit in a code path this binary never enters. (Upstream's launcher
+   scripts do mention `-opengl4`, which is what makes this look plausible from the outside —
+   but the shipped binary has no OpenGL RHI compiled in, so the flag has nothing to select.)
+   Checked before installing anything; the download was deleted unused.
+3. Leave windowed unsupported and say so in the config comment rather than shipping a mode
+   that fails with an empty log — which is precisely the failure this project has burned the
+   most time on.
+
+Currently option 3 is the state of the tree: the key exists, `windowed` refuses cleanly when
+`DISPLAY` is unset and prints the Xvfb recipe, but that recipe does not actually produce a
+working simulator here.
+
+**With option 2 ruled out, the real choice is 1 or 3.** Everything that could carry a Vulkan
+surface here belongs to the operator's session — `/tmp/.X11-unix/X0` and
+`/run/user/1000/wayland-0` are theirs — so any working `windowed` mode means rendering into
+the operator's desktop, and that is a per-run decision they have to make, not a default this
+project can ship. The `Xvfb` recipe in `run_sim.sh --help` should be corrected or removed:
+right now it suggests something that does not work.
 
 ### R-06 · Camera resolution, configurable — **mostly already true, needs a decision**
 
@@ -295,8 +429,8 @@ Two options, and this is a decision rather than code:
 
 1. ~~**R-04**~~ — **done 2026-08-03.**
 2. ~~**R-01**~~ — **done 2026-08-03**, `run_episode.py` included.
-3. **R-02** — the repositioning proper. **R-03 is deferred**, so this is the last big item.
-4. **R-07** whenever it annoys someone.
+3. ~~**R-02**~~ — **done 2026-08-03**. With R-03 deferred, the repositioning is complete.
+4. **R-07**, **R-05**, **R-06** — small and independent, in whatever order suits.
 4. **R-05** and **R-06** any time — small, independent, and neither blocks anything.
 
 Deliberately **not** started until the above lands: the camera-pitch decision, and V-01's
@@ -448,6 +582,51 @@ behind a `simGetImages` call.
 - **Verify:** points per second delivered, and whether RGB+depth capture regresses. Measure
   both routes before choosing; the AirSim one may still win on fidelity to a real airframe.
 
+### T-03 · Pedestrians spawn but do not move — **open** *(2026-08-03)*
+
+Spotted by the operator in a 40 s recording: 35 pedestrians in frame, not one of them
+walking. Cars drive normally.
+
+**Measured, not inferred.** `/sim/traffic_stats` now reports `walkers_moving` and
+`controllers` precisely so this is countable:
+
+    spawned=5 moving=4 walkers=24 walkers_moving=0 controllers=24
+
+Twenty-four walkers, twenty-four AI controllers, **zero movement over 8+ seconds**.
+
+**Ruled out, each by measurement:**
+
+| suspect | finding |
+|---|---|
+| controllers never attached | `controllers=24` — one per walker |
+| `start()` / `go_to_location()` never called | both are called for every controller (`world.py`) |
+| max speed left unset | **added** `set_max_speed(1.0-1.7 m/s)`, which CARLA's own `generate_traffic.py` does and this did not. Made no difference. |
+| navigation mesh missing from the build | `Content/Carla/Maps/Nav/Town10HD.bin` is present |
+| `get_random_location_from_navigation()` failing | returns varied valid points — 24 walkers spawned at 24 of them |
+| velocity reporting broken for kinematic actors | switched the metric to **displacement** between calls. Still zero, so they are genuinely stationary. |
+
+**Prime remaining suspect: the client/server version mismatch.** The sidecar warns on every
+connect and it has been treated as noise:
+
+    Client API version     = aa9c92b
+    Simulator API version  = adaf011-dirty
+
+CARLA-Air is a fork. If its server's walker-controller RPC has drifted from the shipped
+client, `start()` and `go_to_location()` would be accepted and do nothing — which is exactly
+the observed behaviour, and would explain why every client-side check passes.
+
+**Why it matters beyond the footage.** `traffic_walkers` is a scenario parameter, and every
+episode has been requesting 19-20 of them. Stationary pedestrians are street furniture: they
+change what the camera sees but not how the scene behaves, so any claim that a scenario has
+"live traffic" is currently only half true. The E-01b numbers are unaffected (nothing was
+scored on pedestrian motion) but the scenario descriptions overstate what is happening.
+
+- **Next:** try a walker driven directly by `apply_batch`/`WalkerControl` instead of the AI
+  controller. If manual control moves them, the AI controller is the broken half and the
+  navigation server is the thing to look at; if it does not, walker physics in this build is.
+- **Verify:** `walkers_moving` is a substantial fraction of `walkers` for 30 s, and it is
+  visible in a recording.
+
 ### S-03 · Segmentation is published but disabled — **open**
 
 `graph.carla_air_bridge.publish_segmentation: false` in `configs/testbed.yaml`. It works (15–21 classes measured)
@@ -459,7 +638,38 @@ makes it affordable to leave on.
 
 ## Evaluation
 
-### E-01 · Turn single-seed markers into success rates — **done** *(2026-08-01)*
+### E-01b · Re-baseline after the reset change — **done** *(2026-08-03)*
+
+The first 40-episode sweep to run end to end since 2026-08-01. Zero sidecar deaths, zero node
+deaths, zero collisions. `out/sweep-20260803-173125/summary.json`.
+
+| | 2026-08-01 | 2026-08-03 |
+|---|---|---|
+| geometric | 0/20 | **0/20** — exact |
+| oracle | 15/20 | **14/19** |
+
+Oracle per scenario: `cross_the_plaza` 5/5 (median 18.4 m), `follow_the_avenue` 5/5 (19.3 m),
+`rain_descent` 4/5, `avoid_the_block` 0/4 — the last being the scenario working, since a
+154 m tower sits on the straight line.
+
+**The headline reproduces:** the oracle solves the three open scenarios, the geometric
+baseline solves none, nothing collides. Decoupling the VLM (R-02) did not change flight
+behaviour.
+
+**THESE NUMBERS SUPERSEDE 2026-08-01 AND ARE NOT COMPARABLE WITH IT.** The reset change moved
+the measurement surface: start-pose error dropped from ~9 m to ~3 m, because the aircraft is
+now placed rather than flown in and settled. Do not quote the two sets side by side.
+
+**Two anomalies, recorded rather than smoothed:**
+
+- **`avoid_the_block` produced 4 results, not 5.** Seed 5 started and no result landed before
+  the deadline, so the oracle denominator is 19. Worth finding before anyone trusts a count
+  from that scenario.
+- **`rain_descent` went 5/5 -> 4/5**, failure mode `model_declared_done` — the oracle stopped
+  early rather than timing out. Most likely the tighter start poses, showing up first in the
+  scenario with the smallest margin (median final 14.8 m against a 20 m radius).
+
+### E-01 · Turn single-seed markers into success rates — **done** *(2026-08-01)*, superseded by E-01b
 
 40 episodes, 5 seeds x 4 scenarios x 2 backends, on the 5060 Ti. **oracle 20/20 (100%),
 geometric 0/20 (0%), zero collisions.** Every geometric failure was `max_steps` — it wanders
@@ -520,15 +730,168 @@ pixel can still arrive as an integer rather than something regexed out of prose)
   batching either — so re-check that a decision still fits the 7.5 s per-step budget before
   reading anything into the success rate.
 
+### E-06 · The sidecar dies mid-sweep — **done** *(2026-08-03)*
+
+Two attempts at the 40-episode sweep on 2026-08-03, both killed the same way:
+
+    terminate called after throwing an instance of 'carla::client::TimeoutException'
+      what():  time-out of 30000ms while waiting for the simulator
+
+CARLA raises this from a C++ thread where nothing catches it, so it calls `terminate()` and
+takes the entire sidecar with it. The ROS side sees only `[Errno 32] Broken pipe`, which
+names neither the cause nor the process that died.
+
+**Attempt 1** reached 2 of 20 oracle episodes before dying on the third `reset`, then ground
+on for 18 more episodes against a dead sidecar producing empty log files.
+**Attempt 2**, with the timeout raised 30 s -> 120 s, still died — so the simulator is wedging
+for over two minutes, and this is not a too-tight timeout.
+
+**Two fixes landed anyway, because both were real:**
+
+- `SimBridge.CARLA_TIMEOUT_S` is 120 s (was 30 s). Verified the constructor takes it —
+  `main()` passes no override. It did not prevent the crash, but 30 s was too tight
+  regardless: a healthy call never reaches the ceiling, so raising it costs nothing.
+- `run_sweep.sh` now checks the sidecar socket before each scenario and abandons that
+  backend loudly instead of producing an hour of empty logs.
+
+**Diagnosed 2026-08-03.** Six controlled runs, one variable at a time:
+
+| run | change | result |
+|---|---|---|
+| A | baseline, 5 seeds | died at seed 2 — `reset: IOLoop is already running` |
+| B | `reset` on its own client | seeds 1-3 passed, seed 4 timed out |
+| C | `--no-chase` | died at seed 2 — **worse**, so recording is not the cause |
+| D | lidar disabled | died at seed 2 — not the cause either |
+| E | **six resets, nothing else running** | 26.8 s -> 60.1 s -> **hung** |
+| F | E again, polling suspended during reset | no hang; resets 3-6 steady at ~30 s |
+
+**Run E is the finding.** No VLM, no episode, no offboard target — just `reset` repeated, with
+only this bridge's own polling alongside it. AirSim's `reset()` tears the vehicle down and
+rebuilds it, and every RPC arriving during that window competes with it: 20 Hz odometry,
+8 Hz images, 5 Hz sensors, 10 Hz lidar, 1 Hz world tick. The sweep was never the problem; it
+was just the first thing to call `reset` forty times.
+
+**Three fixes, each verified:**
+
+1. **`reset` was racing telemetry on one msgpack-rpc connection** — it drove `self.vehicle`
+   (the telemetry client) under `slow_lock` while FAST `state` drove the same socket under
+   `fast_lock`. Now on `self.control`, in the CONTROL class. This is the **fifth** instance of
+   "lock classes guard dispatch, not sockets", so the rule is now a test —
+   `tests/test_sidecar_locks.py` parses `server.py` and asserts every method dispatches under
+   the lock owning the client it touches. It immediately found **two more latent instances**
+   (`describe` and `ground` both drive the media client from the slow class); `ground` takes a
+   real depth capture, so that one was a live race.
+2. **The bridge now suspends its own polling while a reset is in flight** (`_resetting`,
+   cleared in `finally` so a failed reset cannot mute the graph permanently). This is what
+   removed the hang.
+3. **A malformed reply killed the whole node.** Every timer callback guarded its RPC and then
+   indexed the reply *outside* the guard, so one error-shaped dict raised `KeyError:
+   'position'` — and rclpy does not catch callback exceptions, so the executor propagated it
+   and `bridge_node` exited(1) mid-run. The guards now cover the unpacking too.
+
+**Residual, and the reason this is still open:**
+
+- The **first one or two resets after bringup still fail** with a ~60 s timeout, then it
+  settles. Something is not ready when the graph reports ready.
+- A reset costs **~30 s steady-state**, which at 40 episodes is 20 minutes of pure setup.
+- There is a **60 s** timeout in play that is neither the 120 s CARLA ceiling nor anything in
+  this repo — most likely msgpack-rpc's own default. Worth finding.
+
+**Narrowed to one call, 2026-08-03.** After the async-correlation work (below), the progress
+instrumentation named the slow step. `reset` announces `"sim-reset"`, calls AirSim's
+`client.reset()`, then announces `"placing"`. On the second reset the first frame arrives at
+t=0 and **nothing follows for 60 s** — so execution is inside that one AirSim call.
+
+    reset 1:   5.5 s   ok
+    reset 2:  60.0 s   no progress after "sim-reset"
+    reset 3:  60.0 s   same, then the sidecar died
+
+**AirSim's `reset()` is pathologically slow on repeat.** Not the flight back (we teleport
+now), not CARLA, not the socket layer.
+
+**The way out is probably to stop calling it.** `simSetVehiclePose` already does the
+positioning. `reset()` remains only for three side effects, and each may have a cheaper
+equivalent:
+
+| side effect | possible replacement |
+|---|---|
+| clears the latched collision flag | unknown — needs checking, and it is the load-bearing one |
+| cancels in-flight commands | a `hold()` / `cancelLastTask()` before repositioning |
+| disarms and drops API control | explicit `armDisarm(False)` + `enableApiControl(False)` |
+
+If all three can be done without `reset()`, the pathological call leaves the episode path
+entirely rather than being waited on. **That is the next experiment**, and it is cheap: six
+resets with `reset()` removed, watching whether the collision flag survives a crash.
+
+**What the async work fixed along the way** (kept, and worth keeping regardless):
+`bridge_node` deaths went to **zero**; failures are named (`no reply and no progress for
+60s`) rather than `KeyError`/`Broken pipe`; a dead sidecar is detected in **0.0-0.8 s**
+instead of a full timeout; and stream desync is impossible by construction. Five offline
+regression tests in `tests/test_rpc_correlation.py`, and the old design **hangs** against
+them. Written up in [`rpc-path.html`](rpc-path.html).
+
+**SOLVED. `client.reset()` was the entire problem.**
+
+`reset` no longer calls it. What it was actually being used for is done explicitly:
+
+| side effect | replacement |
+|---|---|
+| cancel in-flight commands | `cancelLastTask()` |
+| drop API control so the teleport is not fought | `armDisarm(False)` + `enableApiControl(False)` |
+| clear the latched collision flag | **a collision epoch** |
+
+The collision one is the substantive change. AirSim latches `has_collided` until a full sim
+reset, which made that minute-long call load-bearing **for scoring**. `Vehicle` now snapshots
+`time_stamp` at reset and reports a collision only if newer. That is better than clearing:
+the epoch is explicit and per-vehicle, not a side effect of a global operation. The epoch is
+taken AFTER settling, because a hard reset restarts sim time and an epoch captured before it
+would sit in the future and mask every real collision.
+
+The old path survives as `hard=True`, for when the simulator is already misbehaving.
+
+**The same six-reset harness across the whole investigation:**
+
+| run | setup | resets | outcome |
+|---|---|---|---|
+| E | fly-in, polling live | 26.8s -> 60.1s -> **hung** | 0/6, sidecar died |
+| F | polling suspended during reset | 60, 59, 30, 27, 32, 27s | 4/6 |
+| G | teleport instead of flying | 5.5, 5.6, 60, 60, fail, fail | 2/6, sidecar died |
+| **H** | **no `client.reset()`** | **2.8, 2.9, 2.8, 2.8, 2.9, 2.9s** | **6/6**, zero deaths |
+
+**~10x faster and stable.** Collision epoch verified end to end: clean after reset, flew the
+aircraft into the ground and it was detected as `Road_Road_Town10HD19`, then a soft reset
+cleared it — all without `client.reset()`.
+
+**Everything else found on the way stayed**, because each was independently real: `reset`
+moved off the telemetry client (the 5th "lock classes guard dispatch, not sockets"), polling
+suspended during reset, timer callbacks guarding their unpacking, and the async RPC
+correlation. None of them fixed this on their own; the last one is what produced the
+progress instrumentation that named the culprit.
+
+**Not yet known:**
+
+- **Contention is a suspect, not a conclusion.** Both runs happened while the operator's
+  GPU 0 workload sat at 86-88% with a load average around 4. The simulator renders on GPU 1
+  and was unaffected on VRAM, but CARLA's RPC is CPU-side.
+- **What the third reset does differently** from the first two. It is reproducible at that
+  point, which is a strong lead.
+- Whether a `--no-chase` sweep survives — 30 fps of 720p H.264 encoding runs on the same box
+  and is the most obvious load that a single-episode smoke test does not exercise.
+
+- **Verify:** 40 episodes complete with no `terminate` in `out/sim_bridge.log`, and the
+  result matches the E-01 baseline (oracle 15/20, geometric 0/20, zero collisions).
+
 ### E-02b · The other three scenarios still have nothing in the way — **open**
 
 `--check` reports `cross_the_plaza`, `follow_the_avenue` and `rain_descent` as CLEAR: a
 straight line solves all three, and the 100% oracle rate on them measures the harness, not the
 scenarios. That is honest as a baseline and thin as a benchmark.
 
-Deliberately left alone for now — changing them would invalidate the E-01 numbers that the
-first real VLM backend (V-01) is meant to be compared against. Revisit once there is a model
-in the loop and a reason to want a harder set.
+~~Deliberately left alone for now — changing them would invalidate the E-01 numbers~~
+**Unparked 2026-08-03.** That hold was on the E-01 numbers, and E-01b has just replaced them
+with a fresh sweep. Changing the scenarios now costs one re-run, not a lost baseline — so
+this is the item that actually moves the research question, since three of four scenarios are
+still solvable in a straight line and therefore test the harness rather than navigation.
 
 - **Verify:** same as E-02 — the oracle's rate drops, and `--route` shows a detour ratio
   under ~2x so the scenario still matches its own instruction.
@@ -766,6 +1129,48 @@ in the same UE4 process and pushes frames asynchronously. Measured: 1102 frames 
   episode across both views, ~1.6 GB for a 20-episode sweep. Installing ffmpeg in the
   container would fix it and is a container change, so it has not been done.
 
+### T-04 · One command from nothing to a video — **done** *(2026-08-04)*
+
+> **Filed after the fact.** Same wrong order as E-05, and recorded rather than backdated: the
+> script was written and run before this entry existed.
+
+Producing one demo video took five commands across three terminals — `bringup.sh`,
+`vlm_navigation/run.sh`, `run_episode.sh`, `combine_views.py`, `stop.sh --all` — and the
+*fifth* is the one that gets forgotten, which is exactly the failure rule 1 exists to prevent.
+A leftover graph stacks on the next bringup and two controllers fight over the aircraft while
+`ros2 node list` still looks correct.
+
+`scripts/demo.sh` runs the sequence and tears it down from an `EXIT INT TERM` trap, so a
+Ctrl-C mid-flight still stops the simulator instead of leaving 3.3 GB of VRAM held. It waits
+on the `hardware rendering confirmed` line rather than sleeping a fixed interval, so it cannot
+silently hand you a software-rasterised run (rule 5). It sets no `ROS_DOMAIN_ID` of its own —
+each child already exports `${TESTBED_ROS_DOMAIN_ID:-42}`, and a second place to set it is a
+second place for it to be wrong.
+
+- **Verify:** one end-to-end run producing a playable file, then `status.sh` clean. Done
+  2026-08-04: `street_level` seed 5, claude backend → `out/demo/street_level-s5-a18931.mp4`,
+  1920x1080, 703 frames, 35.1 s, 16.3 MB, chase 0 dropped. Afterwards all process counts 0,
+  GPU 1 back to 33 MiB, no sim ports.
+- **Not a navigation result.** That run scored 0/1 (`model_declared_done`, 106.5 m short after
+  8 steps) — one seed, consistent with the street-level failures already recorded, and not a
+  success rate. It says the wrapper works, nothing about the model.
+- **Known limit:** the composited output inherits the unresolved chase/onboard sync (T-02);
+  `combine_views.py` rescales from the `.timing.json` sidecars, which reduces the drift but has
+  not been shown to remove it.
+
+Auditing this against `.ai/AGENTS.md` and then interrupting a live run turned up three defects,
+all of them in the teardown path rule 1 is about:
+
+- **`demo.sh` ran `stop.sh --all` but not `status.sh`** — the half that reports what was
+  *signalled*, not what is actually *left*. Those disagree exactly when something ignores TERM.
+- **SIGINT tore the stack down and then continued**, flying step 3 against a simulator that no
+  longer existed and running the teardown twice. `EXIT` now does the work; `INT`/`TERM` exit
+  130 and fall through to it, with a `CLEANED` guard.
+- **`status.sh` checked GPU 0 unconditionally** while the shipped config renders on GPU 1, so
+  it warned SOFTWARE RENDERING on every correct run — and, with the cards reversed, would have
+  stayed silent through a real one. It now resolves the same target `run_sim.sh` does. Details
+  in `docs/worklog/2026-08-04-one-command-demo.md`.
+
 ### E-03 · Record an MCAP bag per episode — **open**
 
 *(Partly overtaken by E-05: "a failed episode leaves a JSON and nothing to look at" is no
@@ -900,6 +1305,55 @@ were never committed to — in practice, expect to rewrite them. Worth keeping i
 **Meanwhile everything stays inside the distrobox, which is where it already works.**
 
 ## Housekeeping
+
+### H-03 · `stop.sh --all` reported success without stopping the simulator — **done** *(2026-08-03)*
+
+The teardown script gave the ROS processes a TERM/TERM/KILL escalation and the simulator a
+**single TERM with no wait and no check**, then printed `stopped: graph, sidecar, simulator`
+unconditionally.
+
+Observed twice while debugging E-06: the sidecar had already died, `stop.sh --all` claimed
+success, and the simulator was still holding **3.5 GB of VRAM on GPU 1** until
+`run_sim.sh --kill` was run by hand. Unreal does not always go down in the instant between
+the `pkill` and the `echo`.
+
+**This is rule 1's enforcement mechanism**, so a version that reports what it *attempted*
+rather than what it *achieved* is worse than no script — every "everything stopped" in this
+project's worklogs rests on it.
+
+Now: the same TERM/TERM/KILL escalation for the simulator, a `pgrep -x` check afterwards,
+an honest message (`simulator stopped` vs `SIMULATOR STILL RUNNING`), stragglers listed with
+their command lines, and a **non-zero exit** if anything survived — so a caller can tell.
+
+Verified against the exact failing case — simulator up with no sidecar and no graph:
+3264 MiB -> 33 MiB in 2.0 s, `rc=0`, message truthful.
+
+**And it was stopping less than it claimed in a second way.** Auditing what "everything"
+covered found four things it had never matched: the VLM example's `ros2 launch` (its *nodes*
+matched, its launcher did not), the **web console** — which can start a simulator by itself —
+`run_episode`, and `run_sweep`, which brings the simulator back up between backends.
+
+Command-line patterns alone could not fix it: the console is normally started as
+`./.venv/bin/python webui/server.py`, whose command line contains no absolute path, and an
+unanchored pattern would reach drone-sim in the same container. **Ownership is now proven
+rather than guessed** — a candidate is ours only if `/proc/<pid>/cmdline` mentions `$PROJ` or
+`/proc/<pid>/cwd` is inside it. Neither can be spoofed by a relative invocation, and neither
+can match a project living somewhere else.
+
+`stop.sh` also skips its own process ancestry, so a `stop.sh` called from inside
+`run_sweep.sh` no longer kills the sweep that called it — and can never take out the
+operator's shell.
+
+`status.sh` now reports the same set, because a status that checks less than stop removes
+will report "clean" while something is still up.
+
+**It found a real orphan immediately:** a web console from an earlier session, started with
+`--bind` for the mesh, still listening days later. `status.sh` had shown every count 0 that
+whole time.
+
+Full-stack verification — simulator, sidecar, core graph, VLM example and web console all
+running, 11 processes: **one `stop.sh --all`, 4.2 s, everything gone.** No CarlaUE4, no web
+port, no sim port, GPU 1 back to 33 MiB, `rc=0`.
 
 ### H-01 · Maintainer email — **done** *(2026-08-01)*
 

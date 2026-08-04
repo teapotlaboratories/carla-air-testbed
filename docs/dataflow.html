@@ -443,7 +443,7 @@
 <path class="wire" d="M450,372 L710,372" marker-end="url(#ah2)"/>
 <text class="t-wire" x="580.0" y="365" text-anchor="middle">/vlm/annotation</text>
 <path class="wire" d="M710,414 L845,414" marker-end="url(#ah2)"/>
-<text class="t-wire" x="777.5" y="407" text-anchor="middle">/vlm/grounded_waypoint &mdash; NED</text>
+<text class="t-wire" x="777.5" y="407" text-anchor="middle">/control/waypoint &mdash; NED</text>
 <rect class="loopbox" x="40" y="432" width="850" height="60" rx="3"/>
 <text class="t-grp" x="52" y="448" style="fill:var(--ground)">LOOP &middot; 10 Hz UNTIL THE NEXT ANNOTATION</text>
 <path class="wire" d="M845,470 L70,470" marker-end="url(#ah2)"/>
@@ -493,7 +493,7 @@
               <td>bridge &rarr; grounding, vlm_client</td><td class="num">20.0 Hz</td></tr>
           <tr><th>/vlm/annotation</th><td><code>interfaces/Annotation2D</code></td>
               <td>vlm_client &rarr; grounding, recorder</td><td class="num">0.9 Hz</td></tr>
-          <tr><th>/vlm/grounded_waypoint</th><td><code>interfaces/GroundedWaypoint</code></td>
+          <tr><th>/control/waypoint</th><td><code>interfaces/GroundedWaypoint</code></td>
               <td>grounding &rarr; control</td><td class="num">0.9 Hz</td></tr>
           <tr><th>/fmu/in/trajectory_setpoint</th><td><code>px4_msgs</code></td>
               <td>control &rarr; bridge</td><td class="num">10.0 Hz</td></tr>

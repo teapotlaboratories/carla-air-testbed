@@ -60,19 +60,35 @@ shell profile:**
 Verify without touching the simulator:
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q     # expect: 117 passed
+./.venv/bin/python -m pytest tests/ -q     # expect: 117 passed, 1 skipped
 ```
 
 Why a separate Python: the CARLA-Air client is an ABI-tagged `cpython-310` extension and
 ROS 2 Jazzy is 3.12. Neither interpreter can load the other's C extensions, so the project
 is deliberately two processes. See [`docs/architecture.md`](docs/architecture.md).
 
-## 2. Run the example
+### In a hurry? One command
 
-**Terminal 1 — bring up the simulator and the whole ROS 2 graph:**
+If all you want is to watch a VLM fly and get a video out of it, skip to the end:
 
 ```bash
-./scripts/bringup.sh --backend oracle
+./scripts/demo.sh                      # street_level, claude backend, seed 5
+./scripts/demo.sh --scenario cross_the_plaza --backend geometric --seed 2
+```
+
+It brings the simulator up, starts the VLM, flies one episode, combines the chase camera with
+the drone's own view and the depth buffer into `out/demo/<episode>.mp4`, and **stops
+everything on the way out** — including on Ctrl-C. Roughly 5 minutes end to end.
+
+The rest of this guide is the same thing taken apart, which is what you want the first time
+something does not work.
+
+## 2. Start the simulator
+
+**Terminal 1.** This is the whole product: a drone, a city, and a ROS 2 interface.
+
+```bash
+./scripts/bringup.sh --config configs/testbed.yaml
 ```
 
 Wait for these three lines (~90 s, mostly Unreal loading the map):
@@ -90,10 +106,55 @@ The index is whichever card `simulator.gpu` asked for — `1` in the shipped con
 GPU 0 is the workstation's display card. **On a single-GPU machine set `simulator.gpu: 0`**
 (or `null` to let the driver choose) before the first run.
 
-**Terminal 2 — fly a scored episode:**
+**Nothing is flying yet, and nothing is looking at the camera.** What you have is four nodes:
 
 ```bash
-cd carla-air_testing
+ros2 node list        # needs ROS_DOMAIN_ID=42
+# /carla_air_bridge  /offboard_control  /episode_runner  /recorder
+```
+
+That is already enough to fly it from your own code — takeoff, waypoints, attitude, and every
+sensor, all over ROS 2:
+
+```bash
+python3 examples/ros2_full_control.py     # takeoff -> waypoint -> attitude -> land
+python3 examples/ros2_world_control.py    # traffic, weather, teleport, teardown
+```
+
+**If that is what you came for, you are done.** Steps 3 and 4 are one example of what to
+build on top.
+
+## 3. Start the VLM engine — optional
+
+**Terminal 2.** The See-Point-Fly loop: look at the frame, point at a pixel, turn it into a
+waypoint. It is an *example*, not part of the simulator — it starts separately and talks only
+to the public ROS 2 interface, exactly as your own navigation code would.
+
+```bash
+./examples/vlm_navigation/run.sh --backend oracle
+```
+
+This adds two nodes and nothing else:
+
+```
+/vlm_client   frame + instruction -> a pixel        (/vlm/annotation)
+/grounding    pixel + depth       -> an NED point   (/control/waypoint)
+```
+
+Backends: `oracle` (handed the goal — a diagnostic, not a competitor), `geometric` (steers
+toward the most open depth column), `claude`, `mock`, `scripted`. Config is
+[`examples/vlm_navigation/config/vlm.yaml`](examples/vlm_navigation/config/vlm.yaml) — the
+simulator's own config knows nothing about any of it.
+
+**Skip this step entirely** if you are driving the aircraft yourself. Nothing in step 2
+depends on it.
+
+## 4. Fly a scored episode
+
+**Terminal 3.** Needs step 3 running — an episode scores whatever is producing waypoints, so
+with no engine the aircraft simply sits there.
+
+```bash
 ./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
 ```
 
@@ -101,18 +162,20 @@ Expected output:
 
 ```
 === cross_the_plaza seed=1 ===
-  traffic: {'vehicles': 15, 'walkers': 9}
-  start pose: [113.0, -167.1, -55.7] (commanded [107.6, -159.4, -55.0], error 9.4 m)
-  episode running [cross_the_plaza-s1-331669] — 'fly across the open plaza and stop above the far side'
-    alt  54.4 m  pos [122.1, -173.7, -54.4]
-    alt  54.6 m  pos [145.8, -168.5, -54.6]
-    alt  54.9 m  pos [169.6, -163.3, -54.9]
-  -> SUCCESS  18.6 m from goal, 14 steps
+  traffic: 30 vehicles, 19 walkers
+  start pose: [112.7, -167.1, -55.8] (commanded [107.6, -159.4, -55.0], error 9.3 m)
+  episode running [cross_the_plaza-s1-48ec6f] — 'fly across the open plaza and stop above the far side'
+    alt  54.8 m  pos [122.8, -173.4, -54.8]
+    alt  54.9 m  pos [146.5, -168.3, -54.9]
+    alt  55.0 m  pos [170.3, -163.1, -55.0]
+  -> SUCCESS  18.0 m from goal, 14 steps
 
 === cross_the_plaza: 1/1 succeeded (100%) ===
 ```
 
-The result lands in `out/episodes/<episode_id>.json`.
+The result lands in `out/episodes/<episode_id>.json`. Run it again with different `--seeds`
+or `--scenario` — steps 2 and 3 stay up, and that is the point of the split: 90 s of Unreal
+loading once, not once per episode.
 
 > **Why a wrapper and not `./.venv/bin/python` here?** `run_episode.py` is a plain ROS 2
 > client — it drives the simulator entirely through services and topics, so it runs under
@@ -123,7 +186,7 @@ The result lands in `out/episodes/<episode_id>.json`.
 **A ~9 m start-pose error is normal.** The aircraft relaxes about 4 m after reaching a
 setpoint; that is the station-keeping floor, which is why success radii are 20 m.
 
-## 3. Stop — every time
+## 5. Stop — every time
 
 ```bash
 ./scripts/stop.sh --all
@@ -135,7 +198,7 @@ a leftover graph *stacks* on the next bringup — two controllers then fight ove
 while `ros2 node list` still looks correct. See
 [`.ai/AGENTS.md`](.ai/AGENTS.md#1-stop-every-process-when-a-flight-test-is-done).
 
-## 4. Change something
+## 6. Change something
 
 Everything is configured in **one file**: [`configs/testbed.yaml`](configs/testbed.yaml). Its
 three sections are named for **when a change takes effect**, which is the difference that
@@ -146,6 +209,7 @@ actually costs you time:
 | `simulator:` | map, GPU, camera buffers, GPS origin, clock speed | restart the simulator, ~60 s |
 | `sensors:` | every sensor on the aircraft, both simulators | restart the sidecar, ~5 s |
 | `sidecar:` | the chase camera | restart the sidecar, ~5 s |
+| `sidecar.traffic:` | cars, pedestrians, walking speed | **live** — re-read on every 1 Hz tick |
 | `graph:` | rates, backend, controller limits, recording | **live** — `ros2 param set` |
 
 Try it — put the aircraft somewhere else in the world:
@@ -160,9 +224,41 @@ simulator:
 ```
 
 ```bash
-./scripts/bringup.sh --backend geometric      # renders the config, then starts
+./scripts/bringup.sh --config configs/testbed.yaml                          # renders the config, then starts
+./examples/vlm_navigation/run.sh --backend geometric
 ros2 topic echo /fmu/out/sensor_gps --once    # now reports a London coordinate
 ```
+
+### Traffic, and a config you can edit while it runs
+
+`sidecar.traffic:` is re-read on every spawn *and* on every 1 Hz steering tick, so editing it
+changes pedestrians that are **already walking**, within a second, with no restart:
+
+```yaml
+sidecar:
+  traffic:
+    vehicles: 15
+    walkers: 10
+    radius_m: 70.0          # cluster radius around the spawn point
+    walker_speed_min: 1.0   # m/s — a stroll
+    walker_speed_max: 1.7   # a brisk walk
+    walker_arrive_m: 3.0    # how close counts as arrived
+    walker_roam_m: 80.0     # how far the next destination may be
+```
+
+Verify it live — set both speeds to `0.0`, save, and watch:
+
+```bash
+ros2 topic echo /sim/traffic_stats     # walkers_moving drops to 0 within ~1 s
+```
+
+Counts here are **defaults**. A scenario's `traffic_vehicles` / `traffic_walkers` and an
+explicit `/sim/spawn_traffic` call both override them.
+
+> **Ask for more vehicles than the radius can hold and you get map-wide traffic.** Town10HD
+> has ~45 spawn points within 70 m of the plaza; request 60 and the sidecar falls back to
+> spreading them across the whole map — and says so in the service reply. An aircraft over an
+> empty street usually means this.
 
 ### Adding a sensor
 
@@ -218,7 +314,11 @@ Try the baseline and see the contrast:
 
 ```bash
 ./scripts/stop.sh
-./scripts/bringup.sh --backend geometric
+# terminal 1
+./scripts/bringup.sh --config configs/testbed.yaml
+
+# terminal 2
+./examples/vlm_navigation/run.sh --backend geometric
 # then, in terminal 2:
 ./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
 ```
@@ -231,6 +331,9 @@ Other things to try:
 
 # record a flight video (out/flight.mp4)
 ./.venv/bin/python scripts/record_flight.py 60
+
+# the same, but with the chase camera and depth composited in, and cleaned up afterwards
+./scripts/demo.sh --scenario follow_the_avenue --backend geometric
 
 # is the simulator still behaving? ~15 min. p06, p07 and p09 are EXPECTED to fail.
 ./scripts/run_conformance.sh

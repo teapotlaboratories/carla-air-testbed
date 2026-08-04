@@ -7,7 +7,10 @@ where, the measured numbers, and the traps.
 `carla-air_testing` is a **VLM navigation testbed over ROS 2** on CARLA-Air v0.1.7 — the
 See-Point-Fly loop (*frame → 2D annotation → 3D displacement → velocity setpoint*) against a
 photorealistic city, headless, no containers. It runs on the `carbonite` workstation inside
-the `carla-air_testing` container (2 GPUs). It is an **integration** project: changes are
+a podman container **named `drone-sim`** (2 GPUs) — *not* a `carla-air_testing` container, as
+this line claimed until 2026-08-03. **That is why `pkill` here can kill the sibling project's
+nodes: they are in the same container, not merely on the same machine.** Verify with
+`grep name= /run/.containerenv` rather than assuming. It is an **integration** project: changes are
 judged by a simulator run, not by a clean build.
 
 **It is not `drone-sim`** — that sibling project on the same machine owns the real hardware

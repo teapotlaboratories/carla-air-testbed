@@ -3,12 +3,13 @@
 A VLM navigation testbed over ROS 2, on CARLA-Air. Two processes, one ROS 2 graph, and a
 deliberate seam between them.
 
-> **This document describes what runs today.** As of 2026-08-03 the project is being
-> repositioned into *a ROS 2-driven drone simulator* with VLM navigation as an example on top
-> — see [`todo.md` → Repositioning](todo.md#repositioning--a-drone-simulator-first-a-vlm-testbed-second).
-> Two things below are known to be on the wrong side of that line and are called out where
-> they appear: `vlm_client` and `grounding` launch as part of the core graph, and the web
-> console commands the aircraft over the sidecar socket instead of ROS 2.
+> **This document describes what runs today.** The project is *a ROS 2-driven drone
+> simulator*; VLM navigation is an example on top of it — see
+> [`todo.md` → Repositioning](todo.md#repositioning--a-drone-simulator-first-a-vlm-testbed-second).
+> `bringup.sh` starts the bridge, the controller, the episode runner and the recorder, and
+> **no node that interprets a camera**. One thing is still on the wrong side of that line:
+> the **web console** commands the aircraft over the sidecar socket instead of ROS 2
+> (R-03, deferred).
 
 ```
 ┌─ Python 3.10 ────────────────┐          ┌─ Python 3.12 / ROS 2 Jazzy ──────────────────┐
@@ -18,16 +19,19 @@ deliberate seam between them.
 │    :41451 AirSim RPC         │          │     /camera/rgb/image_raw         2.7 Hz     │
 │         ▲                    │          │     /camera/depth/image_raw                  │
 │         │ carla + airsim     │          │           │                                  │
-│  sim_bridge/server.py        │          │           ▼                                  │
-│    ├─ telemetry AirSim client│◄────────►│   vlm_client   ── /vlm/annotation   0.9 Hz    │
-│    └─ media AirSim client    │  UDS +   │           │       (pluggable backend)         │
-│         Vehicle · Camera     │ msgpack  │           ▼                                  │
-│         World  (traffic,     │  two     │   grounding ── /vlm/grounded_waypoint         │
-│                weather)      │  conns   │           │       (pixel + depth → NED)       │
-│                              │          │           ▼                                  │
-└──────────────────────────────┘          │   control ── /fmu/in/trajectory_setpoint 10Hz │
-                                          │           │                                  │
-                                          │   evaluation ── /episode/{status,result}      │
+│  sim_bridge/server.py        │          │     /sim/reset_vehicle  (services)           │
+│    ├─ telemetry AirSim client│◄────────►│     /sim/spawn_traffic · set_weather         │
+│    ├─ media AirSim client    │  UDS +   │           │                                  │
+│    ├─ control AirSim client  │ msgpack  │           ▼                                  │
+│    └─ world AirSim client    │  four    │   control ── /fmu/in/trajectory_setpoint 10Hz │
+│         Vehicle · Camera     │  conns   │        ▲  │                                  │
+│         World  (traffic,     │          │        │  ▼                                  │
+│                weather)      │          │   evaluation ── /episode/{status,result}      │
+└──────────────────────────────┘          └────────┼─────────────────────────────────────┘
+                                                   │  /control/waypoint
+                                          ┌────────┼─────────────────────────────────────┐
+                                          │  examples/vlm_navigation  (NOT the simulator) │
+                                          │   vlm_client ─ /vlm/annotation ─ grounding    │
                                           └──────────────────────────────────────────────┘
 ```
 
