@@ -38,8 +38,21 @@ export UV_PYTHON_INSTALL_DIR="$PROJ/vendor/python"
 #   ModuleNotFoundError: No module named 'numpy'      (in airsim/utils.py)
 #   ModuleNotFoundError: No module named 'setuptools'
 # Install both first, then airsim with --no-build-isolation.
+# PyYAML, PyAV and pytest are NOT optional extras, whatever their names suggest:
+#
+#   PyYAML  scripts/apply_config.py reads configs/testbed.yaml, and bringup.sh runs it
+#           FIRST. Without this a fresh install cannot start the simulator at all.
+#   av      sim_bridge/carla_air/h264.py. opencv-python ships no libx264 (GPL vs Apache),
+#           so PyAV is what makes chase and episode recording work.
+#   pytest  the command install.sh prints on success, and the one the README, the
+#           quickstart and both guide tabs tell a new user to run next.
+#
+# All three were missing until 2026-08-03, and none of it showed here because this machine
+# had acquired them outside the scripted path. Found by installing into a clean tree with
+# an empty environment - see todo.md R-04.
 "$UV" pip install --python "$VENV/bin/python" \
-    "numpy<2" opencv-python pygame Pillow setuptools wheel msgpack-rpc-python
+    "numpy<2" opencv-python pygame Pillow setuptools wheel msgpack-rpc-python \
+    PyYAML av pytest
 "$UV" pip install --python "$VENV/bin/python" --no-build-isolation airsim
 
 # numpy<2 is not cosmetic: airsim 1.8.1 predates the NumPy 2 ABI break and

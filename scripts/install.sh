@@ -93,5 +93,5 @@ fi
 echo
 echo "next:"
 echo "  ./.venv/bin/python -m pytest tests/ -q     # no simulator needed"
-echo "  ./scripts/bringup.sh --backend oracle"
+echo "  ./scripts/bringup.sh --config configs/testbed.yaml"
 echo "=============================================================="

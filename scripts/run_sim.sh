@@ -6,9 +6,93 @@
 # `-windowed`, which needs a display this container does not have, and it spawns traffic
 # through a conda python we do not use.
 #
-#   ./scripts/run_sim.sh [MAP]        default Town10HD
+#   ./scripts/run_sim.sh --config configs/testbed.yaml
+#   ./scripts/run_sim.sh --config configs/testbed.yaml --map Town05
 #   ./scripts/run_sim.sh --kill
 set -euo pipefail
+
+PROJ_EARLY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+    cat <<'__HELP__'
+run_sim.sh - start the CARLA-Air simulator headless and wait until it answers.
+
+USAGE
+  ./scripts/run_sim.sh --config PATH [--map NAME]
+  ./scripts/run_sim.sh --kill
+
+REQUIRED
+  --config PATH   the testbed config to render and start from. There is no default:
+                  the map, the GPU, the camera buffers and the GPS origin all come from
+                  it, so a silent fallback would start a simulator nobody chose.
+
+OPTIONS
+  --map NAME      override simulator.map for this run (e.g. Town05)
+  --display MODE  headless (default) or windowed. Overrides simulator.display.
+                  WINDOWED IS NOT WORKING YET - see the note under EXAMPLES.
+  --kill          stop a running simulator and exit
+  -h, --help      this text
+
+EXAMPLES
+  ./scripts/run_sim.sh --config configs/testbed.yaml
+  ./scripts/run_sim.sh --config configs/testbed.yaml --map Town05
+  TESTBED_GPU=0 ./scripts/run_sim.sh --config configs/testbed.yaml   # one-off GPU override
+
+WINDOWED MODE
+  Not usable yet, and the reason is worth knowing before you spend time on it. The simulator
+  is Vulkan-only, and a Vulkan swapchain needs a display that can actually present:
+
+    * Xvfb  - a software framebuffer with no Vulkan WSI. TESTED: the process starts and
+              pins to the right GPU, then hangs holding ~1.2 GB of the ~3.3 GB a loaded
+              map needs, serves no RPC port, and leaves a 0-byte log.
+    * VirtualGL - interposes GLX/OpenGL only. This binary has no OpenGL RHI at all
+              (VulkanRHI 108 matches, OpenGLDrv 0), so there is nothing for it to hook.
+
+  What is left is the operator's real display, which means a window on their desktop -
+  their call, per run. See todo.md R-05.
+
+Normally you do not call this directly - ./scripts/bringup.sh does, along with the sidecar
+and the ROS 2 graph.
+__HELP__
+}
+
+CONFIG=""
+MAP_ARG=""
+DISPLAY_ARG=""
+
+# `shift 2` on a flag whose value is missing does NOT shift - it fails and returns 1 - so
+# `while [ $# -gt 0 ]` spins forever on the same argument. `--config` with no value hung
+# indefinitely until this guard existed. Every value-taking flag goes through need_val.
+need_val() {
+    if [ "$2" -lt 2 ]; then
+        echo "ERROR: $1 needs a value" >&2
+        echo "       e.g. --config configs/testbed.yaml" >&2
+        exit 2
+    fi
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config=*) CONFIG="${1#*=}"; shift ;;
+        --config)   need_val "$1" $#; CONFIG="$2"; shift 2 ;;
+        --display=*) DISPLAY_ARG="${1#*=}"; shift ;;
+        --display)   need_val "$1" $#; DISPLAY_ARG="$2"; shift 2 ;;
+        --map=*)    MAP_ARG="${1#*=}"; shift ;;
+        --map)      need_val "$1" $#; MAP_ARG="$2"; shift 2 ;;
+        --kill)     pkill -x "CarlaUE4-Linux-" 2>/dev/null || true; echo "stopped"; exit 0 ;;
+        -h|--help)  usage; exit 0 ;;
+        --)         shift; break ;;
+        *) echo "unknown argument: $1" >&2; echo >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ -z "$CONFIG" ]; then
+    echo "ERROR: --config is required." >&2
+    echo "       try: ./scripts/run_sim.sh --config configs/testbed.yaml" >&2
+    exit 2
+fi
+[ -f "$CONFIG" ] || { echo "ERROR: no such config: $CONFIG" >&2; exit 2; }
+CONFIG="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
 
 # One resolver for every script that needs the release. Override for a single run with
 # CARLAAIR_RELEASE; a custom install location is remembered in .release-path instead.
@@ -20,22 +104,14 @@ ICD="$PROJ/configs/vulkan/nvidia_icd.container.json"
 # a one-off run needs no edit and a permanent change needs no flag.
 cfg() { "$PROJ/.venv/bin/python" -c "
 import sys, yaml
-d = yaml.safe_load(open('$PROJ/configs/testbed.yaml'))
+d = yaml.safe_load(open('$CONFIG'))
 for k in sys.argv[1].split('.'):
     d = (d or {}).get(k)
     if d is None: print(''); raise SystemExit
 print(d)" "$1" 2>/dev/null; }
 
-MAP="${1:-$(cfg simulator.map)}"
+MAP="${MAP_ARG:-$(cfg simulator.map)}"
 MAP="${MAP:-Town10HD}"
-
-# `pkill -f CarlaUE4-Linux-Shipping` also matches this script's own command line and kills
-# the shell running it. Match on the process name instead.
-if [ "$MAP" = "--kill" ]; then
-    pkill -x "CarlaUE4-Linux-" 2>/dev/null || true
-    echo "stopped"
-    exit 0
-fi
 
 # Fail early and clearly if the release is not where we think. Without this the launch
 # proceeds, nohup cannot exec a missing binary, and the startup watchdog reports it as a bad
@@ -63,8 +139,8 @@ fi
 # configs/sim/settings.json keeps the aspect ratios equal and depth/seg small — see
 # docs/architecture.md for why small matters (it is the float readback, not the GPU).
 # Render configs/testbed.yaml first, so settings.json is never stale relative to its source.
-"$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --quiet || {
-    echo "could not render configs/testbed.yaml" >&2; exit 1; }
+"$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --source "$CONFIG" --quiet || {
+    echo "could not render $CONFIG" >&2; exit 1; }
 mkdir -p ~/Documents/AirSim
 cp "$PROJ/configs/sim/settings.json" ~/Documents/AirSim/settings.json
 
@@ -189,16 +265,44 @@ fi
 pkill -x "CarlaUE4-Linux-" 2>/dev/null || true
 sleep 4
 
+# ---- headless or windowed ----
+#
+# `-RenderOffScreen` renders without any display server at all, which is why this project
+# has never needed one. A window is occasionally worth it - watching what the aircraft is
+# doing beats reading coordinates - but it needs somewhere to open.
+DISPLAY_MODE="${DISPLAY_ARG:-$(cfg simulator.display)}"
+DISPLAY_MODE="${DISPLAY_MODE:-headless}"
+case "$DISPLAY_MODE" in
+    headless) RENDER_FLAGS=(-RenderOffScreen) ;;
+    windowed)
+        if [ -z "${DISPLAY:-}" ]; then
+            echo "ERROR: display mode is 'windowed' but DISPLAY is unset." >&2
+            echo "       Either export DISPLAY, or give it a VIRTUAL screen:" >&2
+            echo >&2
+            echo "         Xvfb :99 -screen 0 1280x720x24 &" >&2
+            echo "         DISPLAY=:99 $0 --config $CONFIG --display windowed" >&2
+            exit 2
+        fi
+        RENDER_FLAGS=(-windowed "-ResX=${TESTBED_RESX:-1280}" "-ResY=${TESTBED_RESY:-720}")
+        ;;
+    *) echo "ERROR: simulator.display must be 'headless' or 'windowed', got '$DISPLAY_MODE'" >&2
+       exit 2 ;;
+esac
+
 mkdir -p "$PROJ/out"
 setsid nohup "$BIN" CarlaUE4 "$MAP" \
-    -RenderOffScreen \
+    "${RENDER_FLAGS[@]}" \
     -carla-rpc-port=2000 \
     -quality-level=Epic \
     -unattended -nosound \
     > "$PROJ/out/sim.log" 2>&1 < /dev/null &
 disown
 
-echo "launching $MAP headless on the NVIDIA GPU (log: out/sim.log)"
+if [ "$DISPLAY_MODE" = "windowed" ]; then
+    echo "launching $MAP WINDOWED on $DISPLAY (log: out/sim.log)"
+else
+    echo "launching $MAP headless on the NVIDIA GPU (log: out/sim.log)"
+fi
 for i in $(seq 1 60); do
     sleep 5
     if ss -tln 2>/dev/null | grep -q ":41451 "; then

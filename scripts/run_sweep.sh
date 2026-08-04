@@ -21,6 +21,13 @@ OUT="$PROJ/out/sweep-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
 START_EPOCH="$(date +%s)"
 
+# A sweep is a measurement, so the configuration it measured has to be named rather than
+# assumed. Defaulted here (unlike bringup.sh) because a sweep is a repeat of a known
+# experiment, not a first run - but say so in the log either way.
+CONFIG="${TESTBED_CONFIG:-$PROJ/configs/testbed.yaml}"
+[ -f "$CONFIG" ] || { echo "no such config: $CONFIG" >&2; exit 2; }
+echo "config: $CONFIG"
+
 RELEASE="$("$PROJ/scripts/release_path.sh")"
 [ -d "$RELEASE" ] || { echo "no release at $RELEASE - run ./scripts/install.sh" >&2; exit 1; }
 export CARLAAIR_RELEASE="$RELEASE"
@@ -37,7 +44,10 @@ for backend in $BACKENDS; do
     echo "=== bringing the graph up with backend=$backend ==="
     "$PROJ/scripts/stop.sh" --all >/dev/null 2>&1
     sleep 3
-    nohup "$PROJ/scripts/bringup.sh" --backend "$backend" > "$OUT/bringup-$backend.log" 2>&1 &
+    # Two processes now, not one: the simulator has no VLM in it (todo.md R-02), so the
+    # backend is started separately against its ROS 2 interface.
+    setsid "$PROJ/scripts/bringup.sh" --config "$CONFIG" \
+        > "$OUT/bringup-$backend.log" 2>&1 &
     # Wait for the whole graph, not just the simulator: the episode service is the last
     # thing to appear and is what run_episode.py actually needs.
     ok=0
@@ -52,9 +62,31 @@ for backend in $BACKENDS; do
     fi
     grep -m1 "hardware rendering confirmed" "$OUT/bringup-$backend.log" | sed 's/^/  /'
 
+    setsid "$PROJ/examples/vlm_navigation/run.sh" --backend "$backend" \
+        > "$OUT/vlm-$backend.log" 2>&1 &
+    ok=0
+    for _ in $(seq 1 24); do
+        sleep 5
+        if grep -q "VLM backend:" "$OUT/vlm-$backend.log" 2>/dev/null; then ok=1; break; fi
+    done
+    if [ "$ok" -ne 1 ]; then
+        echo "  ERROR: the $backend engine did not start — see $OUT/vlm-$backend.log" >&2
+        tail -5 "$OUT/vlm-$backend.log" >&2
+        continue
+    fi
+
     for scenario in $SCENARIOS; do
+        # A dead sidecar produces empty per-scenario logs and the sweep grinds on for
+        # another hour producing nothing. Observed: a carla TimeoutException terminated the
+        # sidecar on the third reset, and the remaining 18 episodes "ran" against a corpse.
+        # Check before each scenario and stop this backend loudly instead.
+        if [ ! -S "${TESTBED_SOCKET:-/tmp/carla_air_testbed.sock}" ]; then
+            echo "  ERROR: the sidecar is gone — abandoning $backend" >&2
+            echo "         see $OUT/bringup-$backend.log and out/sim_bridge.log" >&2
+            break
+        fi
         echo "  --- $backend / $scenario ---"
-        "$PROJ/.venv/bin/python" "$PROJ/scripts/run_episode.py" \
+        "$PROJ/scripts/run_episode.sh" \
             --scenario "$scenario" --seeds $SEEDS \
             > "$OUT/$backend-$scenario.log" 2>&1
         grep -E "^  -> |succeeded" "$OUT/$backend-$scenario.log" | sed 's/^/    /'
