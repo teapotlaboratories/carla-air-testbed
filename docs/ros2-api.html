@@ -237,11 +237,11 @@
           <tr><th>/sensors/lidar/points</th><td class="mono">sensor_msgs/msg/PointCloud2</td>
               <td class="num">10 Hz</td><td>24 B/point: <code>x y z cos_inc_angle object_idx object_tag</code> <span class="pill ground">CARLA</span></td></tr>
           <tr><th>/camera/rgb/image_raw</th><td class="mono">sensor_msgs/msg/Image</td>
-              <td class="num">~8 Hz</td><td>640x480, <code>bgr8</code>, step 1920</td></tr>
+              <td class="num">8.1 Hz</td><td>960x720, <code>bgr8</code>, step 2880</td></tr>
           <tr><th>/camera/depth/image_raw</th><td class="mono">sensor_msgs/msg/Image</td>
-              <td class="num">~8 Hz</td><td>160x120, <code>32FC1</code> &mdash; metres, planar z-depth</td></tr>
+              <td class="num">7.9 Hz</td><td>160x120, <code>32FC1</code> &mdash; metres, planar z-depth</td></tr>
           <tr><th>/camera/rgb/camera_info</th><td class="mono">sensor_msgs/msg/CameraInfo</td>
-              <td class="num">~8 Hz</td><td>fx 320.5, fy 320.5, cx 320.0, cy 240.0</td></tr>
+              <td class="num">8.1 Hz</td><td>fx 480.81, fy 480.81, cx 480.0, cy 360.0 &mdash; <strong>read them from this topic, never hard-code them</strong>; they follow <code>simulator.cameras.rgb</code></td></tr>
           <tr><th>/camera/pose</th><td class="mono">geometry_msgs/msg/PoseStamped</td>
               <td class="num">20 Hz</td><td>camera pose in NED &mdash; use this, not the vehicle pose</td></tr>
         </tbody>
@@ -250,7 +250,59 @@
     <div class="prose">
       <p style="font-size:.87rem;color:var(--ink-soft)">
         Live sample from the running graph: GPS <code>47.640735, -122.139852</code> fix 3, 12
-        satellites; lidar 644 points at 24 B each; camera <code>640x480 bgr8</code>.
+        satellites; lidar 644 points at 24 B each; camera <code>960x720 bgr8</code>, fx 480.81. Rates measured 2026-08-04 with the full graph up and no VLM attached.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ WORLD ============ -->
+  <section>
+    <h2>What you can change &mdash; the world</h2>
+    <div class="prose">
+      <p>
+        Everything the operator can do to the world is a ROS 2 service. There is no second,
+        privileged channel: the web console and <code>run_episode.py</code> call exactly these,
+        so anything they can do, your client can do. <code>path</code> arguments are resolved
+        by the <em>sidecar</em>, on the machine running the simulator.
+      </p>
+    </div>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Service</th><th>Type</th><th>Does</th></tr>
+        </thead>
+        <tbody>
+          <tr><th>/sim/reset_vehicle</th><td class="mono">interfaces/srv/ResetVehicle</td>
+              <td>Places the aircraft at a NED pose and leaves it <strong>holding</strong>, not
+              merely armed. Blocks ~16 s while it arms, flies and settles; it reports progress,
+              so a caller can tell slow from wedged.</td></tr>
+          <tr><th>/sim/spawn_traffic</th><td class="mono">interfaces/srv/SpawnTraffic</td>
+              <td>Vehicles and pedestrians, clustered near <code>near_ned</code> within
+              <code>radius_m</code>. An <em>empty</em> <code>near_ned</code> means map-wide.
+              Falls back to map-wide when the radius holds too few spawn points, and
+              <strong>says so</strong> in <code>message</code>.</td></tr>
+          <tr><th>/sim/destroy_actors</th><td class="mono">interfaces/srv/DestroyActors</td>
+              <td>Removes everything this project spawned. Synchronous &mdash; it used to return
+              with destruction still in flight, and the next spawn killed the sidecar.</td></tr>
+          <tr><th>/sim/set_weather</th><td class="mono">interfaces/srv/SetWeather</td>
+              <td>Presets or explicit cloud/rain/puddle/wind/fog/sun values.</td></tr>
+          <tr><th>/sim/set_camera_pose</th><td class="mono">interfaces/srv/SetCameraPose</td>
+              <td>Body-frame offset and pitch for the onboard camera. A measurement surface:
+              every scored episode depends on it, so it is applied and verified, not assumed.</td></tr>
+          <tr><th>/sim/chase_recording</th><td class="mono">interfaces/srv/ChaseRecording</td>
+              <td>Starts/stops the exterior follow camera. <code>0</code> for width, height or
+              fps means &ldquo;use <code>sidecar.chase_camera</code> from the config&rdquo;. A
+              spectator &mdash; it is scored on nothing and must never fail a flight.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p style="font-size:.87rem;color:var(--ink-soft)">
+        Two more <code>/sim/*</code> names are <strong>topics, not services</strong>:
+        <code>/sim/collision</code> (what was hit, and whether) and
+        <code>/sim/traffic_stats</code> (spawned/moving counts, including
+        <code>walkers_moving</code> measured by displacement rather than reported velocity).
+        Service list verified against a running graph on 2026-08-04.
       </p>
     </div>
   </section>

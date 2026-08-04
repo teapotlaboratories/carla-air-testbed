@@ -282,7 +282,7 @@
     </p>
 
     <div class="stats">
-      <div class="stat ok"><span class="k">Oracle</span><span class="v">15/20</span></div>
+      <div class="stat ok"><span class="k">Oracle</span><span class="v">14/19</span></div>
       <div class="stat"><span class="k">Baseline</span><span class="v">0/20</span></div>
       <div class="stat air"><span class="k">Grounding</span><span class="v">~3 m</span></div>
       <div class="stat"><span class="k">Real-time</span><span class="v">1.000</span></div>
@@ -349,7 +349,7 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
                                    <span class="c"># pass a directory to put the 18 GB release</span>
                                    <span class="c"># elsewhere; remembered, no export needed</span>
 
-./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">117 passed, 1 skipped</span><span class="c">, no simulator needed</span></pre>
+./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">156 passed, 1 skipped</span><span class="c">, no simulator needed</span></pre>
 
     <h2 id="r-run">Run an example</h2>
 <pre><span class="c"># terminal 1 — simulator + the whole ROS 2 graph (~90 s to be ready)</span>
@@ -378,7 +378,7 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
     <h2 id="r-results">Results</h2>
     <div class="prose">
       <p>
-        Measured over <strong>50 seeded episodes</strong> — 5 seeds x 4 scenarios x 2 backends,
+        Re-measured 2026-08-03 over <strong>40 seeded episodes</strong> — 5 seeds x 4 benchmark scenarios x 2 backends,
         zero collisions. The harness reaches goals when something points at them, a
         depth-following heuristic with no language understanding reaches none, and one scenario
         now defeats both. That gap is the space a VLM has to fill.
@@ -394,21 +394,22 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
             <td><span class="chip ok">5/5</span> 18.7 m median</td>
             <td><span class="chip no">0/5</span> 187.0 m</td></tr>
         <tr><th><code>rain_descent</code></th>
-            <td><span class="chip ok">5/5</span> 14.1 m median</td>
+            <td><span class="chip ok">4/5</span> — one <code>model_declared_done</code></td>
             <td><span class="chip no">0/5</span> 81.4 m</td></tr>
         <tr><th><code>avoid_the_block</code><br><small>blocked by a tower</small></th>
             <td><span class="chip no">0/5</span> 70.6 m median</td>
             <td><span class="chip no">0/5</span> 249.4 m</td></tr>
         <tr><th>all</th>
-            <td><span class="chip ok">15/20 — 75%</span></td>
+            <td><span class="chip ok">14/19 — 74%</span></td>
             <td><span class="chip no">0/20 — 0%</span></td></tr>
       </tbody>
     </table></div>
     <div class="tw"><table>
       <thead><tr><th>Measured with the full graph running</th><th>Rate</th></tr></thead>
       <tbody>
-        <tr><th><code>/fmu/out/vehicle_odometry</code></th><td>20.0 Hz</td></tr>
-        <tr><th><code>/camera/{rgb,depth}/image_raw</code></th><td>7.8 Hz</td></tr>
+        <tr><th><code>/fmu/out/vehicle_odometry</code></th><td>19.5 Hz</td></tr>
+        <tr><th><code>/camera/rgb/image_raw</code></th><td>8.1 Hz — 960x720</td></tr>
+          <tr><th><code>/camera/depth/image_raw</code></th><td>7.9 Hz — 160x120</td></tr>
         <tr><th><code>/vlm/annotation</code></th><td>0.9 Hz — a slow model is the design point</td></tr>
         <tr><th><code>/fmu/in/trajectory_setpoint</code></th><td>10.0 Hz</td></tr>
         <tr><th>Grounding accuracy</th><td>~3 m residual on a 64 m ray</td></tr>
@@ -551,7 +552,7 @@ ls /usr/share/vulkan/icd.d/nvidia_icd*.json  <span class="c"># a Vulkan ICD exis
             without touching the simulator:
           </p>
         </div>
-<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">117 passed, 1 skipped</span></pre>
+<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">156 passed, 1 skipped</span></pre>
         <div class="note ok">
           <span class="t">In a hurry? One command</span>
           <p>
