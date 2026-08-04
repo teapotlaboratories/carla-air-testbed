@@ -121,6 +121,12 @@ backends, zero collisions. This supersedes an earlier 50-episode run; both are i
 | `rain_descent` | solves it | **4/5** | 0/5 |
 | `avoid_the_block` | **blocked by a tower** | 0/5 | 0/5 |
 
+> **These are single passes, and the same seed does not always repeat.** Re-running
+> `cross_the_plaza` seed 1 on the oracle with nothing changed gave 3 successes in 7 attempts,
+> against the 5/5 below. The table was really measured and is not withdrawn, but it carries an
+> unmeasured variance and should not be quoted as reproducible. See `D-01` in
+> [`docs/todo.md`](docs/todo.md).
+
 `rain_descent` slipped from 5/5 to 4/5, failure mode `model_declared_done` — the oracle stopped
 short. One episode also missed the deadline, which is why the oracle denominator is 19 rather
 than 20. Neither is a model result; both are the harness, and both are recorded rather than

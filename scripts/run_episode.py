@@ -107,9 +107,21 @@ class EpisodeDriver(Node):
         missing = [n for n, c in self.srv.items()
                    if not c.wait_for_service(timeout_sec=timeout_s)]
         if missing:
+            # Two different failures, and telling them apart saves the obvious wrong guess.
+            # `/sim/*` comes from the simulator; `episode` comes from the navigation example,
+            # which bringup stopped starting on 2026-08-04 when waypoint following and episode
+            # scoring moved out of scope. Someone who has only run bringup.sh will find the
+            # simulator up and the episode service absent, and "is the graph up?" sends them
+            # to look at the wrong half.
+            hint = ("Is the graph up (./scripts/bringup.sh --config configs/testbed.yaml) "
+                    "and ROS_DOMAIN_ID=42?")
+            if "episode" in missing:
+                hint = ("`episode` comes from the navigation example, which the simulator does "
+                        "NOT start:\n"
+                        "    ./examples/navigation/run.sh\n"
+                        "An episode has nothing to score if nothing is following waypoints.")
             raise SystemExit(
-                f"these services never appeared: {', '.join(missing)}\n"
-                "Is the graph up (./scripts/bringup.sh) and ROS_DOMAIN_ID=42?")
+                f"these services never appeared: {', '.join(missing)}\n{hint}")
 
     def call(self, name, request, timeout_s=30.0):
         future = self.srv[name].call_async(request)

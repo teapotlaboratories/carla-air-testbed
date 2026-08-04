@@ -28,7 +28,7 @@ PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # neither can be spoofed by a relative invocation.
 NAMES="ros2_ws/install/"
 NAMES="$NAMES|sim_bridge/server\.py|webui/server\.py"
-NAMES="$NAMES|testbed\.launch\.py|vlm_navigation/vlm\.launch\.py"
+NAMES="$NAMES|testbed\.launch\.py|vlm_navigation/vlm\.launch\.py|navigation/nav\.launch\.py"
 NAMES="$NAMES|scripts/run_episode\.py|scripts/run_sweep\.sh"
 
 is_ours() {

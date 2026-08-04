@@ -111,18 +111,24 @@ wait_for() {   # wait_for <file> <pattern> <seconds> <what>
     return 1
 }
 
-echo "=== 1/4  simulator + ROS 2 graph ==="
+echo "=== 1/5  simulator + ROS 2 graph ==="
 setsid "$PROJ/scripts/bringup.sh" --config "$CONFIG" > "$LOGS/bringup.log" 2>&1 &
 wait_for "$LOGS/bringup.log" "hardware rendering confirmed" 180 "the simulator" || exit 1
 grep -m1 "hardware rendering confirmed" "$LOGS/bringup.log" | sed 's/^/  /'
-wait_for "$LOGS/bringup.log" "episode runner ready\|bridged to CARLA-Air" 60 "the graph" || exit 1
+wait_for "$LOGS/bringup.log" "bridged to CARLA-Air" 60 "the graph" || exit 1
 
-echo "=== 2/4  VLM example (backend=$BACKEND) ==="
+echo "=== 2/5  navigation example (controller + episode runner) ==="
+# Not started by bringup since 2026-08-04: waypoint following and episode scoring are out of
+# scope for the simulator. Without this an episode has nothing to score.
+setsid "$PROJ/examples/navigation/run.sh" > "$LOGS/nav.log" 2>&1 &
+wait_for "$LOGS/nav.log" "offboard_control\|episode_runner" 60 "the navigation example" || exit 1
+
+echo "=== 3/5  VLM example (backend=$BACKEND) ==="
 setsid "$PROJ/examples/vlm_navigation/run.sh" --backend "$BACKEND" > "$LOGS/vlm.log" 2>&1 &
 wait_for "$LOGS/vlm.log" "VLM backend" 90 "the VLM example" || exit 1
 sleep 5
 
-echo "=== 3/4  flying $SCENARIO seed $SEED ==="
+echo "=== 4/5  flying $SCENARIO seed $SEED ==="
 "$PROJ/scripts/run_episode.sh" --scenario "$SCENARIO" --seeds "$SEED" 2>&1 \
     | tee "$LOGS/episode.log" | grep -E "^  |^=== " || true
 
@@ -137,7 +143,7 @@ ONBOARD="$PROJ/out/videos/$EPISODE.mp4"
 DEPTH="$PROJ/out/videos/$EPISODE-depth.mp4"
 OUT="$PROJ/out/demo/$EPISODE.mp4"
 
-echo "=== 4/4  combining ==="
+echo "=== 5/5  combining ==="
 for f in "$CHASE" "$ONBOARD"; do
     [ -s "$f" ] || { echo "ERROR: missing or empty $f" >&2; exit 1; }
 done

@@ -1229,7 +1229,31 @@ all of them in the teardown path rule 1 is about:
   stayed silent through a real one. It now resolves the same target `run_sim.sh` does. Details
   in `docs/worklog/2026-08-04-one-command-demo.md`.
 
-### E-03 · Record an MCAP bag per episode — **open**
+### D-01 · The same seed does not give the same result — **open, and it outranks the rest** *(2026-08-04)*
+
+`cross_the_plaza`, seed 1, `oracle`, shipped defaults, nothing changed between runs:
+**3 successes and 4 failures out of 7.** Documented as 5/5. The successes reproduce the
+documentation closely (13-14 steps, ~19 m final, against 18.6 m / 14 steps); the failures all
+hit `max_steps` at 25 with roughly twice the path length over the same 80 m journey. Bimodal,
+not noisy. No collisions in any run.
+
+Not caused by the day's changes — the identical configuration produced both outcomes in both
+orders, and the velocity and yaw slews were each cleared by A/B.
+
+**This is now the most important open item**, because the scope agreed 2026-08-04 makes
+determinism and repeatability what this repository is *for*. It also puts a caveat under every
+result measured at N=5 x 1 seed, including E-01b and the README table: if one seed is 3/7 on
+repeat, 5/5 was a sample rather than a property.
+
+- **Blocked on E-03**, and that is the point: `out/episodes/*.json` stores `steps` as a count
+  with no per-step trace, so the shape of the doubled path cannot be recovered from what is
+  recorded. Two investigations have now stalled on this same gap.
+- **Verify:** one seed x 10 repeats per scenario, reported as a rate with the spread, before
+  and after any fix. Not N seeds x 1.
+- **Do not guess at the cause** until there is a trace. Evidence in
+  `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
+
+### E-03 · Record an MCAP bag per episode — **open, and now blocking D-01** *(raised 2026-08-04)*
 
 *(Partly overtaken by E-05: "a failed episode leaves a JSON and nothing to look at" is no
 longer true. What a bag still adds over video is **replayability** — feeding the recorded

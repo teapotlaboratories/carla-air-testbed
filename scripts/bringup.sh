@@ -23,7 +23,7 @@ quadrotor in a photorealistic city and a ROS 2 interface to it:
     /sim/*          reset, spawn traffic, set weather, teardown (services)
 
 SYNOPSIS
-  ./scripts/bringup.sh --config PATH [--no-sim] [--no-eval]
+  ./scripts/bringup.sh --config PATH [--no-sim]
 
 REQUIRED
   --config PATH   the testbed config. There is NO default, on purpose: it decides the map,
@@ -33,8 +33,16 @@ REQUIRED
 
 OPTIONS
   --no-sim        the simulator is already running; start only the sidecar and the graph
-  --no-eval       skip the episode runner (no scenario scoring)
   -h, --help      this text
+
+NOT STARTED HERE
+  Waypoint following, episode scoring and video recording are OUT OF SCOPE for the simulator
+  and start separately (they were launched from here until 2026-08-04):
+
+    ./examples/navigation/run.sh          controller + episode runner + recorder
+    ./examples/vlm_navigation/run.sh      the See-Point-Fly example
+
+  scripts/run_episode.sh needs the first of those.
 
 EXAMPLES
   # the usual thing
@@ -76,7 +84,6 @@ __HELP__
 # Anything that talks to this testbed must export the same domain. scripts/status.sh does.
 export ROS_DOMAIN_ID="${TESTBED_ROS_DOMAIN_ID:-42}"
 START_SIM=1
-EVAL=true
 
 CONFIG=""
 
@@ -98,7 +105,9 @@ while [ $# -gt 0 ]; do
         --config=*)  CONFIG="${1#*=}"; shift ;;
         --config)    need_val "$1" $#; CONFIG="$2"; shift 2 ;;
         --no-sim)    START_SIM=0; shift ;;
-        --no-eval)   EVAL=false; shift ;;
+        --no-eval)   echo "note: --no-eval no longer applies — the episode runner is not" >&2
+                     echo "      started here. See ./examples/navigation/run.sh --no-eval" >&2
+                     shift ;;
         # --backend / --instruction used to live here. They belong to the VLM example now;
         # accepted and redirected rather than failing with "unknown argument", because every
         # doc and muscle memory in this project still reaches for them.
@@ -196,10 +205,9 @@ export TESTBED_PROTOCOL="$PROJ/sim_bridge/protocol.py"
 # Appended, not prepended: vendor/ must never shadow a ROS-supplied module.
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PROJ/vendor/py312"
 
-echo "launching the ROS 2 graph (simulator only — no VLM node)"
+echo "launching the ROS 2 graph (the simulator's interface only)"
 ros2 launch bringup testbed.launch.py \
     params:="$PROJ/ros2_ws/src/bringup/config/testbed.yaml" \
-    evaluation:="$EVAL" \
     socket_path:="$SOCKET" &
 PIDS+=($!)
 
