@@ -98,6 +98,7 @@ class SimBridgeClient:
         self._reader: threading.Thread | None = None
         self._closing = False
         self._dead: str | None = None          # why the connection ended, if it has
+        self._generation = 0                   # bumped per connect(); see _read_loop
 
     def connect(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -109,7 +110,17 @@ class SimBridgeClient:
         self._sock = s
         self._closing = False
         self._dead = None
-        self._reader = threading.Thread(target=self._read_loop, daemon=True,
+        # A generation number, so a reader from a PREVIOUS connection cannot report on this
+        # one. Without it, reconnecting is a race the fresh connection loses: close() sets
+        # _closing, the old reader is still blocked in recv(), connect() clears _closing, and
+        # only THEN does the old reader wake with its socket error - sees _closing is False,
+        # concludes the connection died, and calls _fail_all() on a connection that is
+        # perfectly healthy and belongs to somebody else. Nothing in the graph reconnects
+        # today (each client connects once in bridge_node), which is the only reason this has
+        # never fired.
+        self._generation += 1
+        gen = self._generation
+        self._reader = threading.Thread(target=self._read_loop, args=(s, gen), daemon=True,
                                         name=f"simbridge-reader-{os.path.basename(self.path)}")
         self._reader.start()
         return self
@@ -131,10 +142,9 @@ class SimBridgeClient:
 
     # ------------------------------------------------------------------ reader
 
-    def _read_loop(self):
-        sock = self._sock
+    def _read_loop(self, sock, gen):
         try:
-            while not self._closing:
+            while not self._closing and gen == self._generation:
                 frame = protocol.recv(sock)
                 rid = frame.get("id")
                 if "progress" in frame and "ok" not in frame:
@@ -155,11 +165,15 @@ class SimBridgeClient:
                 slot.event.set()
         except Exception as exc:                                        # noqa: BLE001
             if not self._closing:
-                self._fail_all(f"reader stopped: {exc}")
+                self._fail_all(f"reader stopped: {exc}", gen)
         else:
-            self._fail_all("connection closed by the sidecar")
+            self._fail_all("connection closed by the sidecar", gen)
 
-    def _fail_all(self, why):
+    def _fail_all(self, why, gen=None):
+        # `gen` is the connection this verdict is about. A reader unwinding from a socket
+        # that has already been replaced must not condemn its successor.
+        if gen is not None and gen != self._generation:
+            return
         self._dead = why
         with self._pending_lock:
             slots, self._pending = list(self._pending.values()), {}

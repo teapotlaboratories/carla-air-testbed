@@ -386,21 +386,29 @@ class SimBridge:
         return out
 
     def chase_start(self, path, width=0, height=0, fps=0.0,
-                    distance=0.0, above=0.0):
+                    distance=None, above=None):
         """Begin recording an HD exterior view that follows the aircraft.
 
         Separate from `capture()` on purpose: that one feeds the model and is a measurement
         surface, this one is a spectator and is scored on nothing.
         """
-        # 0 means "whatever the config says" for every field, so a caller that does not
-        # care never has to restate the defaults - and the config actually reaches the
-        # camera instead of being shadowed by a literal.
+        # Two different sentinels, because the fields differ in what counts as a real value.
+        #
+        # width/height/fps: 0 means "the config decides". A zero resolution or frame rate is
+        # meaningless, so the sentinel can never collide with something a caller wanted, and
+        # ChaseRecording.srv documents 0 that way for its int32/float64 fields.
+        #
+        # distance/above: None, NOT 0. `above=0` is a perfectly sensible request - a chase
+        # camera level with the aircraft rather than looking down at it - and treating it as
+        # "unset" silently substituted the config's 6.0, giving the caller a shot they did
+        # not ask for with nothing logged. A sentinel must be a value the caller cannot
+        # legitimately mean.
         d = self._chase_defaults()
         width = int(width) or int(d["width"])
         height = int(height) or int(d["height"])
         fps = float(fps) or float(d["fps"])
-        distance = float(distance) or float(d["distance"])
-        above = float(above) or float(d["above"])
+        distance = float(d["distance"]) if distance is None else float(distance)
+        above = float(d["above"]) if above is None else float(above)
         self._ensure_chase(width, height, fps, distance, above)
         self._chase.start(path)
         return {"recording": path, "size": [width, height], "fps": fps}
