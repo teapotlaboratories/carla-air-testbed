@@ -207,121 +207,143 @@ def run_one(drv: EpisodeDriver, scen, seed, camera_pitch, chase=True):
     applied = {}
     for name, value in overrides.items():
         before = drv.get_param("/offboard_control", name)
-        if before is not None and drv.set_param("/offboard_control", name, float(value)):
-            applied[name] = before
+        if before is None:
+            # A misspelled key used to be skipped in silence, so the scenario read as
+            # configured and flew at the global limits - which for a demo written around
+            # 0.5 m/s is a completely different flight, reported as if it were the intended
+            # one. `get_param` also returns None for a parameter that is not a double or an
+            # int, so this catches a type mismatch as well as a typo.
+            print(f"  WARNING: control override {name!r} is not a numeric parameter on "
+                  f"/offboard_control — IGNORED, this episode flies at the global limit",
+                  flush=True)
+            continue
+        if not drv.set_param("/offboard_control", name, float(value)):
+            print(f"  WARNING: control override {name}={value} was REJECTED by "
+                  f"/offboard_control — this episode flies at {before}", flush=True)
+            continue
+        applied[name] = before
     if applied:
         shown = ", ".join(f"{k}={overrides[k]} (was {applied[k]})" for k in applied)
         print(f"  control: {shown}", flush=True)
 
-    start = [float(v) for v in scen["start_ned"]]
-    # The reset must own the aircraft exclusively. The offboard controller streams setpoints
-    # at 10 Hz and will happily drag the vehicle toward the previous episode's waypoint while
-    # reset is trying to fly it to the start.
-    if not drv.set_param("/offboard_control", "enabled", False):
-        print("  WARNING: could not disable offboard_control; the reset may be fought",
-              flush=True)
-    time.sleep(0.5)
-
-    # reset leaves the aircraft HOLDING a setpoint, never merely armed. Skipping that is how
-    # a session ends up at -1566 m NED.
-    rreq = ResetVehicle.Request()
-    rreq.hold_ned = start
-    rreq.speed = 10.0
-    r = drv.call("reset", rreq, timeout_s=SLOW_CALL_S)
-    if not r.success:
-        raise SystemExit(f"reset: {r.message}")
-
-    cam = SetCameraPose.Request()
-    cam.xyz = [0.5, 0.0, 0.1]
-    cam.pitch = float(camera_pitch)
-    got = drv.call("camera", cam)
-    if not got.success:
-        print(f"  WARNING: camera pose not applied ({got.message})", flush=True)
-
-    pos = [float(v) for v in r.position_ned]
-    err = math.dist(pos, start)
-    print(f"  start pose: {[round(v, 1) for v in pos]} "
-          f"(commanded {[round(v, 1) for v in start]}, error {err:.1f} m)", flush=True)
-    if err > 15.0:
-        print("  WARNING: reset did not reach the start — episode will not be comparable",
-              flush=True)
-
-    drv.set_param("/offboard_control", "enabled", True)
-
-    ep = SetEpisode.Request()
-    ep.scenario = scen["name"]
-    ep.seed = int(seed)
-    ep.instruction = scen.get("instruction", "")
-    ep.start = True
-    t_episode = time.time()
-    r = drv.call("episode", ep, timeout_s=60.0)
-    if not r.accepted:
-        print(f"  episode/set refused: {r.message}", flush=True)
-        return None
-    episode_id = r.episode_id
-    print(f"  episode running [{episode_id}] — {ep.instruction!r}", flush=True)
-
-    # Exterior HD view, following the aircraft. A spectator, scored on nothing, so it must
-    # never be able to fail a flight — worst case you lose the video, not the run.
-    chase_path = None
-    if chase:
-        try:
-            os.makedirs(os.path.join(PROJ, "out", "chase"), exist_ok=True)
-            chase_path = os.path.join(PROJ, "out", "chase", f"{episode_id}.mp4")
-            creq = ChaseRecording.Request()
-            creq.start, creq.path = True, chase_path
-            # 0 = use sidecar.chase_camera from the config. A scenario may still pin its
-            # own values, but it no longer has to restate the defaults to get them.
-            creq.width = int(scen.get("chase_width", 0))
-            creq.height = int(scen.get("chase_height", 0))
-            creq.fps = float(scen.get("chase_fps", 0.0))
-            t_chase = time.time()
-            got = drv.call("chase", creq, timeout_s=60.0)
-            if not got.success:
-                raise RuntimeError(got.message)
-            # Write down how much later the chase started than the episode. Without it the
-            # two recordings cannot be aligned afterwards: the chase both STARTS later and
-            # STOPS later, so their durations differ by (tail - head) and neither term is
-            # recoverable from the files. Two unknowns, one equation.
-            with open(chase_path.replace(".mp4", ".sync.json"), "w") as fh:
-                json.dump({"episode_id": episode_id,
-                           "chase_start_after_episode_s": round(t_chase - t_episode, 3)}, fh)
-        except Exception as exc:                                       # noqa: BLE001
-            print(f"  chase camera unavailable ({exc}); flying without it", flush=True)
-            chase_path = None
-
+    # EVERYTHING below runs with the overrides applied, so everything below is inside the
+    # try that takes them off again. This used to start at the monitoring loop, which left
+    # `raise SystemExit` on a failed reset, a refused episode, and any RPC timeout as paths
+    # that returned with the overrides still on a node that outlives this process. In a
+    # sweep the next scenario then inherited them - including min_altitude_m: -24.0, the
+    # floor whose whole job is stopping a waypoint flying the aircraft into the ground.
     try:
-        deadline = time.time() + float(scen.get("timeout_s", 240.0)) + 30.0
-        while time.time() < deadline:
-            drv.pump(5.0)
-            if drv.odom is not None:
-                p = [float(v) for v in drv.odom.position]
-                hit = ""
-                if drv.collision is not None and drv.collision.has_collided:
-                    hit = f"  COLLIDED: {drv.collision.object_name or 'unnamed actor'}"
-                print(f"    alt {abs(p[2]):5.1f} m  pos {[round(v, 1) for v in p]}{hit}",
-                      flush=True)
-            result = result_for(episode_id)
-            if result:
-                return result
-        print("  runner did not report a result before the deadline", flush=True)
-        return None
-    finally:
-        # Restore the controller BEFORE anything else can use it. A demo's slow speed
-        # leaking into the next scenario of a sweep is exactly the failure these overrides
-        # exist to prevent.
-        for name, value in applied.items():
-            drv.set_param("/offboard_control", name, value)
+        start = [float(v) for v in scen["start_ned"]]
+        # The reset must own the aircraft exclusively. The offboard controller streams setpoints
+        # at 10 Hz and will happily drag the vehicle toward the previous episode's waypoint while
+        # reset is trying to fly it to the start.
+        if not drv.set_param("/offboard_control", "enabled", False):
+            print("  WARNING: could not disable offboard_control; the reset may be fought",
+                  flush=True)
+        time.sleep(0.5)
 
-        # In `finally` so a timeout or an exception still closes the file. Without this, the
-        # video of the run that went wrong is the one left unplayable.
-        if chase_path:
+        # reset leaves the aircraft HOLDING a setpoint, never merely armed. Skipping that is how
+        # a session ends up at -1566 m NED.
+        rreq = ResetVehicle.Request()
+        rreq.hold_ned = start
+        rreq.speed = 10.0
+        r = drv.call("reset", rreq, timeout_s=SLOW_CALL_S)
+        if not r.success:
+            raise SystemExit(f"reset: {r.message}")
+
+        cam = SetCameraPose.Request()
+        cam.xyz = [0.5, 0.0, 0.1]
+        cam.pitch = float(camera_pitch)
+        got = drv.call("camera", cam)
+        if not got.success:
+            print(f"  WARNING: camera pose not applied ({got.message})", flush=True)
+
+        pos = [float(v) for v in r.position_ned]
+        err = math.dist(pos, start)
+        print(f"  start pose: {[round(v, 1) for v in pos]} "
+              f"(commanded {[round(v, 1) for v in start]}, error {err:.1f} m)", flush=True)
+        if err > 15.0:
+            print("  WARNING: reset did not reach the start — episode will not be comparable",
+                  flush=True)
+
+        drv.set_param("/offboard_control", "enabled", True)
+
+        ep = SetEpisode.Request()
+        ep.scenario = scen["name"]
+        ep.seed = int(seed)
+        ep.instruction = scen.get("instruction", "")
+        ep.start = True
+        t_episode = time.time()
+        r = drv.call("episode", ep, timeout_s=60.0)
+        if not r.accepted:
+            print(f"  episode/set refused: {r.message}", flush=True)
+            return None
+        episode_id = r.episode_id
+        print(f"  episode running [{episode_id}] — {ep.instruction!r}", flush=True)
+
+        # Exterior HD view, following the aircraft. A spectator, scored on nothing, so it must
+        # never be able to fail a flight — worst case you lose the video, not the run.
+        chase_path = None
+        if chase:
             try:
-                got = drv.call("chase", ChaseRecording.Request(start=False), timeout_s=60.0)
-                print(f"    chase: {got.frames} frames ({got.seconds:.0f}s), "
-                      f"{got.dropped} dropped -> {chase_path}", flush=True)
-            except Exception as exc:                                   # noqa: BLE001
-                print(f"    chase stop failed: {exc}", flush=True)
+                os.makedirs(os.path.join(PROJ, "out", "chase"), exist_ok=True)
+                chase_path = os.path.join(PROJ, "out", "chase", f"{episode_id}.mp4")
+                creq = ChaseRecording.Request()
+                creq.start, creq.path = True, chase_path
+                # 0 = use sidecar.chase_camera from the config. A scenario may still pin its
+                # own values, but it no longer has to restate the defaults to get them.
+                creq.width = int(scen.get("chase_width", 0))
+                creq.height = int(scen.get("chase_height", 0))
+                creq.fps = float(scen.get("chase_fps", 0.0))
+                t_chase = time.time()
+                got = drv.call("chase", creq, timeout_s=60.0)
+                if not got.success:
+                    raise RuntimeError(got.message)
+                # Write down how much later the chase started than the episode. Without it the
+                # two recordings cannot be aligned afterwards: the chase both STARTS later and
+                # STOPS later, so their durations differ by (tail - head) and neither term is
+                # recoverable from the files. Two unknowns, one equation.
+                with open(chase_path.replace(".mp4", ".sync.json"), "w") as fh:
+                    json.dump({"episode_id": episode_id,
+                               "chase_start_after_episode_s": round(t_chase - t_episode, 3)}, fh)
+            except Exception as exc:                                       # noqa: BLE001
+                print(f"  chase camera unavailable ({exc}); flying without it", flush=True)
+                chase_path = None
+
+        try:
+            deadline = time.time() + float(scen.get("timeout_s", 240.0)) + 30.0
+            while time.time() < deadline:
+                drv.pump(5.0)
+                if drv.odom is not None:
+                    p = [float(v) for v in drv.odom.position]
+                    hit = ""
+                    if drv.collision is not None and drv.collision.has_collided:
+                        hit = f"  COLLIDED: {drv.collision.object_name or 'unnamed actor'}"
+                    print(f"    alt {abs(p[2]):5.1f} m  pos {[round(v, 1) for v in p]}{hit}",
+                          flush=True)
+                result = result_for(episode_id)
+                if result:
+                    return result
+            print("  runner did not report a result before the deadline", flush=True)
+            return None
+        finally:
+            # In `finally` so a timeout or an exception still closes the file. Without this, the
+            # video of the run that went wrong is the one left unplayable.
+            if chase_path:
+                try:
+                    got = drv.call("chase", ChaseRecording.Request(start=False), timeout_s=60.0)
+                    print(f"    chase: {got.frames} frames ({got.seconds:.0f}s), "
+                          f"{got.dropped} dropped -> {chase_path}", flush=True)
+                except Exception as exc:                                   # noqa: BLE001
+                    print(f"    chase stop failed: {exc}", flush=True)
+    finally:
+        # Before anything else can use the controller. Restoring is best-effort by
+        # construction: if it fails the node keeps a demo's limits, so say so loudly rather
+        # than let the next scenario be quietly unmeasurable.
+        for name, value in applied.items():
+            if not drv.set_param("/offboard_control", name, value):
+                print(f"  WARNING: could not restore {name}={value} on /offboard_control — "
+                      f"restart the graph before trusting another episode", flush=True)
 
 
 def main():
