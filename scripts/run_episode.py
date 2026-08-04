@@ -124,6 +124,24 @@ class EpisodeDriver(Node):
         while time.time() < end:
             rclpy.spin_once(self, timeout_sec=0.05)
 
+    def get_param(self, node_name, name, timeout_s=15.0):
+        """The node's current value, so an override can be undone exactly."""
+        from rcl_interfaces.srv import GetParameters
+        cli = self.create_client(GetParameters, f"{node_name}/get_parameters")
+        try:
+            if not cli.wait_for_service(timeout_sec=timeout_s):
+                return None
+            req = GetParameters.Request(names=[name])
+            fut = cli.call_async(req)
+            rclpy.spin_until_future_complete(self, fut, timeout_sec=timeout_s)
+            if not fut.done() or not fut.result().values:
+                return None
+            v = fut.result().values[0]
+            return v.double_value if v.type == 3 else (
+                v.integer_value if v.type == 2 else None)
+        finally:
+            self.destroy_client(cli)
+
     def set_param(self, node_name, name, value, timeout_s=15.0):
         """Replaces a `bash -lc … ros2 param set` subprocess with the service it wrapped."""
         cli = self.create_client(SetParameters, f"{node_name}/set_parameters")
@@ -178,6 +196,23 @@ def run_one(drv: EpisodeDriver, scen, seed, camera_pitch, chase=True):
     if not r.success:
         raise SystemExit(f"traffic: {r.message}")
 
+    # Per-scenario controller overrides, applied before the flight and restored after.
+    #
+    # `max_speed_mps` and friends are GLOBAL parameters while `max_steps` and `timeout_s` are
+    # per-scenario, so tuning the controller for one scenario silently reaches into every
+    # other one - and did: slowing a street-level DEMO to 0.5 m/s pushed four benchmark
+    # scenarios past their timeouts and would have doubled the E-01b sweep to ~4 h. A demo
+    # should not be able to invalidate a measurement.
+    overrides = scen.get("control") or {}
+    applied = {}
+    for name, value in overrides.items():
+        before = drv.get_param("/offboard_control", name)
+        if before is not None and drv.set_param("/offboard_control", name, float(value)):
+            applied[name] = before
+    if applied:
+        shown = ", ".join(f"{k}={overrides[k]} (was {applied[k]})" for k in applied)
+        print(f"  control: {shown}", flush=True)
+
     start = [float(v) for v in scen["start_ned"]]
     # The reset must own the aircraft exclusively. The offboard controller streams setpoints
     # at 10 Hz and will happily drag the vehicle toward the previous episode's waypoint while
@@ -218,6 +253,7 @@ def run_one(drv: EpisodeDriver, scen, seed, camera_pitch, chase=True):
     ep.seed = int(seed)
     ep.instruction = scen.get("instruction", "")
     ep.start = True
+    t_episode = time.time()
     r = drv.call("episode", ep, timeout_s=60.0)
     if not r.accepted:
         print(f"  episode/set refused: {r.message}", flush=True)
@@ -234,12 +270,22 @@ def run_one(drv: EpisodeDriver, scen, seed, camera_pitch, chase=True):
             chase_path = os.path.join(PROJ, "out", "chase", f"{episode_id}.mp4")
             creq = ChaseRecording.Request()
             creq.start, creq.path = True, chase_path
-            creq.width = int(scen.get("chase_width", 1280))
-            creq.height = int(scen.get("chase_height", 720))
-            creq.fps = float(scen.get("chase_fps", 30.0))
+            # 0 = use sidecar.chase_camera from the config. A scenario may still pin its
+            # own values, but it no longer has to restate the defaults to get them.
+            creq.width = int(scen.get("chase_width", 0))
+            creq.height = int(scen.get("chase_height", 0))
+            creq.fps = float(scen.get("chase_fps", 0.0))
+            t_chase = time.time()
             got = drv.call("chase", creq, timeout_s=60.0)
             if not got.success:
                 raise RuntimeError(got.message)
+            # Write down how much later the chase started than the episode. Without it the
+            # two recordings cannot be aligned afterwards: the chase both STARTS later and
+            # STOPS later, so their durations differ by (tail - head) and neither term is
+            # recoverable from the files. Two unknowns, one equation.
+            with open(chase_path.replace(".mp4", ".sync.json"), "w") as fh:
+                json.dump({"episode_id": episode_id,
+                           "chase_start_after_episode_s": round(t_chase - t_episode, 3)}, fh)
         except Exception as exc:                                       # noqa: BLE001
             print(f"  chase camera unavailable ({exc}); flying without it", flush=True)
             chase_path = None
@@ -261,6 +307,12 @@ def run_one(drv: EpisodeDriver, scen, seed, camera_pitch, chase=True):
         print("  runner did not report a result before the deadline", flush=True)
         return None
     finally:
+        # Restore the controller BEFORE anything else can use it. A demo's slow speed
+        # leaking into the next scenario of a sweep is exactly the failure these overrides
+        # exist to prevent.
+        for name, value in applied.items():
+            drv.set_param("/offboard_control", name, value)
+
         # In `finally` so a timeout or an exception still closes the file. Without this, the
         # video of the run that went wrong is the one left unplayable.
         if chase_path:
