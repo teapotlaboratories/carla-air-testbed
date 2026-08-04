@@ -1,18 +1,23 @@
 # carla-air testbed
 
-A **VLM navigation testbed over ROS 2**, built on CARLA-Air v0.1.7. It reproduces the
-See-Point-Fly loop — *frame → 2D annotation → 3D displacement → velocity setpoint* — against
-a photorealistic city with live traffic and weather, **headless, on one GPU, with no
-containers**.
+A **drone simulator with a ROS 2 interface**, built on CARLA-Air v0.1.7: a quadrotor in a
+photorealistic city with live traffic and weather, **headless, on one GPU, with no
+containers**. Fly it, sense from it, and script scenarios against it — all over ROS 2.
 
-The autonomy nodes talk to `/fmu/out/*` and `/fmu/in/*` exactly as they would to a real
-Pixhawk 6C, so they port to hardware by deleting one node rather than rewriting the stack.
+Your nodes talk to `/fmu/out/*` and `/fmu/in/*` exactly as they would to a real Pixhawk 6C,
+so they port to hardware by deleting one node rather than rewriting the stack.
 
 ```
-sim_bridge (py3.10) ──UDS/msgpack──> carla_air_bridge ──> vlm_client ──> grounding ──> control
-  carla + airsim                      /fmu/out/*           /vlm/          /vlm/         /fmu/in/
-  traffic + weather                   /camera/*            annotation     grounded_wp   trajectory_setpoint
+sim_bridge (py3.10) ──UDS/msgpack──> carla_air_bridge ──> control ──> /fmu/in/trajectory_setpoint
+  carla + airsim                      /fmu/out/*  odometry, IMU, baro, mag, GPS, lidar
+  traffic + weather                   /camera/*   rgb · depth · segmentation
+                                      /sim/*      reset · traffic · weather (services)
 ```
+
+**Vision-language navigation is one thing you can build on it**, not what it is. The
+See-Point-Fly loop — *frame → 2D annotation → 3D displacement → velocity setpoint* — ships as
+[`examples/vlm_navigation/`](examples/vlm_navigation/), started separately and talking only to
+the interface above. Skip it and the simulator is unchanged.
 
 Two processes because it has to be: the CARLA-Air client is an ABI-tagged `cpython-310`
 extension and ROS 2 Jazzy is 3.12, so neither interpreter can load the other's C extensions.
@@ -50,18 +55,25 @@ git clone <this repo> carla-air_testing && cd carla-air_testing
                                    # pass a directory to put the 18 GB release elsewhere;
                                    # it is remembered, no shell-profile export needed
 
-./.venv/bin/python -m pytest tests/ -q     # 117 passed, no sim needed
+./.venv/bin/python -m pytest tests/ -q     # 117 passed, 1 skipped — no sim needed
 ```
 
 ## Run an example
 
 ```bash
-# terminal 1 — simulator + the whole ROS 2 graph (~90 s to be ready)
-./scripts/bringup.sh --backend oracle
+# terminal 1 — the simulator and its ROS 2 graph (~90 s). No VLM node runs.
+./scripts/bringup.sh --config configs/testbed.yaml
 
-# terminal 2 — one scored episode
+# at this point you can already fly it from your own code:
+#   python3 examples/ros2_full_control.py    takeoff -> waypoint -> attitude -> land
+#   python3 examples/ros2_world_control.py   traffic, weather, teleport, teardown
+
+# terminal 2 — OPTIONAL: the See-Point-Fly example, on top of that interface
+./examples/vlm_navigation/run.sh --backend oracle
+
+# terminal 3 — one scored episode (needs terminal 2: it scores what produces waypoints)
 ./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
-#   -> SUCCESS  18.6 m from goal, 14 steps
+#   -> SUCCESS  18.0 m from goal, 14 steps
 
 # always, when the test is done
 ./scripts/stop.sh --all && ./scripts/status.sh
@@ -72,7 +84,8 @@ Results land in `out/episodes/*.json`; a sweep also writes `out/sweep-<scenario>
 Other entry points:
 
 ```bash
-./scripts/bringup.sh --backend geometric      # the no-language baseline
+./scripts/bringup.sh --config configs/testbed.yaml                             # the simulator
+./examples/vlm_navigation/run.sh --backend geometric   # the no-language baseline
 ./.venv/bin/python scripts/record_flight.py 60 # -> out/flight.mp4
 ./scripts/run_conformance.sh                   # is the simulator still behaving? ~15 min
 ./scripts/status.sh --rates                    # what is running, and how fast
@@ -128,6 +141,7 @@ Evidence: [`docs/worklog/`](docs/worklog/).
 |---|---|
 | [`docs/ros2-api.html`](docs/ros2-api.html) | **Commanding the aircraft from ROS 2** — five commands, twelve sensor streams, message types and code. Every figure measured against the running simulator. |
 | [`docs/dataflow.html`](docs/dataflow.html) | **How the data moves** — every protocol hop from UE4 render target to velocity setpoint, and why each one is there. |
+| [`docs/rpc-path.html`](docs/rpc-path.html) | **The sidecar RPC path** — where a call lives, how it flows, and how one slow reply desynchronises the stream permanently. Backlog E-06. |
 | [`docs/guide.html`](docs/guide.html) | This README and the quick start, rendered as one page. |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, the measured numbers, and the traps that cost time. |
 | [`docs/todo.md`](docs/todo.md) | The backlog: what is open, why, and how each item will be verified. |
@@ -167,7 +181,7 @@ scripts/               install (one command) · setup · fetch_release · fetch_
 tests/                 test_offline · test_scenarios · test_survey · test_claude_backend
                        · test_config (117, no sim) · conformance/
 examples/              ros2_full_control.py — fly it from plain ROS 2, no project imports
-docs/                  ros2-api.html · dataflow.html · guide.html
+docs/                  ros2-api.html · dataflow.html · rpc-path.html · guide.html
                        architecture · references · worklog · todo
 ```
 
@@ -175,9 +189,17 @@ Nothing installs into `~` or the system: `vendor/` holds uv, the standalone CPyt
 `px4_msgs` and the ROS-side (3.12) python packages in `vendor/py312`; `.venv/` holds the
 3.10 packages; the 18 GB simulator lives wherever `CARLAAIR_RELEASE` points.
 
-## Adding a VLM backend
+## Building on it
 
-Implement one method — image and instruction in, pixel out — and register it in `BACKENDS`
+**Anything that can speak ROS 2.** The aircraft takes `TrajectorySetpoint` (position or
+velocity), `VehicleAttitudeSetpoint` and `VehicleCommand` for takeoff/land; the world takes
+four services on `/sim/*`. `examples/ros2_full_control.py` and `examples/ros2_world_control.py`
+are complete working clients that import nothing from this project.
+
+### The vision-language example
+
+If what you want *is* a VLM navigator, `examples/vlm_navigation/` is a working one and the
+extension point is one method — image and instruction in, pixel out — registered in `BACKENDS`
 in `vlm_client/vlm_node.py`. The model never sees a pose, a map or metres; all the geometry
 happens downstream in `grounding`, which is what keeps backends swappable and the comparison
 fair.
@@ -194,7 +216,11 @@ readable from the graph and land in launch logs. Either works:
 export ANTHROPIC_API_KEY=sk-ant-...   # from console.anthropic.com
 ant auth login                        # or an OAuth profile, if the account has an API org
 
-./scripts/bringup.sh --backend claude
+# terminal 1
+./scripts/bringup.sh --config configs/testbed.yaml
+
+# terminal 2
+./examples/vlm_navigation/run.sh --backend claude
 ```
 
 > **A Claude.ai Pro/Max subscription does not cover this.** The subscription is for claude.ai
@@ -228,7 +254,7 @@ workaround exists purely because of the distrobox and disappears without it.
 Paths that are machine-specific (`CARLAAIR_RELEASE`, `TESTBED_ROS_DOMAIN_ID`,
 `CARLAAIR_HOME`) are all environment variables with defaults.
 
-## What this testbed is and is not good for
+## What it is and is not good for
 
 **Good for:** developing and benchmarking a VLM navigation client against a photoreal city
 with dense traffic, weather and segmentation ground truth. The grounding transform closes,

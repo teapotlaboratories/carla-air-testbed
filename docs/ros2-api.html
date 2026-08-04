@@ -259,7 +259,7 @@
   <section>
     <h2>Setup</h2>
 <pre><span class="c"># terminal 1 - simulator and the whole graph</span>
-./scripts/bringup.sh --backend geometric
+./scripts/bringup.sh --config configs/testbed.yaml
 
 <span class="c"># terminal 2 - your client</span>
 <span class="k">source</span> /opt/ros/jazzy/setup.bash
@@ -372,7 +372,7 @@ pub.publish(msg)   <span class="c"># STREAM this at ~10 Hz</span></pre>
     <div class="note trap">
       <span class="t">Take the aircraft off the autonomy loop first</span>
       <p>
-        <code>bringup.sh</code> starts the VLM &rarr; grounding &rarr; control chain, and that
+        <code>bringup.sh</code> starts the controller, and that
         controller streams <em>its own</em> setpoints at 10 Hz onto
         <code>/fmu/in/trajectory_setpoint</code>. Two publishers on one topic is not a conflict
         either can detect: the bridge forwards whichever arrived last, and at 10 Hz the

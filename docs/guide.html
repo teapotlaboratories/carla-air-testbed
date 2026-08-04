@@ -184,6 +184,8 @@
   }
   .note.warn{border-left-color:var(--ground)}
   .note.stop{border-left-color:var(--stop)}
+  .note.ok{border-left-color:var(--ok)}
+  .note pre{margin:.6rem 0 .8rem}
   .note p:last-child{margin-bottom:0}
   .note .t{
     font-family:var(--display); font-size:.68rem; font-weight:700; letter-spacing:.12em;
@@ -270,12 +272,13 @@
   <main>
   <!-- ============================ README ============================ -->
   <article class="doc" id="d-readme" role="tabpanel" aria-labelledby="t-readme">
-    <p class="eyebrow">VLM navigation testbed · ROS 2 Jazzy · CARLA-Air v0.1.7</p>
-    <h1>A drone that flies where a model points</h1>
+    <p class="eyebrow">Drone simulator · ROS 2 Jazzy · CARLA-Air v0.1.7</p>
+    <h1>A drone, a city, and a ROS 2 interface</h1>
     <p class="lede">
-      Reproduces the See-Point-Fly loop — <em>frame → 2D annotation → 3D displacement →
-      velocity setpoint</em> — against a photorealistic city with live traffic and weather.
-      Headless, on one GPU, with no containers.
+      A quadrotor in a photorealistic city with live traffic and weather. Fly it, sense from
+      it, and script scenarios against it &mdash; all over ROS 2, headless, on one GPU, with
+      no containers. Vision-language navigation is one thing you can build on it, not what
+      it is.
     </p>
 
     <div class="stats">
@@ -292,18 +295,26 @@
       than rewriting the stack.
     </p>
 
-    <h2 id="r-pipeline">The loop</h2>
+    <h2 id="r-pipeline">What the simulator gives you</h2>
     <div class="pipe">
       <div class="stage g"><span class="n">sim_bridge</span><span class="d">py3.10 · carla + airsim</span></div>
-      <div class="stage"><span class="n">bridge</span><span class="d">/fmu/out/* · /camera/*</span></div>
-      <div class="stage"><span class="n">vlm_client</span><span class="d">/vlm/annotation</span></div>
-      <div class="stage"><span class="n">grounding</span><span class="d">/vlm/grounded_waypoint</span></div>
+      <div class="stage"><span class="n">bridge</span><span class="d">/fmu/out/* · /camera/* · /sim/*</span></div>
+      <div class="stage"><span class="n">your node</span><span class="d">anything at all</span></div>
       <div class="stage"><span class="n">control</span><span class="d">/fmu/in/trajectory_setpoint</span></div>
     </div>
     <p class="legend">
       <span class="sw g"></span> the ground world — CARLA traffic, pedestrians, weather &nbsp;·&nbsp;
       <span class="sw a"></span> the aircraft — ROS 2 Jazzy, PX4-shaped topics
     </p>
+    <div class="prose">
+      <p>
+        The middle stage is yours. <strong>Vision-language navigation is one thing that can
+        go there</strong>, and it ships as an example &mdash; <code>vlm_client</code> turns a
+        frame into a pixel, <code>grounding</code> turns that pixel into an NED waypoint on
+        <code>/control/waypoint</code>. Both are started separately and use nothing the
+        interface above does not offer everyone.
+      </p>
+    </div>
     <div class="prose">
       <p>
         Two processes because it has to be: the CARLA-Air client is an ABI-tagged
@@ -338,11 +349,15 @@ sudo apt install ros-jazzy-desktop python3-colcon-common-extensions \
                                    <span class="c"># pass a directory to put the 18 GB release</span>
                                    <span class="c"># elsewhere; remembered, no export needed</span>
 
-./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">117 passed</span><span class="c">, no simulator needed</span></pre>
+./.venv/bin/python -m pytest tests/ -q     <span class="c"># </span><span class="g">117 passed, 1 skipped</span><span class="c">, no simulator needed</span></pre>
 
     <h2 id="r-run">Run an example</h2>
 <pre><span class="c"># terminal 1 — simulator + the whole ROS 2 graph (~90 s to be ready)</span>
-./scripts/bringup.sh --backend oracle
+<span class="c"># terminal 1 — the simulator and its ROS 2 graph. Stays running.</span>
+./scripts/bringup.sh --config configs/testbed.yaml
+
+<span class="c"># terminal 2 — the See-Point-Fly example. Also stays running.</span>
+./examples/vlm_navigation/run.sh --backend oracle
 
 <span class="c"># terminal 2 — one scored episode</span>
 ./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
@@ -536,12 +551,33 @@ ls /usr/share/vulkan/icd.d/nvidia_icd*.json  <span class="c"># a Vulkan ICD exis
             without touching the simulator:
           </p>
         </div>
-<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">117 passed</span></pre>
+<pre>./.venv/bin/python -m pytest tests/ -q     <span class="c"># expect: </span><span class="g">117 passed, 1 skipped</span></pre>
+        <div class="note ok">
+          <span class="t">In a hurry? One command</span>
+          <p>
+            If all you want is to watch a VLM fly and get a video out of it, the remaining
+            steps are already wrapped:
+          </p>
+<pre>./scripts/demo.sh                      <span class="c"># street_level, claude backend, seed 5</span>
+./scripts/demo.sh --scenario cross_the_plaza --backend geometric --seed 2</pre>
+          <p>
+            It brings the simulator up, starts the VLM, flies one episode, composites the
+            chase camera with the drone's own view and the depth buffer into
+            <code>out/demo/&lt;episode&gt;.mp4</code>, and <strong>stops everything on the way
+            out</strong> — including on Ctrl-C. About 5 minutes end to end. The steps below
+            are the same thing taken apart, which is what you want the first time something
+            does not work.
+          </p>
+        </div>
       </li>
 
       <li>
-        <h3 id="q-up">Bring the stack up</h3>
-<pre>./scripts/bringup.sh --backend oracle</pre>
+        <h3 id="q-up">Start the simulator</h3>
+        <div class="prose">
+          <p><strong>Terminal 1.</strong> This is the whole product: a drone, a city, and a
+          ROS 2 interface.</p>
+        </div>
+<pre>./scripts/bringup.sh --config configs/testbed.yaml</pre>
         <div class="prose"><p>Wait for these three lines — about 90 s, mostly Unreal loading the map:</p></div>
 <pre><span class="g">GPU 1 (NVIDIA GeForce RTX 5060 Ti): 3342 MiB in use — hardware rendering confirmed</span>
 sim_bridge up on /tmp/carla_air_testbed.sock
@@ -559,14 +595,66 @@ sim_bridge up on /tmp/carla_air_testbed.sock
             single-GPU machine set <code>simulator.gpu: 0</code> before the first run.
           </p>
         </div>
+        <div class="prose">
+          <p>
+            <strong>Nothing is flying yet, and nothing is looking at the camera.</strong> What
+            you have is four nodes — and that is already enough to fly it from your own code:
+            takeoff, waypoints, attitude and every sensor, all over ROS 2.
+          </p>
+        </div>
+<pre>ros2 node list        <span class="c"># needs ROS_DOMAIN_ID=42</span>
+<span class="c"># /carla_air_bridge  /offboard_control  /episode_runner  /recorder</span>
+
+python3 examples/ros2_full_control.py     <span class="c"># takeoff -&gt; waypoint -&gt; attitude -&gt; land</span>
+python3 examples/ros2_world_control.py    <span class="c"># traffic, weather, teleport, teardown</span></pre>
+        <div class="note">
+          <span class="t">If that is what you came for, you are done</span>
+          <p>The remaining steps are one <em>example</em> of what to build on top.</p>
+        </div>
+      </li>
+
+      <li>
+        <h3 id="q-vlm">Start the VLM engine &mdash; optional</h3>
+        <div class="prose">
+          <p>
+            <strong>Terminal 2.</strong> The See-Point-Fly loop: look at the frame, point at a
+            pixel, turn it into a waypoint. It starts <em>separately</em> and talks only to the
+            public ROS 2 interface, exactly as your own navigation code would.
+          </p>
+        </div>
+<pre>./examples/vlm_navigation/run.sh --backend oracle</pre>
+        <div class="prose">
+          <p>This adds two nodes and nothing else:</p>
+        </div>
+<pre>/vlm_client   frame + instruction -&gt; a pixel        <span class="c">(/vlm/annotation)</span>
+/grounding    pixel + depth       -&gt; an NED point   <span class="c">(/control/waypoint)</span></pre>
+        <div class="prose">
+          <p>
+            Backends: <code>oracle</code> (handed the goal &mdash; a diagnostic, not a
+            competitor), <code>geometric</code> (steers toward the most open depth column),
+            <code>claude</code>, <code>mock</code>, <code>scripted</code>. Config is
+            <code>examples/vlm_navigation/config/vlm.yaml</code> &mdash; the simulator's own
+            config knows nothing about any of it.
+          </p>
+          <p>
+            <strong>Skip this step entirely</strong> if you are driving the aircraft yourself.
+            Nothing in the previous step depends on it.
+          </p>
+        </div>
       </li>
 
       <li>
         <h3 id="q-fly">Fly a scored episode</h3>
+        <div class="prose">
+          <p>
+            <strong>Terminal 3.</strong> Needs the step above running &mdash; an episode scores
+            whatever is producing waypoints, so with no engine the aircraft simply sits there.
+          </p>
+        </div>
 <pre>cd carla-air_testing
 ./scripts/run_episode.sh --scenario cross_the_plaza --seeds 1</pre>
 <pre>=== cross_the_plaza seed=1 ===
-  traffic: {'vehicles': 15, 'walkers': 9}
+  traffic: 30 vehicles, 19 walkers
   start pose: [113.0, -167.1, -55.7] (commanded [107.6, -159.4, -55.0], error 9.4 m)
   episode running [cross_the_plaza-s1-331669] — 'fly across the open plaza…'
     alt  54.4 m  pos [122.1, -173.7, -54.4]
@@ -611,6 +699,8 @@ sim_bridge up on /tmp/carla_air_testbed.sock
             <td>restart the sidecar, ~5 s</td></tr>
         <tr><th><code>sidecar</code></th><td>the chase camera</td>
             <td>restart the sidecar, ~5 s</td></tr>
+        <tr><th><code>sidecar.traffic</code></th><td>cars, pedestrians, walking speed</td>
+            <td><strong>live</strong> &mdash; re-read every 1 Hz tick</td></tr>
         <tr><th><code>graph</code></th><td>rates, backend, controller limits, recording</td>
             <td><strong>live</strong> &mdash; <code>ros2 param set</code></td></tr>
       </tbody>
@@ -642,6 +732,13 @@ sim_bridge up on /tmp/carla_air_testbed.sock
   gpu: 1                    <span class="c"># nvidia-smi index, or a &quot;10de:2d04&quot; vendor:device pair.</span>
                             <span class="c"># GPU 0 is the operator&#x27;s and is regularly busy with UnrealEditor.</span>
 
+  <span class="c"># headless renders with no display server at all (-RenderOffScreen) and is what every</span>
+  <span class="c"># measurement in this project was taken with. `windowed` opens an actual Unreal window and</span>
+  <span class="c"># needs somewhere to put it: export DISPLAY, or give it a virtual screen with</span>
+  <span class="c">#     Xvfb :99 -screen 0 1280x720x24 &amp;</span>
+  <span class="c"># Override for one run with `run_sim.sh --display windowed`.</span>
+  display: headless
+
   <span class="c"># 1.0 and leave it there. AirSim&#x27;s ClockSpeed accelerates SimpleFlight but NOT CARLA, so</span>
   <span class="c"># anything else desynchronises the two halves of the world.</span>
   clock_speed: 1.0
@@ -659,7 +756,12 @@ sim_bridge up on /tmp/carla_air_testbed.sock
   <span class="c"># `frames.scale_to()` then maps an RGB pixel onto the wrong depth pixel — silently, on every</span>
   <span class="c"># waypoint. This is also why the drone camera is not 1920x1080.</span>
   cameras:
-    rgb:          {width: 640, height: 480, fov: 90}
+    <span class="c"># 960x720, NOT 1280x720. 720 lines either way, but 1280x720 is 16:9 and every buffer</span>
+    <span class="c"># here must share ONE aspect ratio. Beyond the depth-lookup bug that causes, 16:9 narrows</span>
+    <span class="c"># the VERTICAL field 73.7 -&gt; 58.7 deg, which pushes the level-flight row from 13.7% of</span>
+    <span class="c"># the frame down to 1.5% - the camera-pitch problem, made several times worse, on the</span>
+    <span class="c"># one axis a VLM has to reason about.</span>
+    rgb:          {width: 960, height: 720, fov: 90}
     depth:        {width: 160, height: 120, fov: 90}
     segmentation: {width: 320, height: 240, fov: 90}
 
@@ -766,13 +868,38 @@ sim_bridge up on /tmp/carla_air_testbed.sock
   <span class="c"># (59.8 vs 60.0) while 60 Hz costs 10 fps of simulation. Real-time factor stays 1.000</span>
   <span class="c"># throughout, which is the trap — judge this by tick rate, never by RTF.</span>
   chase_camera:
-    width: 1280
-    height: 720
-    fps: 30
+    width: 1920
+    height: 1080
+    <span class="c"># 20, not 30. At 1920x1080 the encoder could not keep up with 30 fps - measured 19 frames</span>
+    <span class="c"># dropped in 226, and the stop timed out with the file left unplayable. 1080p is worth</span>
+    <span class="c"># more here than the extra 10 fps of a spectator camera.</span>
+    fps: 20
     distance: 14.0          <span class="c"># metres behind</span>
     above: 6.0              <span class="c"># metres above</span>
     crf: 26                 <span class="c"># x264 constant-rate-factor for recordings; 23 near-transparent,</span>
                             <span class="c"># 26 is ~2.2x smaller on moving footage, 30 is ~3.7x</span>
+
+  <span class="c"># Traffic. RE-READ LIVE: this block is reloaded on every spawn and on every 1 Hz steering</span>
+  <span class="c"># tick, so editing it changes pedestrians already walking, within a second, with no</span>
+  <span class="c"># restart. The rest of `sidecar:` needs the ~5 s restart; this does not.</span>
+  <span class="c">#</span>
+  <span class="c"># Counts here are DEFAULTS. A scenario&#x27;s `traffic_vehicles`/`traffic_walkers` and an</span>
+  <span class="c"># explicit /sim/spawn_traffic request both override them.</span>
+  traffic:
+    vehicles: 15
+    walkers: 10
+    radius_m: 70.0          <span class="c"># cluster radius. Ask for more vehicles than there are spawn</span>
+                            <span class="c"># points inside it and the sidecar falls back to MAP-WIDE and</span>
+                            <span class="c"># says so — Town10HD has ~45 within 70 m of the plaza.</span>
+
+    <span class="c"># Pedestrians are steered DIRECTLY, not by controller.ai.walker, which this build</span>
+    <span class="c"># accepts and silently ignores — measured 0/8 moving with it, 6/6 without. See</span>
+    <span class="c"># docs/todo.md T-03.</span>
+    walker_speed_min: 1.0   <span class="c"># m/s. 1.0-1.7 spans a stroll to a brisk walk. Each walker</span>
+    walker_speed_max: 1.7   <span class="c"># keeps a fixed position in this range, so widening it here</span>
+                            <span class="c"># changes live walkers without making them move as one.</span>
+    walker_arrive_m: 3.0    <span class="c"># how close counts as arrived; a new destination is chosen then</span>
+    walker_roam_m: 80.0     <span class="c"># how far the next destination may be from where they are</span>
 
 
 <b>graph</b>:
@@ -789,36 +916,50 @@ sim_bridge up on /tmp/carla_air_testbed.sock
     frame_id: drone
     setpoint_duration_s: 0.5      <span class="c"># how long a velocity/attitude command lives</span>
 
-  vlm_client:
-    backend: geometric      <span class="c"># mock | scripted | geometric | oracle | claude</span>
-    seed: 0
-    min_period_s: 1.0
-    history_length: 5
-    instruction: &quot;fly forward and stay clear of buildings&quot;
-    claude_model: claude-opus-5
-    claude_effort: low      <span class="c"># 40 steps in 300 s is 7.5 s per decision; higher effort blows it</span>
-    claude_max_tokens: 16000
-    claude_timeout_s: 60.0
-    claude_jpeg_quality: 90
-    claude_fallbacks: true
-
-  grounding:
-    camera_pitch_deg: -28.6       <span class="c"># level flight lives in the top 13.7% of the frame at this</span>
-                                  <span class="c"># pitch. Any backend that does not know the goal ALTITUDE</span>
-                                  <span class="c"># flies itself into the ground.</span>
-    camera_offset_body: [0.5, 0.0, 0.1]
-    depth_history: 12
-    max_range_m: 200.0
+  <span class="c"># vlm_client: and grounding: USED TO BE HERE. They moved to</span>
+  <span class="c">#   examples/vlm_navigation/config/vlm.yaml</span>
+  <span class="c"># when the VLM became an example rather than part of the simulator (todo.md R-02).</span>
+  <span class="c"># Someone installing a drone simulator should not find an Anthropic model name in its</span>
+  <span class="c"># config file. The example is launched separately and talks only to the ROS 2 interface.</span>
 
   offboard_control:
     rate_hz: 10.0
     setpoint_duration_s: 0.5
-    max_speed_mps: 5.0
-    max_step_m: 20.0
+    <span class="c"># 2.0, down from 5.0. The binding constraint is not the airframe, it is how far the</span>
+    <span class="c"># aircraft travels BLIND between looks. Claude measured p50 5.6-6.6 s, p95 9.5 s per</span>
+    <span class="c"># decision, so at 5 m/s a worst-case gap is 47 m of unobserved flight - more than twice</span>
+    <span class="c"># the 20 m step cap and six times the 8 m standoff. At 2.0 it is ~12 m typical, ~19 m</span>
+    <span class="c"># worst case, and the aircraft is re-observing before it has consumed its own step.</span>
+    <span class="c">#</span>
+    <span class="c"># `min_period_s: 1.0` in the example&#x27;s config is a RATE LIMIT, not the latency; the</span>
+    <span class="c"># model has never answered in 1 s.</span>
+    max_speed_mps: 5.0        <span class="c"># the value E-01b was measured at. Demos override</span>
+                              <span class="c"># this per scenario — see `control:` in default.yaml.</span>
+    <span class="c"># Slew rate on the commanded velocity. 0 disables. Without it the velocity is recomputed</span>
+    <span class="c"># from scratch each tick and steps the moment a new waypoint arrives — every ~4 s with a</span>
+    <span class="c"># VLM — so the aircraft snaps onto each heading at full speed.</span>
+    max_accel_mps2: 2.5
+    <span class="c"># Heading slew rate. The heading follows the instantaneous velocity, recomputed at 10 Hz,</span>
+    <span class="c"># so velocity wobble became visible jitter — and the drone camera is fixed to the</span>
+    <span class="c"># airframe, so the model&#x27;s own view swings with it.</span>
+    max_yaw_rate_dps: 45.0    <span class="c"># smoothing; demos slow this right down per scenario</span>
+    max_step_m: 20.0          <span class="c"># as measured for E-01b; overridden per scenario</span>
     standoff_m: 8.0
     arrival_radius_m: 2.0
     <span class="c"># THESE ARE NED, NOT AGL. The origin sits 27.45 m above the street on Town10HD, so the</span>
     <span class="c"># real floor is 42.45 m AGL and the ceiling 147.45 m.</span>
+    <span class="c"># -24.0 is NOT a typo. The clamp is `clip(z, -max, -min)` in NED, where altitude is -z,</span>
+    <span class="c"># so a NEGATIVE min_altitude_m permits z ABOVE the origin plane - and the origin sits</span>
+    <span class="c"># 27.45 m above the street. -24.0 therefore allows 3.45 m AGL, which is what street-level</span>
+    <span class="c"># flight needs. At the old 15.0 the floor was 42.45 m AGL and a VLM aimed at the road</span>
+    <span class="c"># was clamped twelve times above it.</span>
+    <span class="c">#</span>
+    <span class="c"># This is a loaded gun: the floor exists so a waypoint on the ground cannot fly the</span>
+    <span class="c"># aircraft into it. Raise it back to 15.0 for anything scored above the rooftops.</span>
+    <span class="c"># 15.0 = 42.45 m AGL, the value E-01b was measured at. The street-level demo needs a</span>
+    <span class="c"># NEGATIVE floor to descend below the origin plane, and sets it per scenario rather than</span>
+    <span class="c"># here — a setting that lets a waypoint fly the aircraft into the ground should not be</span>
+    <span class="c"># the default for every scenario because one demo wants it.</span>
     min_altitude_m: 15.0
     max_altitude_m: 120.0
     enabled: true
@@ -831,6 +972,12 @@ sim_bridge up on /tmp/carla_air_testbed.sock
     record_dir: out/videos
     fps: 8.0
     draw_overlay: true
+    <span class="c"># Also record the depth buffer, colourised, as &lt;episode&gt;-depth.mp4. This is what</span>
+    <span class="c"># `grounding` actually consumes — the model picks a pixel and the depth AT that pixel is</span>
+    <span class="c"># what becomes a distance — so a flight that went somewhere odd is far easier to explain</span>
+    <span class="c"># with this beside the RGB.</span>
+    record_depth: true
+    depth_max_m: 200.0      <span class="c"># clip before colourising; AirSim writes sky as a huge value</span>
     output_height: 0        <span class="c"># 0 = the camera&#x27;s own size. The onboard view is evidence of what</span>
                             <span class="c"># the model saw; upscaling it only inflates the file.</span>
     crf: 26</pre>
@@ -849,8 +996,42 @@ simulator:
     lat: <span class="y">51.5074</span>        <span class="c"># London, not AirSim's default (Redmond, Washington)</span>
     lon: <span class="y">-0.1278</span>
     alt: <span class="y">11.0</span></pre>
-<pre>./scripts/bringup.sh --backend geometric      <span class="c"># renders the config, then starts</span>
+<pre><span class="c"># terminal 1 — renders the config, then starts</span>
+./scripts/bringup.sh --config configs/testbed.yaml
+<span class="c"># terminal 2</span>
+./examples/vlm_navigation/run.sh --backend geometric
 ros2 topic echo /fmu/out/sensor_gps --once    <span class="c"># now a London coordinate</span></pre>
+
+    <h3 id="q-traffic">Traffic, and a config you can edit while it runs</h3>
+    <div class="prose">
+      <p>
+        <code>sidecar.traffic</code> is re-read on every spawn <em>and</em> on every 1&nbsp;Hz
+        steering tick, so editing it changes pedestrians that are <strong>already
+        walking</strong>, within a second, with no restart.
+      </p>
+    </div>
+<pre>sidecar:
+  traffic:
+    vehicles: <span class="y">15</span>
+    walkers: <span class="y">10</span>
+    radius_m: <span class="y">70.0</span>          <span class="c"># cluster radius around the spawn point</span>
+    walker_speed_min: <span class="y">1.0</span>   <span class="c"># m/s - a stroll</span>
+    walker_speed_max: <span class="y">1.7</span>   <span class="c"># a brisk walk</span>
+    walker_arrive_m: <span class="y">3.0</span>
+    walker_roam_m: <span class="y">80.0</span></pre>
+    <div class="prose"><p>Verify it live &mdash; set both speeds to <code>0.0</code>, save, and watch:</p></div>
+<pre>ros2 topic echo /sim/traffic_stats     <span class="c"># walkers_moving drops to 0 within ~1 s</span></pre>
+    <div class="note warn">
+      <span class="t">An empty street usually means this</span>
+      <p>
+        Counts here are <strong>defaults</strong> &mdash; a scenario's
+        <code>traffic_vehicles</code> and an explicit <code>/sim/spawn_traffic</code> both
+        override them. Ask for more vehicles than the radius can hold and you get
+        <strong>map-wide</strong> traffic instead: Town10HD has ~45 spawn points within 70 m
+        of the plaza, so requesting 60 spreads them across the whole city. The service reply
+        says so when it happens.
+      </p>
+    </div>
 
     <h3 id="q-sensors">Adding a sensor</h3>
     <div class="prose">
@@ -909,7 +1090,10 @@ ros2 topic echo /fmu/out/sensor_gps --once    <span class="c"># now a London coo
       </p>
     </div>
 <pre>./scripts/stop.sh
-./scripts/bringup.sh --backend geometric
+<span class="c"># terminal 1</span>
+./scripts/bringup.sh --config configs/testbed.yaml
+<span class="c"># terminal 2</span>
+./examples/vlm_navigation/run.sh --backend geometric
 <span class="c"># then in terminal 2, the same episode command</span>
 
 <span class="c"># other things to try</span>
