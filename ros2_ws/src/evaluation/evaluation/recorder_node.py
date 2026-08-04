@@ -24,6 +24,7 @@ import os
 import sys
 
 import cv2
+import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from interfaces.msg import Annotation2D, EpisodeStatus
@@ -92,6 +93,7 @@ class RecorderNode(Node):
         if not os.path.isabs(self._dir):
             self._dir = os.path.join(os.getcwd(), self._dir)
         self._fps = float(self.get_parameter("fps").value)
+        self._crf = int(self.get_parameter("crf").value)
         self._overlay = bool(self.get_parameter("draw_overlay").value)
         self._enabled = bool(self.get_parameter("record_enabled").value)
         self._out_h = int(self.get_parameter("output_height").value)
@@ -107,11 +109,24 @@ class RecorderNode(Node):
         self._pad_left = 0
 
         self._episode = None        # EpisodeStatus, latest
+        self.declare_parameter("record_depth", False)
+        self._record_depth = bool(self.get_parameter("record_depth").value)
+        self.declare_parameter("depth_max_m", 200.0)
+        #: Clip depth here before colourising. AirSim writes sky as a huge
+        #: value, so without a clip the whole city lands in the bottom few
+        #: percent of the range and the frame reads as black.
+        self._depth_max = float(self.get_parameter("depth_max_m").value)
+        self._depth_writer = None
+        self._depth_t0 = None
         self._annotation = None     # Annotation2D, latest
+        self._t0 = None             # stamp of the first frame of this episode
         self._altitude = None
 
         self.create_subscription(Image, "/camera/rgb/image_raw", self._on_image, 1)
         self.create_subscription(Annotation2D, "/vlm/annotation", self._on_annotation, 5)
+        if self._record_depth:
+            self.create_subscription(Image, "/camera/depth/image_raw",
+                                     self._on_depth, 5)
         self.create_subscription(EpisodeStatus, "/episode/status", self._on_status, 5)
         self.create_subscription(VehicleOdometry, "/fmu/out/vehicle_odometry",
                                  self._on_odom, _SENSOR_QOS)
@@ -123,6 +138,43 @@ class RecorderNode(Node):
             self.get_logger().info("recording disabled (record_enabled:=false)")
 
     # ------------------------------------------------------------------ inputs
+
+    def _on_depth(self, msg: Image):
+        """Record the depth buffer as a colourised video alongside the RGB one.
+
+        Depth is 32FC1 METRES, and AirSim marks sky as a very large value rather than NaN -
+        so a naive normalise maps the whole city into the bottom few percent of the range
+        and the result is a black frame with a white sky. Clipping at `max_range_m` first is
+        what makes it readable.
+
+        This is what `grounding` actually consumes: the model picks a pixel, and the depth at
+        that pixel is what turns it into a distance. A flight that went somewhere odd is much
+        easier to explain with this beside the RGB.
+        """
+        if not self._record_depth or self._broken:
+            return
+        episode = self._episode
+        if episode is None or episode.state != "running":
+            return
+        try:
+            d = self._cv.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+            d = np.nan_to_num(np.asarray(d, dtype=np.float32), nan=self._depth_max,
+                              posinf=self._depth_max)
+            norm = np.clip(d, 0.0, self._depth_max) / self._depth_max
+            colour = cv2.applyColorMap((255 * (1.0 - norm)).astype(np.uint8), cv2.COLORMAP_TURBO)
+            if self._depth_writer is None:
+                path = os.path.join(self._dir, f"{episode.episode_id}-depth.mp4")
+                self._depth_writer = VideoWriter(path, colour.shape[1], colour.shape[0],
+                                                 fps=self._fps, crf=self._crf)
+                self.get_logger().info(f"recording depth -> {path}")
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            if self._depth_t0 is None:
+                self._depth_t0 = stamp
+            self._depth_writer.write(colour, t_s=max(0.0, stamp - self._depth_t0))
+        except Exception as exc:                                       # noqa: BLE001
+            self.get_logger().warn(f"depth recording stopped: {exc}")
+            self._depth_writer = None
+            self._record_depth = False
 
     def _on_annotation(self, msg: Annotation2D):
         self._annotation = msg
@@ -154,9 +206,21 @@ class RecorderNode(Node):
                 self._open(episode, canvas.shape)
             if self._writer is None:
                 return
+            # Time each frame by the IMAGE's own stamp, not by a nominal rate. The camera
+            # publishes at whatever the capture path can manage - 7.08 Hz at 640x480, 5.58
+            # at 960x720 - while the writer's `fps` is a fixed 8.0. Writing at the nominal
+            # rate made the file play at 8.0/5.58 = 1.43x real speed, so a 66 s episode
+            # became a 46 s video that drifted steadily out of step with the chase camera.
+            #
+            # The message stamp, not `now()`: it is when the FRAME was taken, and this
+            # callback can run well after that.
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            if self._t0 is None:
+                self._t0 = stamp
             # Scale first, decorate second: drawing on the source and then resizing would
             # blur the HUD along with the image.
-            self._writer.write(self._decorate(canvas, episode) if self._overlay else canvas)
+            self._writer.write(self._decorate(canvas, episode) if self._overlay else canvas,
+                               t_s=max(0.0, stamp - self._t0))
             self._frames += 1
         except Exception as exc:  # noqa: BLE001 — never take an episode down
             self._broken = True
@@ -202,6 +266,7 @@ class RecorderNode(Node):
     # ------------------------------------------------------------------ writing
 
     def _open(self, episode: EpisodeStatus, shape):
+        self._t0 = None
         height, width = shape[:2]
         name = episode.episode_id or "episode"
         self._path = os.path.join(self._dir, f"{name}.mp4")
@@ -220,6 +285,7 @@ class RecorderNode(Node):
         self.get_logger().info(f"recording {name} -> {self._path} @ {width}x{height}{note}")
 
     def _close(self):
+        self._close_depth()
         if self._writer is None:
             return
         codec = getattr(self._writer, "codec", "?")
@@ -248,14 +314,20 @@ class RecorderNode(Node):
             # drifts off the feature the model was actually pointing at.
             u = int(round(ann.u * self._scale_factor)) + self._pad_left
             v = int(round(ann.v * self._scale_factor))
-            arm, gap = max(6, int(14 * s)), max(2, int(4 * s))
-            thick = max(1, int(round(2 * s)))
-            # Crosshair rather than a filled dot: a dot hides the very pixel being explained.
-            cv2.line(frame, (u - arm, v), (u - gap, v), (0, 255, 255), thick)
-            cv2.line(frame, (u + gap, v), (u + arm, v), (0, 255, 255), thick)
-            cv2.line(frame, (u, v - arm), (u, v - gap), (0, 255, 255), thick)
-            cv2.line(frame, (u, v + gap), (u, v + arm), (0, 255, 255), thick)
-            cv2.circle(frame, (u, v), max(8, int(18 * s)), (0, 255, 255), max(1, thick // 2))
+            # Sized to survive being scaled down. This view is routinely inset into a
+            # 1080p chase frame at a third of its width, and at the old 14 px arms the
+            # marker - the one thing the whole HUD exists to show - vanished.
+            arm, gap = max(14, int(34 * s)), max(4, int(9 * s))
+            thick = max(2, int(round(4 * s)))
+            # Black underlay first: yellow on a sunlit road is invisible, and this frame is
+            # the evidence for what the model was pointing at.
+            for colour, extra in (((0, 0, 0), 2), ((0, 255, 255), 0)):
+                t = thick + extra
+                cv2.line(frame, (u - arm, v), (u - gap, v), colour, t)
+                cv2.line(frame, (u + gap, v), (u + arm, v), colour, t)
+                cv2.line(frame, (u, v - arm), (u, v - gap), colour, t)
+                cv2.line(frame, (u, v + gap), (u, v + arm), colour, t)
+                cv2.circle(frame, (u, v), max(16, int(30 * s)), colour, max(1, t // 2))
 
         lines = [
             f"{episode.episode_id}   step {episode.step}",
@@ -316,6 +388,12 @@ class RecorderNode(Node):
         for i, text in enumerate(lines):
             cv2.putText(frame, text, (int(8 * s), y0 + pad + line_h * i + line_h - int(6 * s)),
                         cv2.FONT_HERSHEY_SIMPLEX, scale, (235, 235, 235), thick, cv2.LINE_AA)
+
+    def _close_depth(self):
+        if self._depth_writer is not None:
+            self._depth_writer.close()
+            self._depth_writer = None
+            self._depth_t0 = None
 
     def destroy_node(self):
         # A killed graph is the normal end of a sweep. Without this the final episode's file
