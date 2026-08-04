@@ -62,11 +62,13 @@ still want it?** If the answer needs a particular policy to be interesting, it i
   `GroundedWaypoint`, `EpisodeStatus` and `EpisodeResult` are navigation types that live here
   for historical reasons.
 
-**The sim-to-real ceiling is real and is not an effort problem.** CARLA-Air contains **no
-PX4** — the `/fmu/*` topics are a shim over AirSim SimpleFlight, with no EKF2, no failsafes,
-no arming logic and no lockstep. "Close to the real world" is therefore achievable for
-*sensors and world*, and bounded for *flight stack*. Which of those two "robust" means has
-not been decided; say so rather than assuming.
+**Decided 2026-08-04: "faithful" means SENSORS AND WORLD, not flight stack.** CARLA-Air
+contains **no PX4** — the `/fmu/*` topics are a shim over AirSim SimpleFlight, with no EKF2,
+no failsafes, no arming logic and no lockstep. That is accepted, not a gap to close: EKF2
+behaviour, failsafe logic and arming state machines are **out of scope** here and live in
+`drone-sim`. What must be faithful is what the aircraft *senses* and what the world *does* —
+camera geometry and intrinsics, GPS/IMU/baro/mag noise and rates, lidar returns, traffic and
+pedestrian behaviour, weather, and the repeatability of all of it.
 
 ---
 

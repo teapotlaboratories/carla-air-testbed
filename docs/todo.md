@@ -50,10 +50,11 @@ repository is for, and should not be picked up here.
   `GroundedWaypoint`, `EpisodeStatus`, `EpisodeResult` are navigation types living here for
   historical reasons.
 
-**Undecided, and it changes what "robust" means.** CARLA-Air contains **no PX4** — `/fmu/*` is
-a shim over AirSim SimpleFlight, with no EKF2, failsafes, arming logic or lockstep. So "close
-to the real world" is achievable for *sensors and world* and bounded for *flight stack*. Which
-one is the target has not been decided.
+**Decided 2026-08-04: the target is SENSORS AND WORLD, not flight stack.** CARLA-Air contains
+no PX4 — `/fmu/*` is a shim over AirSim SimpleFlight, with no EKF2, failsafes, arming logic or
+lockstep. That is accepted rather than a gap to close; flight-controller fidelity belongs to
+`drone-sim`. Fidelity work here means camera geometry and intrinsics, sensor noise and rates,
+lidar, traffic and pedestrian behaviour, weather, and repeatability.
 
 **Recent work that would be out of scope under this rule**, recorded so the boundary is not
 retroactively flattering: the velocity and yaw slew, the yaw-gate fix, per-scenario controller
