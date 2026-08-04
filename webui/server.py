@@ -91,17 +91,30 @@ class Sim:
             self._id += 1
             try:
                 protocol.send(self._sock, {"id": self._id, "method": method, "args": args})
-                reply = protocol.recv(self._sock)
+                reply = self._recv_reply()
             except (OSError, EOFError):
                 # A dropped socket is normal here: the sidecar is started and stopped from
                 # this very page. Reconnect once rather than surfacing it as a UI error.
                 self._sock = None
                 self._connect()
                 protocol.send(self._sock, {"id": self._id, "method": method, "args": args})
-                reply = protocol.recv(self._sock)
+                reply = self._recv_reply()
         if not reply.get("ok"):
             raise RuntimeError(reply.get("error", "unknown sidecar error"))
         return reply.get("result")
+
+    def _recv_reply(self):
+        """Read frames until an actual reply arrives, skipping progress.
+
+        The sidecar interleaves `{"id": N, "progress": "..."}` frames into long calls so a
+        caller can tell slow from wedged. This console is synchronous and does not use them,
+        but it must still consume them - a progress frame left in the stream would be
+        returned as the next call's result.
+        """
+        while True:
+            frame = protocol.recv(self._sock)
+            if "ok" in frame:
+                return frame
 
     def close(self):
         with self._lock:
