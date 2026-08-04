@@ -8,6 +8,59 @@ Status: **open** · **next** (agreed, not started) · **blocked** · **done**
 
 ---
 
+## Scope — read this before picking anything up
+
+Agreed 2026-08-04. **The product is the simulator**: a faithful world, faithful sensors, a
+ROS 2 interface that behaves the way real hardware would, and runs that repeat. **Navigation
+and VLM work is out of scope** and belongs in `examples/`, as a consumer of the public
+interface. Full statement in
+[`.ai/AGENTS.md`](../.ai/AGENTS.md#scope--what-this-repository-is-for).
+
+The test: **could a user with a completely different navigation stack still want it?**
+
+Every open item, classified. Out-of-scope items are **not** deleted — they are real work, they
+were reasoned about, and the reasoning is worth keeping. They are simply not what this
+repository is for, and should not be picked up here.
+
+| item | | |
+|---|---|---|
+| `R-05` headless or windowed from the config | **in** | rendering path; every user needs it |
+| `R-06` camera resolution and the 4:3 constraint | **in** | sensor contract; `fov` is horizontal, so aspect changes what a pixel means |
+| `S-03` segmentation published but disabled | **in** | a sensor that ships switched off |
+| `T-02` H.264 recording and cheaper live streams | **in** | capture path, and the chase/onboard sync is still unresolved |
+| `E-03` an MCAP bag per episode | **in** | recording the simulator's own behaviour is fidelity work, not scoring |
+| `P-01` containerise the stack | **in**, blocked | deployment; blocked on non-nested Docker |
+| `R-03` web console talks ROS 2 only | **in**, deferred | proves the interface is sufficient |
+| `T-03` pedestrians spawn but do not move | **in**, **and already fixed** | world fidelity; status below is stale, the fix landed 2026-08-03 |
+| `V-01b` local vLLM on GPU 1 | **out** | model choice |
+| `E-02b` the other scenarios have nothing in the way | **out** | scenario design as a policy challenge |
+| `E-04` anchor scenarios to real map features | **out** | same |
+| the `bearing_only` blind step | **out** | grounding — pixel + depth → NED is a client concern |
+| the camera-pitch decision | **out** *as framed* | it was framed as "what does the model see"; **in** if reframed as a sensor-calibration question |
+
+**Two things this contradicts in the current tree**, both known and neither urgent:
+
+- `bringup.sh` starts `control` (waypoint following: standoff, step capping, altitude floor,
+  yaw and velocity slew) and `evaluation` (episode scoring, recording). Under this scope both
+  are examples. `examples/ros2_full_control.py` already flies the aircraft through
+  `/fmu/in/trajectory_setpoint` importing nothing from the project, so `control` is not
+  load-bearing. **No new navigation behaviour should be added to either.**
+- `interfaces/` is mixed. `ResetVehicle`, `SpawnTraffic`, `SetWeather`, `SetCameraPose`,
+  `DestroyActors`, `ChaseRecording` are simulator contracts. `Annotation2D`,
+  `GroundedWaypoint`, `EpisodeStatus`, `EpisodeResult` are navigation types living here for
+  historical reasons.
+
+**Undecided, and it changes what "robust" means.** CARLA-Air contains **no PX4** — `/fmu/*` is
+a shim over AirSim SimpleFlight, with no EKF2, failsafes, arming logic or lockstep. So "close
+to the real world" is achievable for *sensors and world* and bounded for *flight stack*. Which
+one is the target has not been decided.
+
+**Recent work that would be out of scope under this rule**, recorded so the boundary is not
+retroactively flattering: the velocity and yaw slew, the yaw-gate fix, per-scenario controller
+overrides, and the `bearing_only` analysis. All landed before 2026-08-04.
+
+---
+
 ## Repositioning — a drone simulator first, a VLM testbed second
 
 Agreed 2026-08-03. The project's product is **a ROS 2-driven drone simulator**; VLM navigation
@@ -582,7 +635,11 @@ behind a `simGetImages` call.
 - **Verify:** points per second delivered, and whether RGB+depth capture regresses. Measure
   both routes before choosing; the AirSim one may still win on fidelity to a real airframe.
 
-### T-03 · Pedestrians spawn but do not move — **open** *(2026-08-03)*
+### T-03 · Pedestrians spawn but do not move — **done** *(2026-08-03)*
+
+> Marked open until 2026-08-04 although the fix had landed: walkers are steered directly from
+> `tick_watchdog` because `controller.ai.walker` is inert in this build (0/8 moved under it,
+> 6/6 under `WalkerControl`). See `sim_bridge/carla_air/world.py`.
 
 Spotted by the operator in a 40 s recording: 35 pedestrians in frame, not one of them
 walking. Cars drive normally.

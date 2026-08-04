@@ -19,6 +19,14 @@ See-Point-Fly loop — *frame → 2D annotation → 3D displacement → velocity
 [`examples/vlm_navigation/`](examples/vlm_navigation/), started separately and talking only to
 the interface above. Skip it and the simulator is unchanged.
 
+**Scope.** The product is the simulator: a faithful world, faithful sensors, and a ROS 2
+interface that behaves the way real hardware would. **Navigation is out of scope** — waypoint
+following, obstacle avoidance, pixel-to-world grounding, prompt and model choice, and
+benchmark scores for a policy are all things you build *on* this, and they live in
+`examples/`. The test for any change: *could a user with a completely different navigation
+stack still want it?* Some navigation code still ships here for historical reasons and is
+marked as such in [`docs/todo.md`](docs/todo.md).
+
 Two processes because it has to be: the CARLA-Air client is an ABI-tagged `cpython-310`
 extension and ROS 2 Jazzy is 3.12, so neither interpreter can load the other's C extensions.
 

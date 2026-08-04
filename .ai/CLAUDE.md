@@ -4,9 +4,11 @@ Project guidance for AI coding agents lives in [AGENTS.md](AGENTS.md) — read i
 touching anything, also read [`docs/architecture.md`](../docs/architecture.md): what runs
 where, the measured numbers, and the traps.
 
-`carla-air_testing` is a **VLM navigation testbed over ROS 2** on CARLA-Air v0.1.7 — the
-See-Point-Fly loop (*frame → 2D annotation → 3D displacement → velocity setpoint*) against a
-photorealistic city, headless, no containers. It runs on the `carbonite` workstation inside
+`carla-air_testing` is a **drone simulator with a ROS 2 interface** on CARLA-Air v0.1.7 —
+a quadrotor in a photorealistic city with live traffic and weather, headless, no containers.
+*(Described as a VLM navigation testbed until 2026-08-04.)*
+
+It runs on the `carbonite` workstation inside
 a podman container **named `drone-sim`** (2 GPUs) — *not* a `carla-air_testing` container, as
 this line claimed until 2026-08-03. **That is why `pkill` here can kill the sibling project's
 nodes: they are in the same container, not merely on the same machine.** Verify with
@@ -15,6 +17,15 @@ judged by a simulator run, not by a clean build.
 
 **It is not `drone-sim`** — that sibling project on the same machine owns the real hardware
 and the Gazebo/Isaac lanes. Nothing here can reach a real aircraft.
+
+**Scope, agreed 2026-08-04: the product is the SIMULATOR.** Sensor fidelity, world
+fidelity, determinism, the ROS 2 surface, the two-interpreter seam, rendering correctness.
+**Navigation and VLM work is out of scope** — waypoint following, grounding, prompt or model
+tuning, scenario design as a policy challenge, benchmark scores. Those are built *on* this and
+belong in `examples/`. The test: *could a user with a completely different navigation stack
+still want it?* If it needs a particular policy to be interesting, it is out. Full statement
+and the two things this contradicts in the current tree:
+[AGENTS.md → Scope](AGENTS.md#scope--what-this-repository-is-for).
 
 Most important rules:
 

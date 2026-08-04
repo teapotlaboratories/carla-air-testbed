@@ -3,11 +3,15 @@
 Guidance for AI coding agents (Claude Code, Cursor, Copilot, and others) working in this
 repository. Follow these in addition to anything a human maintainer asks for.
 
-**About this project.** `carla-air_testing` is a **VLM navigation testbed over ROS 2**,
-built on CARLA-Air v0.1.7. It reproduces the See-Point-Fly loop — *frame → 2D annotation →
-3D displacement → velocity setpoint* — against a photorealistic city with live traffic,
-headless, on one GPU, with **no containers**. It runs on the `carbonite` workstation inside
-the `carla-air_testing` container (2 GPUs).
+**About this project.** `carla-air_testing` is a **drone simulator with a ROS 2
+interface**, built on CARLA-Air v0.1.7: a quadrotor in a photorealistic city with live traffic
+and weather, headless, on one GPU, with **no containers**. It runs on the `carbonite`
+workstation inside a podman container **named `drone-sim`** (2 GPUs) — *not* a
+`carla-air_testing` container, as this line claimed until 2026-08-04. Verify with
+`grep name= /run/.containerenv` rather than assuming.
+
+*(This paragraph described the project as "a VLM navigation testbed" until 2026-08-04. That
+was the original framing and it is no longer the scope — see below.)*
 
 It is an **integration** project: changes are judged by a simulator run, not by a clean
 build.
@@ -19,6 +23,50 @@ to keep them apart.
 
 Architecture, measured numbers, and the traps that cost time:
 [`docs/architecture.md`](../docs/architecture.md).
+
+---
+
+## Scope — what this repository is for
+
+Agreed 2026-08-04. **The product is the simulator: a faithful world, faithful sensors, and a
+ROS 2 interface that behaves the way real hardware would.** Work is in scope if it makes the
+simulator more truthful, more repeatable, or more robust.
+
+**Navigation and VLM work is OUT OF SCOPE.** That includes anything that decides *where the
+aircraft should go*: waypoint following, obstacle avoidance, pixel-to-world grounding, prompt
+or model tuning, scenario design meant to challenge a policy, and benchmark scores for one.
+Those are things you *build on* this simulator, and they belong in `examples/` — as consumers
+of the public interface, importing nothing from the project.
+
+The test for a proposed change: **could a user with a completely different navigation stack
+still want it?** If the answer needs a particular policy to be interesting, it is out.
+
+| in scope | out of scope |
+|---|---|
+| sensor fidelity, noise models, calibration | grounding — pixel + depth → NED |
+| world fidelity: traffic, pedestrians, weather | VLM backends, prompts, model choice |
+| determinism, repeatability, seeded runs | waypoint following, standoff, step capping |
+| the ROS 2 surface: topics, services, message contracts | scenario design as a policy challenge |
+| the two-interpreter seam and its wire protocol | success rates for a navigation policy |
+| rendering correctness, GPU selection, headless/windowed | episode scoring and benchmark tables |
+| conformance — proving the substrate still behaves | |
+
+**Two consequences worth stating plainly**, because both contradict how the tree looks today:
+
+- `bringup.sh` still starts `control` (waypoint following) and `evaluation` (episode scoring
+  and recording). Under this scope both are examples, not simulator. `grounding` and
+  `vlm_client` are already outside bringup. Moving them is not urgent, but no NEW navigation
+  behaviour should be added to them.
+- **`interfaces/` is mixed.** `ResetVehicle`, `SpawnTraffic`, `SetWeather`, `SetCameraPose`,
+  `DestroyActors` and `ChaseRecording` are simulator contracts. `Annotation2D`,
+  `GroundedWaypoint`, `EpisodeStatus` and `EpisodeResult` are navigation types that live here
+  for historical reasons.
+
+**The sim-to-real ceiling is real and is not an effort problem.** CARLA-Air contains **no
+PX4** — the `/fmu/*` topics are a shim over AirSim SimpleFlight, with no EKF2, no failsafes,
+no arming logic and no lockstep. "Close to the real world" is therefore achievable for
+*sensors and world*, and bounded for *flight stack*. Which of those two "robust" means has
+not been decided; say so rather than assuming.
 
 ---
 

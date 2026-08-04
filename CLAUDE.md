@@ -13,10 +13,16 @@ numbers, and the traps that cost time.
 
 ## What this project is
 
-A **VLM navigation testbed over ROS 2** on CARLA-Air v0.1.7 — the See-Point-Fly loop
-(*frame → 2D annotation → 3D displacement → velocity setpoint*) against a photorealistic
-city, headless, no containers. It is an **integration** project: changes are judged by a
-simulator run, not by a clean build.
+A **drone simulator with a ROS 2 interface** on CARLA-Air v0.1.7 — a quadrotor in a
+photorealistic city with live traffic and weather, headless, no containers. It is an
+**integration** project: changes are judged by a simulator run, not by a clean build.
+
+**Scope (2026-08-04): the product is the simulator.** Fidelity, determinism, the ROS 2
+surface. **Navigation and VLM work is out of scope** — waypoint following, grounding, prompts,
+model choice, scenario design as a policy challenge, benchmark scores. They are built *on*
+this and live in `examples/`. The test: *could a user with a completely different navigation
+stack still want it?* See [`.ai/AGENTS.md`](.ai/AGENTS.md#scope--what-this-repository-is-for).
+*(This described the project as a VLM testbed until 2026-08-04.)*
 
 It is **not** `drone-sim`, the sibling project on the same machine — that one owns the real
 hardware and the Gazebo/Isaac lanes. The two share a maintainer and most conventions, and

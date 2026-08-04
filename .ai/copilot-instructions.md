@@ -4,9 +4,17 @@ See [`AGENTS.md`](AGENTS.md) for the full, canonical agent rules; read
 [`../docs/architecture.md`](../docs/architecture.md) (what runs where, the measured numbers,
 the traps) before making changes.
 
-`carla-air_testing` is a **VLM navigation testbed over ROS 2** on CARLA-Air — the
-See-Point-Fly loop against a photorealistic city, headless, no containers. It is an
-**integration** project: changes are judged by a simulator run, not a clean build. It is
+`carla-air_testing` is a **drone simulator with a ROS 2 interface** on CARLA-Air — a
+quadrotor in a photorealistic city with live traffic and weather, headless, no containers. It
+is an **integration** project: changes are judged by a simulator run, not a clean build.
+*(Described as a VLM navigation testbed until 2026-08-04.)*
+
+**Scope (2026-08-04): the product is the SIMULATOR** — fidelity, determinism, the ROS 2
+surface. **Navigation and VLM work is out of scope**: waypoint following, grounding, prompts,
+model choice, scenario design as a policy challenge, benchmark scores. Those are built *on*
+this and live in `examples/`. The test: *could a user with a completely different navigation
+stack still want it?* See [AGENTS.md → Scope](AGENTS.md#scope--what-this-repository-is-for).
+ It is
 **not** `drone-sim`, the sibling project on the same machine that owns the real hardware.
 Nothing here can reach a real aircraft.
 
