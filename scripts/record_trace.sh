@@ -35,6 +35,9 @@ WHAT IS RECORDED BY DEFAULT
   /control/active_target           what the controller was aiming at
   /control/arrived                 when it declared arrival
   /vlm/annotation                  the pixel, if something is annotating
+  /camera/pose                     the pose the projection uses — without it a pose-lag
+                                   hypothesis cannot be tested at all
+  /camera/rgb/camera_info          intrinsics, so a trace is self-describing
   /episode/status /episode/result  episode framing, if the example is running
   /sim/collision                   what was hit
 
@@ -50,11 +53,13 @@ TOPICS=(
     /control/active_target
     /control/arrived
     /vlm/annotation
+    /camera/pose
+    /camera/rgb/camera_info
     /episode/status
     /episode/result
     /sim/collision
 )
-CAMERA=(/camera/rgb/camera_info /camera/pose /camera/depth/image_raw /camera/rgb/image_raw)
+CAMERA=(/camera/depth/image_raw /camera/rgb/image_raw)
 
 OUT=""; WITH_CAMERA=0; ALL=0
 while [ $# -gt 0 ]; do

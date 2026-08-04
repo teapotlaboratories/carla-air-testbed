@@ -14,4 +14,5 @@ source /opt/ros/jazzy/setup.bash
 # shellcheck disable=SC1091
 source "$PROJ/ros2_ws/install/setup.bash"
 set -u
+if [ "${1:-}" = "--split" ]; then shift; exec python3 "$PROJ/scripts/split_layers.py" "$@"; fi
 exec python3 "$PROJ/scripts/analyse_trace.py" "$@"

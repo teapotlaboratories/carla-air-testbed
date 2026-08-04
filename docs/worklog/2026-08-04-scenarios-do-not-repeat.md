@@ -128,3 +128,70 @@ theory** — one is a coincidence generator.
   starts between episodes receives the *previous* episode's terminal status first; taking the
   first terminal message gave `hi < lo`, an empty window, and "0 odometry samples" for six
   perfectly good bags. The end is now the first terminal status *after* the start.
+
+---
+
+## The layer split, and where it actually leads
+
+`scripts/analyse_trace.sh --split` prints the annotation pixel beside the waypoint it
+produced, so the question "which side of the See-Point-Fly seam is oscillating" is read rather
+than argued. Run on the traces already captured:
+
+**Success (run8)** — the pixel settles and stays:
+
+    #   t(s)      pixel u,v    waypoint y      side
+    2    1.1     496,    0        -159.4
+    5    4.3     480,   63        -159.3
+   13   12.9     481,   63        -159.5
+    pixel u: median 481.0, side-flips 2     waypoint y: spread 0.5 m
+
+u ≈ 480 is dead centre of a 960-wide frame, and the waypoint sits on the goal line
+(y = -159.4) to within half a metre for the whole flight.
+
+**Failure (run9)** — the pixel slams between the frame edges:
+
+    5    4.4     272,    0        -168.6  right
+    6    5.4     685,    0        -156.3  LEFT
+   14   14.1     959,    0        -136.6  LEFT
+   17   17.3       0,    0        -189.8  right
+    pixel u: median 715.0, spread 959 px, side-flips 11   waypoint y: spread 182.3 m
+
+0 and 959 are exactly the bounds of a 960 px frame, so the annotation is being **clamped to
+the border** — the thing it wants to point at is outside the field of view, and it alternates
+which edge it gives up on.
+
+**So the projection is not the problem.** Grounding faithfully converts a swinging pixel into
+a swinging waypoint. The oscillation is upstream, in the annotation, which is out of scope.
+
+### But the reason the goal leaves the frame is in scope
+
+Yaw at the moment each episode starts, and over the following seconds:
+
+| trace | | yaw at start | then |
+|---|---|---|---|
+| run5 | SUCCESS | 20.9° | 1.3, 3.5, 1.9, 2.9 |
+| run6 | SUCCESS | 20.9° | 1.8, -0.1, 0.0, 0.1 |
+| run8 | SUCCESS | 25.7° | -3.9, -0.7, -0.3, -0.2 |
+| run10 | SUCCESS | 27.8° | 2.3, 0.5, 0.2, 0.3 |
+| **run9** | **FAILURE** | 17.6° | **8.5, -19.9, 18.3** |
+
+Two things, and both matter:
+
+1. **The failing run's heading oscillates ±20° and never converges.** Every successful run
+   settles to within a degree or two of zero inside two seconds. That is what pushes the goal
+   out of frame, which is what makes the annotation clamp.
+2. **The starting heading is not repeatable at all.** 17.6°, 20.9°, 20.9°, 25.7°, 27.8° across
+   runs that are supposed to be identical — same scenario, same seed, same everything. And
+   `Vehicle.reset()` explicitly commands `airsim.Quaternionr(0, 0, 0, 1)`, i.e. **yaw zero**.
+   The aircraft is not where the reset says it put it.
+
+(2) is a **simulator repeatability defect and squarely in scope**: a seeded run that starts
+from a different attitude every time is not seeded. Filed as **D-02**.
+
+### What is NOT established
+
+That (2) causes (1). A heading loop through the navigation stack — waypoint sets velocity,
+velocity sets yaw, yaw aims the camera, camera picks the pixel, pixel makes the waypoint — can
+oscillate from any perturbation, and a 10° difference in initial attitude is only one
+candidate perturbation. Proving it needs runs where the starting attitude is actually fixed,
+which is what D-02 is for. Recording the correlation, not a mechanism.

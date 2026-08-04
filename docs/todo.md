@@ -1252,7 +1252,15 @@ repeat, 5/5 was a sample rather than a property.
   — both successes were 100% bearing-only, the failure 15 of 24, and its depth-valid
   waypoints resolve to impossible points (220 m off the map; 17 m below street level). That
   contradicts what this file and the PR previously called the likely cause.
-- Rate now **12/17** on this seed across the day. Next: more failing traces before any theory.
+- Rate now **12/17** on this seed across the day.
+- **The oscillation is in the ANNOTATION, not the projection** — `analyse_trace.sh --split`
+  shows the failing run's pixel slamming between u=0 and u=959, the exact bounds of a 960 px
+  frame, so the annotation is being clamped because its target is outside the field of view.
+  Successes hold u≈480, dead centre. Grounding is faithfully projecting a swinging pixel.
+- The goal leaves the frame because the **heading oscillates ±20°** and never converges in the
+  failing run, where every success settles to ~0° within two seconds. See **D-02**: the
+  starting attitude is not repeatable either, which is in scope and may or may not be the
+  perturbation that starts this.
 - Superseded, kept for the record: `out/episodes/*.json` stores `steps` as a count
   with no per-step trace, so the shape of the doubled path cannot be recovered from what is
   recorded. Two investigations have now stalled on this same gap.
@@ -1260,6 +1268,28 @@ repeat, 5/5 was a sample rather than a property.
   and after any fix. Not N seeds x 1.
 - **Do not guess at the cause** until there is a trace. Evidence in
   `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
+
+### D-02 · `reset()` commands yaw zero and does not get it — **open** *(2026-08-04)*
+
+`Vehicle.reset()` places the aircraft with `airsim.Quaternionr(0, 0, 0, 1)` — yaw zero.
+Measured off the odometry at the moment five identical episodes began: **17.6°, 20.9°, 20.9°,
+25.7°, 27.8°**. Same scenario, same seed, same everything.
+
+A seeded run that starts from a different attitude every time is not seeded, and this is the
+kind of repeatability the scope agreed 2026-08-04 makes the point of the repository.
+
+It is also the leading suspect for D-01: the one failing run of the five had the *lowest*
+starting yaw and then oscillated ±20° without ever converging, while all four successes
+settled to within a degree of zero inside two seconds. **That correlation is not a mechanism**
+— a heading loop through the navigation stack can oscillate from any perturbation — and
+separating the two is exactly why this is filed on its own.
+
+- **Where to look first:** whether `simSetVehiclePose` is applied before the settle, whether
+  `moveToPositionAsync` re-yaws the airframe on the way to the hold, and whether the 2 s
+  settle is long enough for attitude as opposed to position.
+- **Verify:** starting yaw across 10 identical resets, reported as a spread. It should be a
+  degree or two, not ten.
+- Evidence: `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
 
 ### E-03 · Record an MCAP bag per episode — **open, and now blocking D-01** *(raised 2026-08-04)*
 
