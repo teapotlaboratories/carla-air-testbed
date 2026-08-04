@@ -454,7 +454,37 @@ the operator's desktop, and that is a per-run decision they have to make, not a 
 project can ship. The `Xvfb` recipe in `run_sim.sh --help` should be corrected or removed:
 right now it suggests something that does not work.
 
-### R-06 · Camera resolution, configurable — **mostly already true, needs a decision**
+### R-06 · Camera resolution, configurable — **done** *(2026-08-04)*
+
+**Decision: keep the constraint, make the failure loud and early** (option 1 below). The
+aspect-ratio rule was enforced only by `tests/test_config.py`, which meant a config that
+would silently mis-map every waypoint could still start a simulator any time the suite was
+not run — and this project has now shipped two bugs of exactly that shape (dead
+`sidecar.chase_camera` config, and `ros2-api.html` publishing 640x480 intrinsics against a
+960x720 buffer). A rule only a test knows is a rule that reaches a flight.
+
+`scripts/apply_config.py` gained `validate()`, called before anything is rendered, and
+`run_sim.sh` refuses to launch on a non-zero exit. Measured on a 16:9 RGB beside 4:3 depth:
+
+    ERROR: <config> is not usable:
+      * camera buffers must all share one aspect ratio, because `fov` is HORIZONTAL:
+               depth 160x120 (1.333), rgb 1280x720 (1.778), segmentation 320x240 (1.333)
+             ... a pixel index from the RGB frame reads the wrong place in depth — with no
+             error, on every waypoint.
+
+It also rejects non-positive dimensions, an fov outside 1-180 degrees, missing or
+non-numeric fields, and no cameras at all — the same class of thing, all silent today.
+Six tests in `tests/test_config.py`; suite is 161 passed, 1 skipped.
+
+Option 2 (lift the constraint by computing each buffer's vertical FOV and scaling correctly)
+is **not** taken. It is more flexible and it touches the one code path where a silent error
+costs a whole flight, which is a poor trade for a constraint nobody has asked to break.
+
+---
+
+*(original entry)*
+
+### R-06 · Camera resolution, configurable — superseded by the decision above
 
 `simulator.cameras` in `configs/testbed.yaml` already sets width, height and FOV for all
 three buffers, renders into AirSim's `CaptureSettings`, and the intrinsics are **derived**
@@ -1229,7 +1259,46 @@ all of them in the teardown path rule 1 is about:
   stayed silent through a real one. It now resolves the same target `run_sim.sh` does. Details
   in `docs/worklog/2026-08-04-one-command-demo.md`.
 
-### D-01 · The same seed does not give the same result — **open, and it outranks the rest** *(2026-08-04)*
+### D-01 · The same seed does not give the same result — **closed as out of scope** *(2026-08-04)*
+
+**Closed, not fixed, and not because it stopped mattering.** The mechanism was found and it
+lives in the navigation stack, which the scope agreed the same day puts outside this
+repository. The simulator's own contribution to it was D-02, and that is fixed.
+
+**What anyone building a navigation stack here needs to know**, because it will happen to them
+too: the control path is a closed loop — waypoint sets velocity, velocity sets heading, heading
+aims the camera, the camera decides the next annotation, the annotation becomes the next
+waypoint. With enough gain that loop oscillates. When it does, the aircraft's heading swings,
+the goal leaves the field of view, and whatever is annotating gets clamped to the frame border
+— measured at exactly u=0 and u=959 on a 960 px frame, alternating sides. The result is a
+lateral zigzag at roughly twice the necessary path length, ending in `max_steps`.
+
+Rate on the reference case: **~70-80%** on a scenario documented at 100%
+(12/17, then 8/10 after D-02). Bimodal — a run either goes straight in at ~13 steps or
+zigzags to 25. Nothing in between.
+
+**Four hypotheses were tested and refuted**, each by measurement, and they are worth listing
+because each looked convincing:
+
+| hypothesis | how it died |
+|---|---|
+| `bearing_only` flies blind | the successful runs were **100%** bearing-only; the failure had *more* depth-valid waypoints |
+| the projection lags the camera pose | `--split` showed the annotation pixel oscillating and the projection following it faithfully |
+| the velocity or yaw slew drives it | each disabled by A/B, no change |
+| reset leaves an inconsistent attitude | fixed as D-02, attitude now repeatable to <1°, rate unchanged (p=0.40) |
+
+Disabling each component individually changed nothing, which is what a self-sustaining loop
+looks like rather than a faulty part.
+
+- **Not withdrawn from the docs.** The README results table keeps its caveat: those numbers
+  were single passes and carry an unmeasured variance.
+- **If it is ever picked up**, it belongs with `examples/navigation/`, and the question to ask
+  is whether the oscillation can start from a quiet state or only from a large initial error.
+  The tooling to answer that exists: `scripts/record_trace.sh`, `scripts/analyse_trace.sh`,
+  and `--split`.
+- Full evidence: `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
+
+### D-01 (original entry, kept for the reasoning) *(2026-08-04)*
 
 `cross_the_plaza`, seed 1, `oracle`, shipped defaults, nothing changed between runs:
 **3 successes and 4 failures out of 7.** Documented as 5/5. The successes reproduce the

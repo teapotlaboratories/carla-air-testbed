@@ -63,7 +63,7 @@ git clone <this repo> carla-air_testing && cd carla-air_testing
                                    # pass a directory to put the 18 GB release elsewhere;
                                    # it is remembered, no shell-profile export needed
 
-./.venv/bin/python -m pytest tests/ -q     # 156 passed, 1 skipped — no sim needed
+./.venv/bin/python -m pytest tests/ -q     # 161 passed, 1 skipped — no sim needed
 ```
 
 ## Run an example
@@ -204,7 +204,7 @@ scripts/               install (one command) · setup · fetch_release · fetch_
                        · record_flight · survey_buildings
 tests/                 offline · scenarios · survey · claude_backend · config · interfaces
                        · sidecar_locks · rpc_correlation · control_limits
-                       (156 passed, 1 skipped — no sim, GPU or display) · conformance/
+                       (161 passed, 1 skipped — no sim, GPU or display) · conformance/
 examples/              ros2_full_control.py — fly it from plain ROS 2, no project imports
                        ros2_world_control · ros2_traffic_flyover · ros2_city_tour
                        ros2_street_level · vlm_navigation/ (the optional VLM)

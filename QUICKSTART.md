@@ -60,7 +60,7 @@ shell profile:**
 Verify without touching the simulator:
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q     # expect: 156 passed, 1 skipped
+./.venv/bin/python -m pytest tests/ -q     # expect: 161 passed, 1 skipped
 ```
 
 Why a separate Python: the CARLA-Air client is an ABI-tagged `cpython-310` extension and

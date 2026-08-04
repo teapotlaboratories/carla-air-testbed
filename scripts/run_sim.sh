@@ -139,8 +139,11 @@ fi
 # configs/sim/settings.json keeps the aspect ratios equal and depth/seg small — see
 # docs/architecture.md for why small matters (it is the float readback, not the GPU).
 # Render configs/testbed.yaml first, so settings.json is never stale relative to its source.
+# apply_config VALIDATES before it renders and prints the reason itself, so do not
+# overwrite it with a guess — "could not render" reads as an I/O problem when the actual
+# message above is usually a config that would measure the wrong thing.
 "$PROJ/.venv/bin/python" "$PROJ/scripts/apply_config.py" --source "$CONFIG" --quiet || {
-    echo "could not render $CONFIG" >&2; exit 1; }
+    echo "refusing to start: $CONFIG was rejected (see above)" >&2; exit 1; }
 mkdir -p ~/Documents/AirSim
 cp "$PROJ/configs/sim/settings.json" ~/Documents/AirSim/settings.json
 

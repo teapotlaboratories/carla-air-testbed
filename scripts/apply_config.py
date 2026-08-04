@@ -45,6 +45,59 @@ def load(path=SOURCE):
         return yaml.safe_load(fh)
 
 
+class ConfigError(Exception):
+    """A config that would produce a working simulator measuring the wrong thing."""
+
+
+def validate(cfg):
+    """Reject a config whose camera buffers disagree, BEFORE the simulator starts.
+
+    `fov` is HORIZONTAL. Two buffers with the same `fov` and different aspect ratios cover
+    different VERTICAL fields, so `scale_to()` maps an RGB pixel onto the wrong depth pixel —
+    silently, on every waypoint, in a simulator that starts cleanly and looks correct.
+
+    This is the same shape as the bug that had `docs/ros2-api.html` publishing intrinsics for
+    a 640x480 buffer while the config said 960x720: nothing errors, the numbers are simply
+    wrong. A config error that only a test catches is one that reaches a flight whenever the
+    test is not run, so it is raised here, at render time, where every launch goes through.
+
+    Returns a list of human-readable problems; empty means the config is usable.
+    """
+    problems = []
+    cams = ((cfg.get("simulator") or {}).get("cameras") or {})
+    if not cams:
+        return ["simulator.cameras is empty — no camera would be configured at all"]
+
+    ratios = {}
+    for name, c in cams.items():
+        try:
+            w, h, fov = int(c["width"]), int(c["height"]), float(c["fov"])
+        except (KeyError, TypeError, ValueError):
+            problems.append(f"simulator.cameras.{name}: needs integer width and height "
+                            f"and a numeric fov")
+            continue
+        if w <= 0 or h <= 0:
+            problems.append(f"simulator.cameras.{name}: width and height must be positive, "
+                            f"got {w}x{h}")
+            continue
+        if not 1.0 < fov < 180.0:
+            problems.append(f"simulator.cameras.{name}: fov must be between 1 and 180 "
+                            f"degrees, got {fov}")
+        ratios[name] = (w / h, w, h)
+
+    distinct = {round(r, 6) for r, _, _ in ratios.values()}
+    if len(distinct) > 1:
+        shown = ", ".join(f"{n} {w}x{h} ({r:.3f})" for n, (r, w, h) in sorted(ratios.items()))
+        problems.append(
+            "camera buffers must all share one aspect ratio, because `fov` is HORIZONTAL:\n"
+            f"           {shown}\n"
+            "         Equal fov at different aspects covers a different VERTICAL field, so a\n"
+            "         pixel index from the RGB frame reads the wrong place in depth — with no\n"
+            "         error, on every waypoint. Pick one ratio; 4:3 is what ships\n"
+            "         (960x720 rgb, 160x120 depth, 320x240 segmentation).")
+    return problems
+
+
 def render_airsim(cfg):
     """The AirSim settings the simulator reads at launch.
 
@@ -127,6 +180,16 @@ def main():
         print(f"no such config: {args.source}", file=sys.stderr)
         return 2
     cfg = load(args.source)
+
+    # Before anything is rendered. A bad config that reaches settings.json is a simulator
+    # that starts, runs, and measures the wrong thing.
+    problems = validate(cfg)
+    if problems:
+        print(f"ERROR: {args.source} is not usable:", file=sys.stderr)
+        for problem in problems:
+            print(f"  * {problem}", file=sys.stderr)
+        return 2
+
     targets = [(AIRSIM_OUT, render_airsim(cfg)), (PARAMS_OUT, render_params(cfg))]
 
     if args.check:

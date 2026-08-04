@@ -154,3 +154,52 @@ def test_the_guide_embeds_the_real_config_file():
     assert embedded.strip("\n") == source.strip("\n"), (
         "docs/guide.html no longer matches configs/testbed.yaml - "
         "run scripts/embed_config_in_guide.py")
+
+
+# --------------------------------------------------------------- config validation (R-06)
+#
+# The aspect-ratio rule was enforced only by a test until 2026-08-04, which meant a config
+# that would silently mis-map every waypoint could still start a simulator whenever the suite
+# was not run. apply_config.validate() now rejects it at render time, and run_sim.sh refuses
+# to launch. These cover the validator itself.
+
+def _cfg_with_cameras(cams):
+    return {"simulator": {"cameras": cams}}
+
+
+def test_the_shipped_config_validates():
+    assert apply_config.validate(apply_config.load()) == []
+
+
+def test_mismatched_aspect_ratios_are_rejected():
+    problems = apply_config.validate(_cfg_with_cameras({
+        "rgb": {"width": 1280, "height": 720, "fov": 90},        # 16:9
+        "depth": {"width": 160, "height": 120, "fov": 90},       # 4:3
+    }))
+    assert problems, "a 16:9 buffer beside a 4:3 one must be rejected"
+    joined = " ".join(problems)
+    assert "aspect ratio" in joined
+    assert "1280x720" in joined and "160x120" in joined, "the message must name the buffers"
+
+
+def test_matching_aspect_ratios_pass_at_any_size():
+    assert apply_config.validate(_cfg_with_cameras({
+        "rgb": {"width": 1280, "height": 960, "fov": 90},
+        "depth": {"width": 320, "height": 240, "fov": 90},
+        "segmentation": {"width": 640, "height": 480, "fov": 90},
+    })) == []
+
+
+def test_nonsense_dimensions_are_rejected():
+    for cams in ({"rgb": {"width": 0, "height": 720, "fov": 90}},
+                 {"rgb": {"width": -960, "height": 720, "fov": 90}},
+                 {"rgb": {"width": 960, "height": 720, "fov": 0}},
+                 {"rgb": {"width": 960, "height": 720, "fov": 200}},
+                 {"rgb": {"width": "wide", "height": 720, "fov": 90}},
+                 {"rgb": {"height": 720, "fov": 90}}):
+        assert apply_config.validate(_cfg_with_cameras(cams)), f"should reject {cams}"
+
+
+def test_no_cameras_at_all_is_rejected():
+    assert apply_config.validate({"simulator": {"cameras": {}}})
+    assert apply_config.validate({"simulator": {}})
