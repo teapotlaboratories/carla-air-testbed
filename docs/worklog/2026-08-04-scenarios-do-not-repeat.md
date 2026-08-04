@@ -195,3 +195,49 @@ velocity sets yaw, yaw aims the camera, camera picks the pixel, pixel makes the 
 oscillate from any perturbation, and a 10° difference in initial attitude is only one
 candidate perturbation. Proving it needs runs where the starting attitude is actually fixed,
 which is what D-02 is for. Recording the correlation, not a mechanism.
+
+---
+
+## D-02 measured: nothing holds the heading after a reset
+
+`tests/conformance/p11_reset_attitude.py`, 10 iterations against a bare simulator — no ROS
+graph, so nothing else is touching the aircraft.
+
+**Established, and repeatable:** the airframe rotates a median of **98.6°** (worst 105.0°)
+during the 2 s settle at the end of `reset()`. Every iteration, same direction, same
+magnitude. Nothing is holding heading once `moveToPositionAsync` returns, so the attitude the
+aircraft presents to the camera when the episode starts is whatever it happened to rotate to.
+
+That is a sufficient explanation for the trace observation — episode-start yaw of 17.6°, 20.9°,
+20.9°, 25.7°, 27.8° across five identical runs — without needing anything else to be wrong.
+In an episode the offboard controller then pulls the heading back, which is why four of those
+five settle to ~0° within two seconds; the aircraft simply starts each episode pointing
+somewhere different.
+
+**Not established: which stage loses it.** The probe's own attribution line says the teleport,
+reporting ~-115° after `simSetVehiclePose`. But the identical call issued once from an idle
+aircraft was measured delivering **exactly 0.00°** and holding it for two seconds:
+
+    +0.00s after simSetVehiclePose: yaw -177.60      <- the STALE pose, not yet applied
+    +0.05s                          yaw    0.00
+    +2.00s                          yaw    0.00
+
+So the teleport demonstrably can work. Something about the preceding state decides whether it
+does, and swapping the call order between two variants inverted the result — which is the
+signature of an experiment measuring itself. The probe's stage attribution is marked untrusted
+in its own docstring rather than quietly relied on.
+
+**Two dead ends worth recording**, both mine:
+
+- I first blamed `vehicle_name`: the probe omitted it while `reset()` passes `"SimpleFlight"`.
+  Testing both showed the empty name working and the explicit one failing — the opposite of
+  the hypothesis, and on re-running, order-dependent rather than name-dependent. Not the cause.
+- Before that I had assumed the traces' 17-28° spread meant the teleport was inaccurate. The
+  drift measurement says the teleport may be fine and the aircraft simply rotates afterwards,
+  which is a different bug with a different fix.
+
+**Next:** find what holds heading through the settle. `moveToPositionAsync`'s default
+`YawMode` is rate control at 0 deg/s, which asks for no active heading hold at all — passing
+an explicit `YawMode(is_rate=False, yaw_or_rate=0)` is the first thing to try. That is a
+one-line change to `Vehicle.reset()` and it is testable with this probe as it stands, since
+the drift metric is the part that measures cleanly.

@@ -1284,9 +1284,19 @@ settled to within a degree of zero inside two seconds. **That correlation is not
 — a heading loop through the navigation stack can oscillate from any perturbation — and
 separating the two is exactly why this is filed on its own.
 
-- **Where to look first:** whether `simSetVehiclePose` is applied before the settle, whether
-  `moveToPositionAsync` re-yaws the airframe on the way to the hold, and whether the 2 s
-  settle is long enough for attitude as opposed to position.
+- **Measured 2026-08-04** with `tests/conformance/p11_reset_attitude.py`, 10 iterations
+  against a bare simulator: the airframe rotates a **median 98.6° (worst 105.0°) during the
+  2 s settle**, every iteration. Nothing holds heading once `moveToPositionAsync` returns, so
+  the attitude at episode start is whatever it drifted to. That alone explains the 17-28°
+  spread seen in the traces.
+- **Not established: which stage loses it.** The probe blames the teleport, but the same
+  `simSetVehiclePose` call issued once from an idle aircraft delivers exactly 0.00° and holds
+  it. Order-dependent, so the probe's stage attribution is marked untrusted in its own
+  docstring.
+- **First thing to try:** `moveToPositionAsync`'s default `YawMode` is *rate* control at
+  0 deg/s, which requests no active heading hold. An explicit
+  `YawMode(is_rate=False, yaw_or_rate=0)` is a one-line change to `Vehicle.reset()` and the
+  drift metric above measures it cleanly.
 - **Verify:** starting yaw across 10 identical resets, reported as a spread. It should be a
   degree or two, not ten.
 - Evidence: `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
