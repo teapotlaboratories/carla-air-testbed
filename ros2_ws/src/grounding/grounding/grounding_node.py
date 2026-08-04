@@ -71,7 +71,7 @@ class GroundingNode(Node):
         self._odom: VehicleOdometry | None = None
         self._cam_pose: PoseStamped | None = None
 
-        self.pub = self.create_publisher(GroundedWaypoint, "/vlm/grounded_waypoint", 5)
+        self.pub = self.create_publisher(GroundedWaypoint, "/control/waypoint", 5)
         self.create_subscription(Annotation2D, "/vlm/annotation", self._on_annotation, 5)
         self.create_subscription(Image, "/camera/depth/image_raw", self._on_depth, 5)
         self.create_subscription(CameraInfo, "/camera/rgb/camera_info", self._on_info, 5)

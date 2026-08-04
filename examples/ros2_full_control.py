@@ -2,7 +2,7 @@
 """Fly the testbed entirely over ROS 2: take off, waypoint, attitude, land, and read every sensor.
 
     # terminal 1
-    ./scripts/bringup.sh --backend geometric
+    ./scripts/bringup.sh --config configs/testbed.yaml --backend geometric
 
     # terminal 2
     source /opt/ros/jazzy/setup.bash && source ros2_ws/install/setup.bash

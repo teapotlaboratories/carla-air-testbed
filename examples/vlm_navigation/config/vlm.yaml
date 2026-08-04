@@ -1,0 +1,38 @@
+# See-Point-Fly example — its own config, not the simulator's.
+#
+# Everything here moved out of `configs/testbed.yaml` under todo.md R-02: someone installing
+# a drone simulator should not find an Anthropic model name in its config file.
+#
+# This one is NOT generated. It is already in rclpy's `node: ros__parameters:` schema and has
+# exactly one reader, so there is nothing to render it into. `configs/testbed.yaml` is
+# rendered only because it must also produce AirSim's settings.json, a format we do not own.
+
+vlm_client:
+  ros__parameters:
+    backend: geometric        # mock | scripted | geometric | oracle | claude
+    seed: 0
+    min_period_s: 1.0
+    history_length: 5
+    instruction: "fly forward and stay clear of buildings"
+
+    # The `claude` backend. Its SDK is a python 3.12 dependency living in vendor/py312, not
+    # the 3.10 venv that owns the carla/airsim clients.
+    claude_model: claude-opus-5
+    claude_effort: low        # 40 steps in 300 s is 7.5 s per decision; a higher effort
+                              # spends the whole budget on one call and the episode times
+                              # out having flown nowhere.
+    claude_max_tokens: 16000
+    claude_timeout_s: 60.0
+    claude_jpeg_quality: 90
+    claude_fallbacks: true
+
+grounding:
+  ros__parameters:
+    # A MEASUREMENT SURFACE, not a preference. At -28.6 deg, level flight sits in the top
+    # 13.7% of the frame, so a backend that does not know the goal ALTITUDE flies itself
+    # into the ground. Changing it invalidates comparisons against every episode scored at
+    # the old value.
+    camera_pitch_deg: -28.6
+    camera_offset_body: [0.5, 0.0, 0.1]
+    depth_history: 12
+    max_range_m: 200.0
