@@ -715,12 +715,37 @@ scored on pedestrian motion) but the scenario descriptions overstate what is hap
 - **Verify:** `walkers_moving` is a substantial fraction of `walkers` for 30 s, and it is
   visible in a recording.
 
-### S-03 · Segmentation is published but disabled — **open**
+### S-03 · Segmentation is published but disabled — **done, now on by default** *(2026-08-04)*
 
-`graph.carla_air_bridge.publish_segmentation: false` in `configs/testbed.yaml`. It works (15–21 classes measured)
-but costs ~77 ms per capture, so it is off for the flight loop. Either leave it as an
-analysis-only flag and say so in the docs, or find out whether a smaller segmentation buffer
-makes it affordable to leave on.
+**Decision: ship it on.** A simulator should publish its sensors. Switching one off to protect
+a navigation loop is a navigation decision, and navigation is out of scope — so the default
+belongs on, with a flag for anyone who wants the throughput back.
+
+Re-measured rather than trusting the "~77 ms per capture" note, A/B by toggling
+`publish_segmentation` at runtime on the shipped config:
+
+| | rgb | depth | segmentation |
+|---|---|---|---|
+| off | 5.54 Hz | 8.04 Hz | — |
+| on | 5.92 Hz | 6.75 Hz | 6.86 Hz |
+
+**~16% off the depth rate, RGB unaffected.** Data verified good: 7 distinct classes over the
+plaza at 320x240 — road, buildings, vegetation, vehicles. (A first check showed only 2, which
+was the aircraft still sitting at the AirSim origin, offshore, looking at sea and sky. Placing
+it over the city was the difference, not any change to the sensor.)
+
+**A faster machine will not buy the 16% back**, and that is worth stating because it is
+counter-intuitive: this path is **transport-bound, not render-bound**. The cost is marshalling
+the buffer through msgpack-rpc across the 3.10/3.12 interpreter seam, and the GPU never
+touches it — `docs/architecture.md` measured a 640x480 depth grab at ~3.2 s *with or without a
+GPU*. Only a smaller buffer helps. The same reason RGB went 640x480 -> 960x720 earlier today
+with no rate change at all.
+
+- **Consequence, flagged not hidden:** the flight loop now gets depth at ~6.8 Hz instead of
+  ~8.0. E-01b's numbers were measured with segmentation off, which is one more reason its
+  table should not be quoted as reproducible.
+- `tests/test_config.py` caught `docs/guide.html` embedding a now-stale copy of the config,
+  which is the guard working as designed.
 
 ---
 

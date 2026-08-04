@@ -202,7 +202,18 @@ graph:
     lidar_rate_hz: 10.0
     image_rate_hz: 8.0
     publish_depth: true
-    publish_segmentation: false   # works, but ~77 ms per capture
+    # ON by default since 2026-08-04. A simulator should publish its sensors; switching one
+    # off to protect a navigation loop is a navigation decision, and that lives in examples/.
+    #
+    # Measured A/B on the shipped config, toggled at runtime:
+    #     off   rgb 5.54 Hz   depth 8.04 Hz   seg   -
+    #     on    rgb 5.92 Hz   depth 6.75 Hz   seg 6.86 Hz
+    # So it costs ~16% of the depth rate and leaves RGB alone. Set false if you need that back.
+    #
+    # A faster GPU will NOT buy it back: this path is transport-bound, not render-bound — the
+    # cost is marshalling the buffer through msgpack-rpc across the 3.10/3.12 seam, and the
+    # GPU never touches it. Only a smaller buffer helps. See docs/architecture.md.
+    publish_segmentation: true
     frame_id: drone
     setpoint_duration_s: 0.5      # how long a velocity/attitude command lives
 

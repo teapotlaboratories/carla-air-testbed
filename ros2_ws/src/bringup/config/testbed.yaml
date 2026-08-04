@@ -6,7 +6,7 @@ carla_air_bridge:
     lidar_rate_hz: 10.0
     image_rate_hz: 8.0
     publish_depth: true
-    publish_segmentation: false
+    publish_segmentation: true
     frame_id: drone
     setpoint_duration_s: 0.5
 offboard_control:
