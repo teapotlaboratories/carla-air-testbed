@@ -37,10 +37,17 @@ running offboard controller would fight it and make the numbers meaningless.
 """
 import math
 import statistics
+import sys
 import time
 
 import airsim
 import common
+
+#: `--yaw-hold` issues the hold with an explicit heading instead of AirSim's default, which
+#: is RATE control at 0 deg/s — "do not actively change yaw", not "hold yaw at zero". The
+#: distinction is the whole hypothesis: with rate control the airframe keeps whatever angular
+#: momentum it has.
+YAW_HOLD = "--yaw-hold" in sys.argv
 
 N = 10
 HOLD = (107.6, -159.4, -55.0)     # cross_the_plaza's start, where D-01 was measured
@@ -60,7 +67,8 @@ def yaw_deg(client):
     return math.degrees(math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
 
 
-p = common.Probe("p11_reset_attitude")
+p = common.Probe("p11_reset_attitude" + ("_yawhold" if YAW_HOLD else ""))
+p.note("yaw mode", "explicit heading hold" if YAW_HOLD else "AirSim default (rate 0)")
 c = common.airsim_client()
 
 after_pose, after_hold, after_settle = [], [], []
@@ -84,7 +92,12 @@ for i in range(N):
 
     c.enableApiControl(True, NAME)
     c.armDisarm(True, NAME)
-    c.moveToPositionAsync(HOLD[0], HOLD[1], HOLD[2], SPEED, vehicle_name=NAME).join()
+    if YAW_HOLD:
+        c.moveToPositionAsync(HOLD[0], HOLD[1], HOLD[2], SPEED,
+                              yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0.0),
+                              vehicle_name=NAME).join()
+    else:
+        c.moveToPositionAsync(HOLD[0], HOLD[1], HOLD[2], SPEED, vehicle_name=NAME).join()
     after_hold.append(yaw_deg(c))
 
     time.sleep(SETTLE_S)

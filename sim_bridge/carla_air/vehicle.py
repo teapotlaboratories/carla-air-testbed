@@ -98,7 +98,22 @@ class Vehicle:
         self._c.enableApiControl(True, self._name)
         self._c.armDisarm(True, self._name)
         say("holding")
-        self._c.moveToPositionAsync(n, e, d, speed, vehicle_name=self._name).join()
+        # An EXPLICIT heading hold, not AirSim's default. The default `yaw_mode` is
+        # `YawMode(is_rate=True, yaw_or_rate=0.0)`, which reads as "hold zero" and means the
+        # opposite: RATE control commanding zero rate, i.e. do not actively drive yaw at all.
+        # The airframe keeps whatever angular momentum it arrives with, and the aircraft that
+        # `reset()` claims to have placed at yaw zero is pointing somewhere else by the time
+        # the caller sees it.
+        #
+        # Measured over 10 resets, drift during the settle:
+        #     default              worst 65.2 deg, median  0.5 deg
+        #     explicit hold        worst  0.9 deg, median  0.3 deg
+        # Intermittent, which is what made it survive so long — most resets look fine.
+        # See tests/conformance/p11_reset_attitude.py and todo.md D-02.
+        self._c.moveToPositionAsync(
+            n, e, d, speed,
+            yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0.0),
+            vehicle_name=self._name).join()
         time.sleep(settle_s)
 
         # Take the epoch AFTER everything has settled, and after a hard reset in particular:

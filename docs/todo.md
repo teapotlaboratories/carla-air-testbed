@@ -1258,9 +1258,14 @@ repeat, 5/5 was a sample rather than a property.
   frame, so the annotation is being clamped because its target is outside the field of view.
   Successes hold u≈480, dead centre. Grounding is faithfully projecting a swinging pixel.
 - The goal leaves the frame because the **heading oscillates ±20°** and never converges in the
-  failing run, where every success settles to ~0° within two seconds. See **D-02**: the
-  starting attitude is not repeatable either, which is in scope and may or may not be the
-  perturbation that starts this.
+  failing run, where every success settles to ~0° within two seconds.
+- **D-02 was fixed and D-01 did not move** (8/10 vs 12/17, p=0.40). The starting attitude is
+  now repeatable to under a degree and the failures are unchanged, so the perturbation
+  hypothesis is refuted. Four single-cause hypotheses have now failed: `bearing_only`,
+  projection lag, teleport inaccuracy, reset attitude. The remaining reading is that the
+  oscillation is a property of the **closed loop** — waypoint → velocity → yaw → camera →
+  pixel → waypoint — which is navigation-stack behaviour and **out of scope** here. If that
+  holds, the right outcome for D-01 is documented and bounded rather than fixed.
 - Superseded, kept for the record: `out/episodes/*.json` stores `steps` as a count
   with no per-step trace, so the shape of the doubled path cannot be recovered from what is
   recorded. Two investigations have now stalled on this same gap.
@@ -1269,7 +1274,7 @@ repeat, 5/5 was a sample rather than a property.
 - **Do not guess at the cause** until there is a trace. Evidence in
   `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
 
-### D-02 · `reset()` commands yaw zero and does not get it — **open** *(2026-08-04)*
+### D-02 · `reset()` commands yaw zero and does not get it — **done** *(2026-08-04)*
 
 `Vehicle.reset()` places the aircraft with `airsim.Quaternionr(0, 0, 0, 1)` — yaw zero.
 Measured off the odometry at the moment five identical episodes began: **17.6°, 20.9°, 20.9°,
@@ -1293,10 +1298,13 @@ separating the two is exactly why this is filed on its own.
   `simSetVehiclePose` call issued once from an idle aircraft delivers exactly 0.00° and holds
   it. Order-dependent, so the probe's stage attribution is marked untrusted in its own
   docstring.
-- **First thing to try:** `moveToPositionAsync`'s default `YawMode` is *rate* control at
-  0 deg/s, which requests no active heading hold. An explicit
-  `YawMode(is_rate=False, yaw_or_rate=0)` is a one-line change to `Vehicle.reset()` and the
-  drift metric above measures it cleanly.
+- **Fixed 2026-08-04.** `moveToPositionAsync`'s default is `YawMode(is_rate=True,
+  yaw_or_rate=0.0)` — *rate* control commanding zero rate, which is "do not drive yaw", not
+  "hold yaw at zero". `Vehicle.reset()` now passes `YawMode(is_rate=False, yaw_or_rate=0.0)`.
+  A/B over 10 resets each: **worst drift 65.2° → 0.9°**, median 0.5° → 0.3°.
+- **It did NOT fix D-01.** Ten runs of `cross_the_plaza` seed 1 with the fix: 8/10, against
+  12/17 before. P(≥8 of 10 | rate unchanged) = 0.40 — the sample cannot tell them apart. The
+  heading-perturbation hypothesis is refuted; the fix stands on its own merits.
 - **Verify:** starting yaw across 10 identical resets, reported as a spread. It should be a
   degree or two, not ten.
 - Evidence: `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.

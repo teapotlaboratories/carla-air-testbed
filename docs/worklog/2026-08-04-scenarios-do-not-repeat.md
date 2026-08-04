@@ -241,3 +241,55 @@ in its own docstring rather than quietly relied on.
 an explicit `YawMode(is_rate=False, yaw_or_rate=0)` is the first thing to try. That is a
 one-line change to `Vehicle.reset()` and it is testable with this probe as it stands, since
 the drift metric is the part that measures cleanly.
+
+---
+
+## The YawMode fix: D-02 solved, D-01 untouched
+
+`moveToPositionAsync`'s default is `YawMode(is_rate=True, yaw_or_rate=0.0)`. That reads as
+"hold zero" and means the opposite — **rate** control commanding zero rate, i.e. do not
+actively drive yaw at all. The airframe keeps whatever angular momentum it arrives with.
+
+A/B over 10 resets each, same simulator, nothing else running:
+
+| | worst drift | median drift |
+|---|---|---|
+| AirSim default | **65.2°** | 0.5° |
+| explicit `YawMode(is_rate=False, yaw_or_rate=0.0)` | **0.9°** | 0.3° |
+
+Applied to `Vehicle.reset()`. **D-02 is fixed** — and note the median: most resets were always
+fine, and it is the occasional 65–105° one that did the damage. That intermittency is why it
+survived this long, and it matched D-01's intermittency closely enough to look causal.
+
+### It is not causal
+
+`cross_the_plaza` seed 1, oracle, ten runs with the fix in place: **8/10**, against 12/17
+before. P(≥8 of 10 | true rate still 0.706) = **0.40**. The sample cannot tell those apart, and
+nothing suggests an improvement.
+
+**So D-01 is still open and the heading hypothesis is refuted.** The two failures had the same
+signature as before — `max_steps` at 25, ~40 m short — so whatever oscillates is still
+oscillating with the starting attitude nailed down.
+
+That is the fourth hypothesis this session that did not survive contact with a measurement:
+`bearing_only`, projection lag, teleport inaccuracy, and now reset attitude. Each was
+plausible, each was tested, each was wrong. The one thing that has held up throughout is the
+observation itself — the failure is an annotation oscillating against the frame edges, and the
+loop it sits in (waypoint → velocity → yaw → camera → pixel → waypoint) is closed.
+
+**The fix stays regardless.** A reset that does not deliver the attitude it commands is a
+defect on its own terms, in scope, and now measured and closed. It simply is not D-01's cause.
+
+### What I would do next, and what I would not
+
+Not: another single-cause hypothesis. Four in a row have failed, and the pattern suggests the
+oscillation is a property of the closed loop rather than of any one component — which would
+also explain why disabling the velocity slew, the yaw slew, and now the attitude perturbation
+each changed nothing.
+
+Instead: capture traces for several failures and check whether the oscillation ever starts
+from a *quiet* state, or only ever from a large initial heading error. If it can start from
+quiet, it is self-sustaining and the loop gain is the thing to look at. That is a
+navigation-stack property and out of scope for this repository — which would make the right
+outcome for D-01 "documented, bounded, and not this repository's to fix", with the simulator's
+own contribution (D-02) already closed.
