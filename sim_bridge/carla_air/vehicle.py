@@ -32,22 +32,84 @@ class Vehicle:
     def __init__(self, client: airsim.MultirotorClient, name: str = "SimpleFlight"):
         self._c = client
         self._name = name
+        #: Collisions at or before this sim timestamp belong to a previous episode.
+        self._collision_epoch = 0
         self._env_cache = None
         self._env_at = 0.0
 
     # ---------- lifecycle ----------
 
-    def reset(self, hold_ned=(0.0, 0.0, -40.0), speed=8.0, settle_s=2.0):
+    def reset(self, hold_ned=(0.0, 0.0, -40.0), speed=8.0, settle_s=2.0,
+              on_stage=None, hard=False):
         """Reset to the start pose and leave the aircraft *holding a setpoint*.
 
         Never return a vehicle that has only been armed: see the module docstring.
+
+        **PLACED, not flown.** This used to `reset()` and then `moveToPositionAsync` the
+        aircraft from the world origin to the start - a real flight of ~200 m, ~20 s of the
+        ~30 s a reset cost. `simSetVehiclePose` puts it there directly.
+
+        `reset()` still runs first, and is still what makes this safe rather than merely
+        fast: it clears the latched collision flag (without it, one crashed episode would
+        mark every later one as collided from its first frame), cancels any command still
+        executing from the previous episode, and returns the vehicle to a known disarmed
+        state. Teleporting alone does none of that.
+
+        The `moveToPositionAsync` at the end is NOT redundant. The aircraft is already at
+        the pose, so it returns almost immediately - but it leaves a live setpoint behind,
+        and a drone placed at 55 m with no setpoint simply falls. That invariant is the
+        whole point of the module docstring.
         """
-        self._c.reset()
-        time.sleep(3.0)
+        # Optional so this class stays usable without a connection behind it - the 3.10
+        # scripts and the tests call reset() directly.
+        say = on_stage or (lambda _stage: None)
+
+        n, e, d = (float(v) for v in hold_ned)
+        if hard:
+            # The old path. Kept because it is the only thing that provably returns the
+            # simulator to a known state - but it is pathologically slow on repeat
+            # (5.5 s, then >60 s, then a hang; see todo.md E-06), so it is no longer the
+            # default. Use it when the simulator is already misbehaving.
+            say("sim-reset")
+            self._c.reset()
+            time.sleep(3.0)
+        else:
+            # What client.reset() was actually being used for, done explicitly:
+            #   * cancel whatever the previous episode left executing,
+            #   * drop the aircraft out of API control so the teleport is not fought,
+            #   * (the collision flag is handled by `_collision_epoch`, below).
+            say("cancelling")
+            self._c.cancelLastTask(vehicle_name=self._name)
+            self._c.armDisarm(False, self._name)
+            self._c.enableApiControl(False, self._name)
+            time.sleep(0.3)
+
+        # Teleport BEFORE arming, so SimpleFlight initialises its controller at the pose we
+        # want rather than at the origin and then being yanked. `ignore_collision=True`
+        # because the target may be inside geometry the collision check would object to, and
+        # a scenario start is chosen deliberately.
+        say("placing")
+        self._c.simSetVehiclePose(
+            airsim.Pose(airsim.Vector3r(n, e, d), airsim.Quaternionr(0.0, 0.0, 0.0, 1.0)),
+            True, vehicle_name=self._name)
+        time.sleep(0.5)
+
+        say("arming")
         self._c.enableApiControl(True, self._name)
         self._c.armDisarm(True, self._name)
-        self._c.moveToPositionAsync(*hold_ned, speed, vehicle_name=self._name).join()
+        say("holding")
+        self._c.moveToPositionAsync(n, e, d, speed, vehicle_name=self._name).join()
         time.sleep(settle_s)
+
+        # Take the epoch AFTER everything has settled, and after a hard reset in particular:
+        # a hard reset restarts sim time, so an epoch captured beforehand would be in the
+        # future and would mask every real collision that followed.
+        try:
+            self._collision_epoch = int(
+                self._c.simGetCollisionInfo(vehicle_name=self._name).time_stamp)
+        except Exception:                                              # noqa: BLE001
+            self._collision_epoch = 0
+        say("settled")
         return self.state()
 
     def takeoff(self, altitude_ned=-30.0, speed=6.0, settle_s=1.0):
@@ -159,9 +221,20 @@ class Vehicle:
         }
 
     def collision(self):
+        """Collisions since the last reset, not since the simulator started.
+
+        AirSim LATCHES `has_collided` - it stays true until a full `client.reset()`. That
+        made the sim reset load-bearing for scoring: without it, one crashed episode would
+        mark every later one as collided from its first frame.
+
+        Comparing timestamps removes that dependency, and is better anyway: the epoch is
+        explicit and per-vehicle, rather than a side effect of a global operation that costs
+        a minute (see todo.md E-06).
+        """
         c = self._c.simGetCollisionInfo(vehicle_name=self._name)
+        fresh = bool(c.has_collided) and int(c.time_stamp) > self._collision_epoch
         return {
-            "has_collided": bool(c.has_collided),
+            "has_collided": fresh,
             "object_name": c.object_name,
             "position": [c.position.x_val, c.position.y_val, c.position.z_val],
             "object_id": int(c.object_id),

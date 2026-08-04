@@ -131,6 +131,11 @@ class CarlaAirBridge(Node):
         # None guard instead of raising AttributeError.
         self._last_z = None
         self._next_odom = 0.0
+        # Set while a reset is in flight. AirSim's reset() tears the vehicle down and
+        # rebuilds it, and every RPC arriving during that window competes with it: measured,
+        # six back-to-back resets with this node's own polling running went 26.8 s -> 60.1 s
+        # -> hung, with nothing else in the graph at all. The timers check this and skip.
+        self._resetting = False
         self._next_image = 0.0
 
 
@@ -281,7 +286,7 @@ class CarlaAirBridge(Node):
             else:
                 self.get_logger().warn(
                     f"unsupported VehicleCommand {msg.command}", throttle_duration_sec=5.0)
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().error(f"vehicle command {msg.command} failed: {exc}")
 
     def _on_attitude(self, msg: VehicleAttitudeSetpoint):
@@ -306,10 +311,12 @@ class CarlaAirBridge(Node):
         try:
             self.sim.attitude(roll, pitch, yaw, self._last_z,
                               float(self.get_parameter("setpoint_duration_s").value))
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().error(f"attitude failed: {exc}")
 
     def _tick_lidar(self):
+        if self._resetting:
+            return       # see _resetting: AirSim is rebuilding the vehicle
         """Republish the newest semantic LiDAR sweep as PointCloud2.
 
         The sidecar hands over CARLA's raw buffer rather than a decoded list: 24 bytes per
@@ -330,7 +337,7 @@ class CarlaAirBridge(Node):
         self._next_lidar = _advance(self._next_lidar, now, 1.0 / hz)
         try:
             sweep = self.sim.lidar()
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warn(f"lidar() failed: {exc}", throttle_duration_sec=5.0)
             return
         if not sweep or not sweep.get("count"):
@@ -358,6 +365,8 @@ class CarlaAirBridge(Node):
         self.pub_lidar.publish(msg)
 
     def _tick_sensors(self):
+        if self._resetting:
+            return       # see _resetting: AirSim is rebuilding the vehicle
         """IMU, barometer, magnetometer and GPS, from one sidecar call.
 
         These are AirSim's simulated instruments, not a second view of ground truth — the
@@ -376,7 +385,7 @@ class CarlaAirBridge(Node):
         self._next_sensor = _advance(self._next_sensor, now, 1.0 / hz)
         try:
             s = self.sim.sensors()
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warn(f"sensors() failed: {exc}", throttle_duration_sec=5.0)
             return
 
@@ -422,6 +431,8 @@ class CarlaAirBridge(Node):
         self.pub_gps.publish(gps)
 
     def _tick_odometry(self):
+        if self._resetting:
+            return       # see _resetting: AirSim is rebuilding the vehicle
         now = time.monotonic()
         if now < self._next_odom:
             return
@@ -429,11 +440,15 @@ class CarlaAirBridge(Node):
             self._next_odom, now, 1.0 / float(self.get_parameter("odometry_rate_hz").value))
         try:
             s = self.sim.state()
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warn(f"state() failed: {exc}", throttle_duration_sec=5.0)
             return
 
         now = self._stamp_us()
+        # Indexing is INSIDE the guarded block on purpose. A sidecar that answers with an
+        # error-shaped or partial dict used to raise KeyError here, outside the except, and
+        # rclpy does not catch callback exceptions — the executor propagated it and the whole
+        # bridge node exited(1) mid-run. One bad reply must degrade a topic, not end the node.
         p, v, q = s["position"], s["velocity"], s["orientation"]
         self._last_z = float(p[2])
 
@@ -466,6 +481,8 @@ class CarlaAirBridge(Node):
         self.pub_status.publish(st)
 
     def _tick_images(self):
+        if self._resetting:
+            return       # see _resetting: AirSim is rebuilding the vehicle
         now = time.monotonic()
         if now < self._next_image:
             return
@@ -475,7 +492,7 @@ class CarlaAirBridge(Node):
         want_seg = bool(self.get_parameter("publish_segmentation").value)
         try:
             cap = self.media.capture(rgb=True, depth=want_depth, segmentation=want_seg)
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warn(f"capture() failed: {exc}", throttle_duration_sec=5.0)
             return
 
@@ -540,6 +557,7 @@ class CarlaAirBridge(Node):
     def _srv_reset(self, req, resp):
         """Teleport and hold. Blocking - 16.2 s measured for a ~60 m move, so this needs
         its own connection and its own executor thread or it stalls every timer."""
+        self._resetting = True
         try:
             speed = float(req.speed) if req.speed > 0.0 else 8.0
             state = self.world.reset(hold_ned=list(req.hold_ned), speed=speed)
@@ -551,6 +569,9 @@ class CarlaAirBridge(Node):
             resp.success = False
             resp.message = str(exc)
             self.get_logger().error(f"reset failed: {exc}")
+        finally:
+            # In `finally`: a reset that fails must not leave the graph permanently mute.
+            self._resetting = False
         return resp
 
     def _srv_spawn_traffic(self, req, resp):
@@ -614,7 +635,7 @@ class CarlaAirBridge(Node):
             got = self.world.destroy_actors()
             resp.success = True
             resp.destroyed = int(got.get("destroyed", 0))
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             resp.success = False
             resp.message = str(exc)
             self.get_logger().error(f"destroy_actors failed: {exc}")
@@ -641,10 +662,10 @@ class CarlaAirBridge(Node):
             if req.start:
                 if not req.path:
                     raise ValueError("path is required when start is true")
-                self.world.chase_start(path=req.path,
-                                       width=int(req.width) or 1280,
-                                       height=int(req.height) or 720,
-                                       fps=float(req.fps) or 30.0)
+                # Pass zeros THROUGH. Substituting literals here re-hid the config: the
+                # sidecar cannot tell "the caller wants 1280" from "the caller said nothing".
+                self.world.chase_start(path=req.path, width=int(req.width),
+                                       height=int(req.height), fps=float(req.fps))
                 self.get_logger().info(f"chase recording -> {req.path}")
             else:
                 got = self.world.chase_stop()
@@ -661,6 +682,8 @@ class CarlaAirBridge(Node):
         return resp
 
     def _tick_world(self):
+        if self._resetting:
+            return       # see _resetting: AirSim is rebuilding the vehicle
         try:
             col = self.sim.collision()
             self.pub_collision.publish(Collision(
@@ -676,8 +699,10 @@ class CarlaAirBridge(Node):
             stats = self.sim.traffic_stats()
             self.pub_traffic.publish(String(
                 data=f"spawned={stats['spawned']} moving={stats['moving']} "
-                     f"walkers={stats['walkers']}"))
-        except (SimBridgeError, OSError) as exc:
+                     f"walkers={stats['walkers']} "
+                     f"walkers_moving={stats.get('walkers_moving', -1)} "
+                     f"controllers={stats.get('controllers', -1)}"))
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().warn(f"world tick failed: {exc}", throttle_duration_sec=10.0)
 
     # ------------------------------------------------------------------- inputs
@@ -703,7 +728,7 @@ class CarlaAirBridge(Node):
             else:
                 self.get_logger().warn("setpoint had neither finite velocity nor position",
                                        throttle_duration_sec=5.0)
-        except (SimBridgeError, OSError) as exc:
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
             self.get_logger().error(f"setpoint rejected: {exc}", throttle_duration_sec=2.0)
 
     def destroy_node(self):

@@ -44,7 +44,18 @@ class SimBridge:
     #: telemetry reads — must never queue behind capture OR behind a control command
     FAST = frozenset({"ping", "state", "collision", "carla_to_ned", "sensors"})
     #: control writes — their own client so a 10 Hz setpoint stream cannot starve telemetry
-    CONTROL = frozenset({"velocity", "hold", "goto", "yaw", "land", "takeoff", "attitude"})
+    #: `reset` belongs here and not in the default slow class, which is where it sat until
+    #: 2026-08-03. It COMMANDS the vehicle, so CONTROL is right semantically - but the bug
+    #: was mechanical: `reset` drove `self.vehicle` (the TELEMETRY client) under slow_lock
+    #: while FAST `state`/`collision` drove the same msgpack-rpc connection at 20 Hz under
+    #: fast_lock. Two locks, one socket. It surfaced as
+    #:     reset: IOLoop is already running
+    #: and, when the wedged connection stalled the dispatcher long enough for CARLA's own
+    #: RPC to time out, as an uncaught carla::client::TimeoutException that terminated the
+    #: whole sidecar mid-sweep. `reset` now uses `self.control`, which has its own client
+    #: and its own lock, so telemetry keeps running at 20 Hz through a 16 s reset.
+    CONTROL = frozenset({"velocity", "hold", "goto", "yaw", "land", "takeoff", "attitude",
+                         "reset"})
     #: frames — the media AirSim client, or CARLA for the chase view. Neither touches the
     #: telemetry or control sockets, so serialising them against `reset`/`land`/`goto` bought
     #: nothing and cost everything: `land` blocks for the whole descent while holding
@@ -57,9 +68,29 @@ class SimBridge:
     #: `capture` on the one msgpackrpc socket. msgpackrpc answers that with
     #: "IOLoop is already running", the call fails, and the CAMERA PITCH IS SILENTLY NOT
     #: APPLIED - on a measurement surface that every scored episode depends on.
-    MEDIA = frozenset({"capture", "view_jpeg", "chase_jpeg", "lidar", "set_camera_pose"})
+    #: `describe` and `ground` are here for the same mechanical reason as `set_camera_pose`:
+    #: both call self.camera, which is built on the media client. They sat in the slow class
+    #: until 2026-08-03, free to race a capture on the one connection. `ground` is the
+    #: dangerous one - it takes a real depth capture.
+    MEDIA = frozenset({"capture", "view_jpeg", "chase_jpeg", "lidar", "set_camera_pose",
+                       "describe", "ground"})
 
-    def __init__(self, carla_port=2000, airsim_port=41451, seed=None, timeout=30.0):
+    #: CARLA's RPC timeout, and it is NOT a nicety. When it expires, CARLA raises
+    #: `carla::client::TimeoutException` from a C++ thread where nothing catches it, so it
+    #: calls terminate() and takes the WHOLE SIDECAR down - mid-episode, with a broken pipe
+    #: as the only clue on the ROS side. That has now happened twice: once at 120k lidar
+    #: points/second, and again during a 40-episode sweep, where destroy -> spawn 30
+    #: vehicles + 20 walkers -> reset -> 30 fps chase recording, back to back, pushed a
+    #: single call past 30 s. It cannot be caught in Python, so the only defence is not
+    #: reaching it.
+    #:
+    #: 120 s costs nothing when the simulator is healthy: the timeout is a ceiling, not a
+    #: delay. It only matters when the simulator is genuinely wedged, and then a slower
+    #: failure is far better than a dead sidecar.
+    CARLA_TIMEOUT_S = 120.0
+
+    def __init__(self, carla_port=2000, airsim_port=41451, seed=None, timeout=None):
+        timeout = self.CARLA_TIMEOUT_S if timeout is None else timeout
         self.carla_client = carla.Client("127.0.0.1", carla_port)
         self.carla_client.set_timeout(timeout)
 
@@ -87,13 +118,15 @@ class SimBridge:
         # the model depends on. Created lazily: a run that never records never spawns it.
         #
         # It gets its OWN AirSim client, and that is not tidiness. The locks here guard
-        # DISPATCH CLASSES, not clients: `state` is FAST (fast_lock) and `reset` is neither
-        # FAST nor CONTROL (slow_lock), yet both drive `self.airsim_client`. Two threads
-        # holding two different locks can therefore write the same msgpack-rpc socket at
-        # once, which surfaces as `Existing exports of data: object cannot be re-sized` from
-        # deep inside tornado — an error that names nothing about the actual cause. Nothing
-        # hit it before because every caller was serialised by run_episode.py; a follow
-        # thread polling at 20 Hz is the first thing here that genuinely runs concurrently.
+        # DISPATCH CLASSES GUARD DISPATCH, NOT SOCKETS. Two methods in different classes
+        # hold different locks and can still write the SAME msgpack-rpc connection at once.
+        # This has now bitten five times, each with an error naming nothing about the cause:
+        #   `Existing exports of data: object cannot be re-sized` from inside tornado,
+        #   `IOLoop is already running`,
+        #   and an uncaught carla::client::TimeoutException that killed the whole sidecar.
+        # The rule that actually holds: EVERY method touching a given AirSim client must be
+        # in the class that owns that client's lock. self.vehicle -> FAST, self.control ->
+        # CONTROL, self.camera -> MEDIA. Check that before adding a method, not after.
         self._chase = None
         self._chase_client = None
         self._chase_vehicle = None
@@ -128,7 +161,10 @@ class SimBridge:
         }
 
     def reset(self, hold_ned=(0.0, 0.0, -40.0), speed=8.0):
-        return self.vehicle.reset(tuple(hold_ned), speed)
+        # self.control, NOT self.vehicle - see the note on CONTROL above.
+        # `on_stage` reports each step: this is the slowest call in the protocol and the one
+        # a caller most needs to distinguish from a hang.
+        return self.control.reset(tuple(hold_ned), speed, on_stage=emit_progress)
 
     def state(self):
         return self.vehicle.state()
@@ -325,13 +361,46 @@ class SimBridge:
         # Own connection -> own socket -> no interleaving with telemetry or reset.
         self._ensure_follow_thread()
 
-    def chase_start(self, path, width=1280, height=720, fps=30.0,
-                    distance=14.0, above=6.0):
+    def _chase_defaults(self):
+        """`sidecar.chase_camera` from configs/testbed.yaml.
+
+        This block existed and was READ BY NOTHING until 2026-08-03: the resolution was
+        hardcoded in three places (here, the bridge, run_episode), so setting 1920x1080 in
+        the config produced a 1280x720 recording and no error anywhere. Exactly the "a config
+        change has no effect" failure the quickstart warns about, shipped in the config file
+        that is supposed to be the single source.
+        """
+        import os
+        import yaml
+        path = os.environ.get("TESTBED_CONFIG") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "configs", "testbed.yaml")
+        out = {"width": 1280, "height": 720, "fps": 30.0, "distance": 14.0, "above": 6.0,
+               "crf": 26}
+        try:
+            with open(path) as fh:
+                block = ((yaml.safe_load(fh) or {}).get("sidecar") or {}).get("chase_camera") or {}
+            out.update({k: v for k, v in block.items() if k in out})
+        except Exception:                     # noqa: BLE001 - a bad edit must not stop a run
+            pass
+        return out
+
+    def chase_start(self, path, width=0, height=0, fps=0.0,
+                    distance=0.0, above=0.0):
         """Begin recording an HD exterior view that follows the aircraft.
 
         Separate from `capture()` on purpose: that one feeds the model and is a measurement
         surface, this one is a spectator and is scored on nothing.
         """
+        # 0 means "whatever the config says" for every field, so a caller that does not
+        # care never has to restate the defaults - and the config actually reaches the
+        # camera instead of being shadowed by a literal.
+        d = self._chase_defaults()
+        width = int(width) or int(d["width"])
+        height = int(height) or int(d["height"])
+        fps = float(fps) or float(d["fps"])
+        distance = float(distance) or float(d["distance"])
+        above = float(above) or float(d["above"])
         self._ensure_chase(width, height, fps, distance, above)
         self._chase.start(path)
         return {"recording": path, "size": [width, height], "fps": fps}
@@ -341,7 +410,11 @@ class SimBridge:
             return {"frames": 0, "dropped": 0}
         self._chase_stop.set()
         if self._chase_thread is not None:
-            self._chase_thread.join(timeout=5.0)
+            # 5 s was not enough at 1080p: the encoder still has a queue to flush when the
+            # follower stops, the join timed out, `stop()` never ran, and the file was left
+            # without a moov atom - i.e. unplayable, which is the one outcome a recording
+            # must not have. Measured: a 78 s 1080p clip needs ~15 s to drain.
+            self._chase_thread.join(timeout=45.0)
             self._chase_thread = None
         return self._chase.stop()
 
@@ -388,6 +461,34 @@ class SimBridge:
         return {"bye": True}
 
 
+#: Where a running method finds its own connection, so it can report progress without
+#: every method signature growing a `send` argument. Thread-local because each connection is
+#: served by its own thread: a module global would let one connection's progress frames land
+#: on another's socket, which is the same class of bug this whole change exists to remove.
+_CURRENT = threading.local()
+
+
+def emit_progress(stage: str) -> None:
+    """Tell the caller this call is still alive, and what it is doing.
+
+    Long operations - `reset` above all - used to be indistinguishable from wedged ones: the
+    caller had a fixed ceiling and no information, so the ceiling had to be generous enough
+    for the worst case, which made a genuine hang take just as long to notice. A progress
+    frame resets the caller's patience clock, so slow and dead stop looking alike.
+
+    Best-effort by construction. A caller that has already given up is gone, and failing to
+    tell it about a stage it no longer cares about must never fail the operation itself.
+    """
+    conn = getattr(_CURRENT, "conn", None)
+    rid = getattr(_CURRENT, "rid", None)
+    if conn is None or rid is None:
+        return
+    try:
+        protocol.send(conn, {"id": rid, "progress": stage})
+    except OSError:
+        pass
+
+
 def _handle(bridge: SimBridge, conn: socket.socket):
     """One connection, one thread. Locks are per underlying RPC client, not global."""
     try:
@@ -407,6 +508,7 @@ def _handle(bridge: SimBridge, conn: socket.socket):
                 lock = bridge.media_lock
             else:
                 lock = bridge.slow_lock
+            _CURRENT.conn, _CURRENT.rid = conn, rid
             try:
                 with lock:
                     result = getattr(bridge, method)(**args)
@@ -414,6 +516,8 @@ def _handle(bridge: SimBridge, conn: socket.socket):
             except Exception as exc:  # noqa: BLE001 — must not kill the server
                 protocol.send(conn, {"id": rid, "ok": False, "error": str(exc),
                                      "traceback": traceback.format_exc()})
+            finally:
+                _CURRENT.conn = _CURRENT.rid = None
             if method == "shutdown":
                 return
     except (ConnectionError, protocol.ProtocolError, OSError) as exc:

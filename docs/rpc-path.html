@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The sidecar RPC path — where it lives, how it flows, where it breaks</title>
+<style>
+  :root{
+    --paper:#E6E7E1; --panel:#EFEFEA; --ink:#161A18; --ink-soft:#4A524C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --ground:#C8892B;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+    --display:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;
+    --body:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#111512; --panel:#171C19; --ink:#E4E7E0; --ink-soft:#9BA49C;
+      --rule:#2C332E; --rule-soft:#232925;
+      --chrome:#2FB3BE; --chrome-ink:#7FD8DF; --air:#3BA5D4; --ground:#E0A643;
+      --ok:#5FA351; --stop:#D25638; --thead:#0B0E0C; --thead-ink:#D8DCD4;
+      --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#E6E7E1; --panel:#EFEFEA; --ink:#161A18; --ink-soft:#4A524C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF; --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --ground:#C8892B; --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+  }
+  :root[data-theme="dark"]{
+    --paper:#111512; --panel:#171C19; --ink:#E4E7E0; --ink-soft:#9BA49C;
+    --rule:#2C332E; --rule-soft:#232925; --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+    --air:#3BA5D4; --ground:#E0A643; --ok:#5FA351; --stop:#D25638;
+    --thead:#0B0E0C; --thead-ink:#D8DCD4;
+    --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--paper); color:var(--ink);
+       font-family:var(--body); font-size:16px; line-height:1.62}
+  .topbar{position:sticky; top:0; z-index:20; background:var(--paper);
+          border-bottom:1px solid var(--rule); display:flex; align-items:center;
+          gap:1rem; flex-wrap:wrap; padding:.7rem clamp(1rem,4vw,2.5rem)}
+  .brand{font-family:var(--display); font-weight:800; letter-spacing:.10em;
+         text-transform:uppercase; font-size:.82rem; color:var(--chrome-ink)}
+  @media (prefers-color-scheme:dark){ .brand{color:var(--chrome)} }
+  :root[data-theme="dark"] .brand{color:var(--chrome)}
+  .themer{margin-left:auto; display:inline-flex; border:1px solid var(--rule);
+          border-radius:3px; overflow:hidden; background:var(--panel)}
+  .themer button{font-family:var(--display); font-size:.62rem; font-weight:700;
+          letter-spacing:.1em; text-transform:uppercase; padding:.32rem .6rem;
+          border:0; border-right:1px solid var(--rule); background:transparent;
+          color:var(--ink-soft); cursor:pointer; line-height:1.6}
+  .themer button:last-child{border-right:0}
+  .themer button:hover{color:var(--ink)}
+  .themer button[aria-pressed="true"]{background:var(--chrome); color:#fff}
+  .themer button:focus-visible{outline:2px solid var(--chrome); outline-offset:-2px}
+
+  main{max-width:940px; margin:0 auto; padding:2rem clamp(1rem,4vw,2.5rem) 5rem}
+  .prose{max-width:68ch}
+  h1{font-family:var(--display); font-size:clamp(1.8rem,4.2vw,2.5rem); font-weight:800;
+     letter-spacing:-.015em; line-height:1.1; margin:0 0 .5rem; text-wrap:balance}
+  h2{font-family:var(--display); font-size:1.22rem; font-weight:800; letter-spacing:.02em;
+     margin:3rem 0 .9rem; padding-bottom:.4rem; border-bottom:2px solid var(--chrome)}
+  h3{font-family:var(--display); font-size:1rem; font-weight:700; margin:2rem 0 .6rem}
+  .lede{font-size:1.05rem; color:var(--ink-soft); max-width:66ch; text-wrap:pretty}
+  .eyebrow{font-family:var(--display); font-size:.66rem; font-weight:700; letter-spacing:.15em;
+           text-transform:uppercase; color:var(--ground); margin:0 0 .5rem}
+  p{margin:0 0 1rem; text-wrap:pretty}
+  ul,ol{margin:0 0 1rem; padding-left:1.15rem} li{margin:.34rem 0}
+  code{font-family:var(--mono); font-size:.87em; background:var(--panel);
+       border:1px solid var(--rule-soft); border-radius:2px; padding:.06em .32em}
+  pre{background:var(--code-bg); color:var(--code-ink); font-family:var(--mono);
+      font-size:.79rem; line-height:1.6; margin:0 0 1.3rem; padding:1rem 1.1rem;
+      border-radius:3px; overflow-x:auto; border:1px solid var(--thead)}
+  pre .c{color:var(--code-dim)} pre .g{color:#7FD8A0} pre .y{color:#E0B75F} pre .r{color:#F09080}
+
+  .fig{margin:0 0 1.6rem; border:1px solid var(--rule); border-radius:4px;
+       background:var(--panel); overflow-x:auto}
+  .fig svg{display:block; min-width:660px; width:100%; height:auto}
+  .cap{font-size:.82rem; color:var(--ink-soft); padding:.55rem .9rem;
+       border-top:1px solid var(--rule-soft)}
+  .cap b{color:var(--ink); font-weight:650}
+
+  .tw{overflow-x:auto; margin:0 0 1.4rem; border:1px solid var(--rule); border-radius:3px}
+  table{border-collapse:collapse; width:100%; font-size:.86rem; font-variant-numeric:tabular-nums}
+  thead th{background:var(--thead); color:var(--thead-ink); text-align:left;
+           font-family:var(--display); font-size:.66rem; letter-spacing:.11em;
+           text-transform:uppercase; padding:.55rem .8rem; font-weight:700}
+  td,tbody th{padding:.5rem .8rem; border-top:1px solid var(--rule-soft);
+              text-align:left; vertical-align:top}
+  tbody th{font-weight:600; white-space:nowrap}
+  tbody tr:nth-child(even){background:var(--paper)}
+  td code,tbody th code{background:transparent; border:0; padding:0}
+
+  .note{border-left:3px solid var(--chrome); background:var(--panel); padding:.85rem 1rem;
+        margin:0 0 1.3rem; font-size:.93rem; border-radius:0 3px 3px 0}
+  .note.warn{border-left-color:var(--ground)}
+  .note.stop{border-left-color:var(--stop)}
+  .note.ok{border-left-color:var(--ok)}
+  .note p:last-child{margin-bottom:0}
+  .note .t{font-family:var(--display); font-size:.66rem; font-weight:700; letter-spacing:.12em;
+           text-transform:uppercase; display:block; margin-bottom:.25rem; color:var(--ink-soft)}
+  footer{border-top:1px solid var(--rule); margin-top:3.5rem; padding-top:1rem;
+         font-size:.8rem; color:var(--ink-soft)}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+  /* svg text defaults */
+  svg text{font-family:var(--mono); font-size:11px; fill:var(--ink)}
+  svg .lbl{font-family:var(--display); font-weight:700; font-size:11px; letter-spacing:.04em}
+  svg .dim{fill:var(--ink-soft); font-size:10px}
+  svg .box{fill:var(--paper); stroke:var(--rule)}
+  svg .hot{fill:none; stroke:var(--stop); stroke-width:2}
+  svg .good{fill:none; stroke:var(--ok); stroke-width:2}
+  svg .wire{fill:none; stroke:var(--chrome); stroke-width:1.6}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">carla-air &middot; sidecar RPC</span>
+  <div class="themer" role="group" aria-label="Colour theme">
+    <button type="button" data-theme-set="auto"  aria-pressed="true">Auto</button>
+    <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+    <button type="button" data-theme-set="dark"  aria-pressed="false">Dark</button>
+  </div>
+</div>
+
+<main>
+  <p class="eyebrow">Investigation &middot; 2026-08-03 &middot; backlog E-06</p>
+  <h1>The sidecar RPC path</h1>
+  <p class="lede">
+    Where it lives, how a call flows, and where one slow reply takes the whole graph down.
+    Every number here is measured on this machine; every path is a real file and line.
+  </p>
+
+  <div class="note stop">
+    <span class="t">The finding, in one sentence</span>
+    <p>
+      The request/reply stream has <strong>no correlation between a reply and the call that
+      asked for it</strong> &mdash; so when a caller gives up at 60&nbsp;s, the reply it
+      abandoned is still delivered, and every later call on that connection reads the
+      <em>previous</em> call's answer. Forever.
+    </p>
+  </div>
+
+  <h2 id="lives">1 &nbsp;Where it lives</h2>
+  <div class="prose">
+    <p>
+      Two processes, because they must be: the CARLA-Air client is an ABI-tagged
+      <code>cpython-310</code> extension and ROS 2 Jazzy is 3.12, so neither interpreter can
+      load the other's C extensions. They are joined by a Unix domain socket carrying
+      msgpack frames &mdash; a 4-byte big-endian length, then the object.
+    </p>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 900 400" role="img" aria-label="Two processes joined by four Unix socket connections">
+    <rect class="box" x="16" y="40" width="290" height="332" rx="4"/>
+    <text class="lbl" x="30" y="62">ROS 2 GRAPH &mdash; python 3.12</text>
+    <text class="dim" x="30" y="78">ros2_ws/src/carla_air_bridge/</text>
+
+    <rect class="box" x="34" y="96" width="254" height="42" rx="3"/>
+    <text x="46" y="114">bridge_node.py</text>
+    <text class="dim" x="46" y="128">4 timers + 4 services + 2 subs</text>
+
+    <rect class="box" x="34" y="152" width="254" height="200" rx="3"/>
+    <text class="lbl" x="46" y="172">SimBridgeClient &times; 4</text>
+    <text class="dim" x="46" y="186">client.py &mdash; one socket each</text>
+    <text x="46" y="212">self.sim</text>   <text class="dim" x="150" y="212">telemetry</text>
+    <text x="46" y="234">self.media</text> <text class="dim" x="150" y="234">image capture</text>
+    <text x="46" y="256">self.ctrl</text>  <text class="dim" x="150" y="256">setpoints</text>
+    <text x="46" y="278">self.world</text> <text class="dim" x="150" y="278">4 world services</text>
+    <text class="dim" x="46" y="312">socket timeout</text>
+    <text x="150" y="312" style="fill:var(--stop);font-weight:700">60 s</text>
+    <text class="dim" x="46" y="330">client.py:56 &mdash; the trigger</text>
+
+    <rect class="box" x="594" y="40" width="290" height="332" rx="4"/>
+    <text class="lbl" x="608" y="62">SIDECAR &mdash; python 3.10</text>
+    <text class="dim" x="608" y="78">sim_bridge/server.py</text>
+
+    <rect class="box" x="612" y="96" width="254" height="58" rx="3"/>
+    <text x="624" y="116">dispatcher, one thread per conn</text>
+    <text class="dim" x="624" y="132">picks a lock from the METHOD NAME</text>
+    <text class="dim" x="624" y="146">FAST / CONTROL / MEDIA / slow</text>
+
+    <rect class="box" x="612" y="168" width="254" height="120" rx="3"/>
+    <text class="lbl" x="624" y="188">RPC clients</text>
+    <text x="624" y="210">airsim_client</text>  <text class="dim" x="756" y="210">telemetry</text>
+    <text x="624" y="230">airsim_control</text> <text class="dim" x="756" y="230">commands</text>
+    <text x="624" y="250">airsim_media</text>   <text class="dim" x="756" y="250">frames</text>
+    <text x="624" y="272">carla_client</text>   <text class="dim" x="756" y="272">world</text>
+
+    <rect class="box" x="612" y="302" width="254" height="50" rx="3"/>
+    <text class="dim" x="624" y="322">:41451 AirSim &nbsp;&middot;&nbsp; :2000 CARLA</text>
+    <text class="dim" x="624" y="340">timeouts: 120 s both</text>
+
+    <g class="wire">
+      <path d="M288 208 L612 208"/><path d="M288 230 L612 230"/>
+      <path d="M288 252 L612 252"/><path d="M288 274 L612 274"/>
+    </g>
+    <text class="dim" x="392" y="200">/tmp/carla_air_testbed.sock</text>
+    <text class="dim" x="392" y="292">4-byte length + msgpack</text>
+  </svg>
+  <div class="cap"><b>Four connections, not one.</b> Image capture takes ~500 ms and telemetry
+  ~5 ms; sharing one socket collapsed <code>/fmu/out/vehicle_odometry</code> from 20&nbsp;Hz to
+  1.5&nbsp;Hz. Each connection is served by its own thread with its own AirSim client.</div>
+  </div>
+
+  <h2 id="flows">2 &nbsp;How a call flows</h2>
+  <div class="prose">
+    <p>
+      A healthy call is dull, which is the point. The caller holds a per-connection lock,
+      writes one frame, and blocks reading the next one.
+    </p>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 900 300" role="img" aria-label="Sequence of one healthy remote call">
+    <text class="lbl" x="20" y="26">bridge_node</text>
+    <text class="lbl" x="250" y="26">SimBridgeClient</text>
+    <text class="lbl" x="500" y="26">dispatcher</text>
+    <text class="lbl" x="720" y="26">AirSim / CARLA</text>
+    <g stroke="var(--rule)" stroke-dasharray="3 4">
+      <line x1="70" y1="36" x2="70" y2="272"/><line x1="310" y1="36" x2="310" y2="272"/>
+      <line x1="545" y1="36" x2="545" y2="272"/><line x1="780" y1="36" x2="780" y2="272"/>
+    </g>
+    <g class="wire" marker-end="url(#a)">
+      <path d="M70 64 L305 64"/><path d="M310 104 L540 104"/>
+      <path d="M545 144 L775 144"/><path d="M775 184 L550 184"/>
+      <path d="M540 224 L315 224"/><path d="M305 260 L75 260"/>
+    </g>
+    <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="var(--chrome)"/></marker></defs>
+    <text x="92" y="58">call("state")</text>
+    <text x="330" y="98">send {id: 41, method, args}</text>
+    <text x="566" y="138">lock = fast_lock &rarr; getattr(bridge,"state")()</text>
+    <text x="566" y="178">~5 ms</text>
+    <text x="330" y="218">{id: 41, ok: true, result}</text>
+    <text x="92" y="254">dict</text>
+    <text class="dim" x="330" y="118">recv() blocks here &mdash; 60 s ceiling</text>
+  </svg>
+  <div class="cap"><b>The id is on the wire and nobody reads it.</b> <code>call()</code> assumes
+  the next frame off the socket is its own reply. That assumption is the entire defect.</div>
+  </div>
+
+  <h2 id="breaks">3 &nbsp;Where it breaks</h2>
+  <div class="prose">
+    <p>
+      <code>reset</code> is the only call that routinely exceeds 60&nbsp;s. It is not a
+      teleport: AirSim destroys and rebuilds the vehicle, and the aircraft is then placed and
+      given a holding setpoint. Measured on this box &mdash; <b>26.8&nbsp;s</b> flying back
+      from the goal, <b>5.5&nbsp;s</b> once placed directly, and considerably worse under load.
+    </p>
+    <p>
+      When it exceeds the ceiling, the socket read raises &mdash; and nothing else happens.
+      The request is still in flight. The sidecar finishes and writes its reply into a socket
+      nobody is reading.
+    </p>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 900 330" role="img" aria-label="How one timeout desynchronises the stream permanently">
+    <text class="lbl" x="20" y="24">CALLER</text>
+    <text class="lbl" x="700" y="24">SIDECAR</text>
+    <g stroke="var(--rule)" stroke-dasharray="3 4">
+      <line x1="90" y1="34" x2="90" y2="300"/><line x1="760" y1="34" x2="760" y2="300"/>
+    </g>
+
+    <g class="wire" marker-end="url(#b)"><path d="M90 62 L755 62"/></g>
+    <text x="150" y="56">id 41 &mdash; reset</text>
+    <text class="dim" x="530" y="80">working&hellip; 71 s</text>
+
+    <path class="hot" stroke-dasharray="5 4" d="M90 110 L420 110"/>
+    <text x="150" y="104" style="fill:var(--stop)">60 s &mdash; caller gives up, raises</text>
+    <text class="dim" x="150" y="126">socket stays open, request still in flight</text>
+
+    <g class="hot" marker-end="url(#c)"><path d="M755 156 L95 156"/></g>
+    <text x="330" y="150" style="fill:var(--stop)">id 41 reply arrives &mdash; unread</text>
+
+    <g class="wire" marker-end="url(#b)"><path d="M90 202 L755 202"/></g>
+    <text x="150" y="196">id 42 &mdash; state</text>
+
+    <g class="hot" marker-end="url(#c)"><path d="M755 240 L95 240"/></g>
+    <text x="300" y="234" style="fill:var(--stop)">caller reads the buffered id 41 reply</text>
+
+    <rect x="120" y="262" width="640" height="42" rx="3" fill="var(--panel)" stroke="var(--stop)"/>
+    <text x="136" y="280" style="fill:var(--stop);font-weight:700">KeyError: 'position'</text>
+    <text class="dim" x="136" y="296">state() unpacked reset()'s reply &mdash; rclpy does not catch this, bridge_node exits(1)</text>
+
+    <defs>
+      <marker id="b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="var(--chrome)"/></marker>
+      <marker id="c" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="var(--stop)"/></marker>
+    </defs>
+  </svg>
+  <div class="cap"><b>The stream is now permanently off by one.</b> Every later call gets the
+  previous call's answer. There is no resync, no id check, no reconnect &mdash; so this never
+  recovers on its own.</div>
+  </div>
+
+  <div class="note warn">
+    <span class="t">Why this looked like four unrelated bugs</span>
+    <p>
+      Every downstream symptom traces back to that single off-by-one:
+      <code>KeyError: 'position'</code> killing <code>bridge_node</code>;
+      <code>Broken pipe</code> and <code>Connection reset by peer</code> immediately after;
+      all four world services failing together (they share <code>self.world</code>); and the
+      sidecar dying of an uncaught <code>carla::client::TimeoutException</code> &mdash; a
+      poisoned connection is exactly what leaves CARLA's own RPC unanswered long enough to
+      hit <em>its</em> ceiling and call <code>terminate()</code>.
+    </p>
+  </div>
+
+  <h2 id="timeouts">4 &nbsp;Every timeout in the chain</h2>
+  <div class="prose">
+    <p>The 60 s was hard to place precisely because it is the <em>only</em> one that is ours.</p>
+  </div>
+  <div class="tw"><table>
+    <thead><tr><th>Limit</th><th>Where it lives</th><th>Value</th><th>Whose</th></tr></thead>
+    <tbody>
+      <tr><th>UDS socket read</th><td><code>carla_air_bridge/client.py:56</code></td>
+          <td style="color:var(--stop);font-weight:700">60 s</td><td>ours &mdash; the trigger</td></tr>
+      <tr><th>CARLA RPC</th><td><code>server.py:90</code> <code>CARLA_TIMEOUT_S</code></td>
+          <td>120 s</td><td>ours (was 30 s)</td></tr>
+      <tr><th>AirSim RPC</th><td><code>server.py:98</code> <code>timeout_value</code></td>
+          <td>120 s</td><td>ours; library default is 3600 s</td></tr>
+      <tr><th><code>moveToPositionAsync</code></th><td>airsim <code>client.py:1225</code></td>
+          <td>3e+38 s</td><td>library &mdash; effectively none</td></tr>
+      <tr><th>msgpack-rpc</th><td>library default</td><td>10 s</td><td>overridden by the above</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="fix">5 &nbsp;The fix: correlate, don't wait</h2>
+  <div class="prose">
+    <p>
+      The wire format already carries an <code>id</code> in both directions. Nothing uses it.
+      Give each connection a reader thread and a map from id to a waiting slot, and a late
+      reply becomes <em>harmless</em> rather than <em>poisonous</em>.
+    </p>
+  </div>
+
+  <div class="fig">
+  <svg viewBox="0 0 900 250" role="img" aria-label="Reader thread demultiplexing replies by id">
+    <rect class="box" x="20" y="40" width="250" height="170" rx="4"/>
+    <text class="lbl" x="34" y="62">CALLERS</text>
+    <rect class="box" x="38" y="76" width="214" height="34" rx="3"/><text x="50" y="98">call reset &rarr; slot 41</text>
+    <rect class="box" x="38" y="118" width="214" height="34" rx="3"/><text x="50" y="140">call state &rarr; slot 42</text>
+    <rect class="box" x="38" y="160" width="214" height="34" rx="3"/><text x="50" y="182">call capture &rarr; slot 43</text>
+
+    <rect class="box" x="330" y="40" width="230" height="170" rx="4"/>
+    <text class="lbl" x="344" y="62">READER THREAD</text>
+    <text class="dim" x="344" y="84">one per connection</text>
+    <text x="344" y="112">frame = recv(sock)</text>
+    <text x="344" y="134">slot = pending.pop(id)</text>
+    <text x="344" y="156">slot ? deliver</text>
+    <text x="344" y="178" style="fill:var(--ok)">: drop &amp; log</text>
+    <text class="dim" x="344" y="198">&mdash; the abandoned reply</text>
+
+    <rect class="box" x="620" y="40" width="250" height="170" rx="4"/>
+    <text class="lbl" x="634" y="62">SIDECAR</text>
+    <text class="dim" x="634" y="86">unchanged &mdash; still replies</text>
+    <text class="dim" x="634" y="104">with the id it was given</text>
+    <text x="634" y="140" style="fill:var(--ok)">+ progress frames</text>
+    <text class="dim" x="634" y="160">{id: 41, progress: "armed"}</text>
+    <text class="dim" x="634" y="178">resets the patience clock:</text>
+    <text class="dim" x="634" y="194">slow is not dead</text>
+
+    <g class="good" marker-end="url(#d)"><path d="M560 124 L330 124"/></g>
+    <g class="wire" marker-end="url(#e)"><path d="M270 124 L326 124"/></g>
+    <defs>
+      <marker id="d" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="var(--ok)"/></marker>
+      <marker id="e" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0 0 L8 4 L0 8 z" fill="var(--chrome)"/></marker>
+    </defs>
+  </svg>
+  <div class="cap"><b>Timeouts stop being a correctness mechanism.</b> They become a statement
+  of caller patience: getting one wrong costs a failed call, not a dead graph.</div>
+  </div>
+
+  <div class="note ok">
+    <span class="t">And the proactive half</span>
+    <p>
+      Progress frames give the thing a fixed timeout never can: the difference between
+      <strong>slow</strong> and <strong>dead</strong>. A reset that is genuinely working can
+      take three minutes without anyone panicking; a reset that has wedged fails in seconds,
+      because the progress stops arriving.
+    </p>
+  </div>
+
+  <h2 id="scope">6 &nbsp;What this does and does not fix</h2>
+  <div class="tw"><table>
+    <thead><tr><th></th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><th style="color:var(--ok)">Fixed</th><td>Stream desync, and therefore <code>KeyError</code>,
+          the broken pipes, the cascade across all four world services, and most likely the
+          sidecar deaths.</td></tr>
+      <tr><th style="color:var(--ground)">Unchanged</th><td>The sidecar still serves one request at a
+          time per connection. An in-flight <code>reset</code> still queues anything else on
+          <em>that</em> connection &mdash; correct, but not concurrency.</td></tr>
+      <tr><th style="color:var(--ground)">Unchanged</th><td><code>reset</code> is still slow: ~5 s
+          placed, ~27 s flown, worse under load. This makes slowness survivable, not absent.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note">
+    <span class="t">Files this touches</span>
+    <p>
+      <code>sim_bridge/protocol.py</code> (progress frames) &middot;
+      <code>ros2_ws/src/carla_air_bridge/carla_air_bridge/client.py</code> (reader thread,
+      correlation) &middot; <code>sim_bridge/server.py</code> (emit progress from
+      <code>reset</code>). The 3.10-side callers &mdash; <code>webui/server.py</code> and
+      <code>run_episode</code>'s ancestor &mdash; share the protocol module and must tolerate
+      progress frames even if they ignore them.
+    </p>
+  </div>
+
+  <footer>
+    carla-air testbed &middot; investigation of backlog E-06 &middot; every figure measured on
+    <code>carbonite</code>, GPU 1 (RTX 5060 Ti), 2026-08-03
+  </footer>
+</main>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-theme-set]'));
+  var KEY = 'carla-air-theme';
+  function apply(choice) {
+    if (choice === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', choice);
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === choice));
+    });
+  }
+  var stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) {}
+  if (stored === 'light' || stored === 'dark' || stored === 'auto') apply(stored);
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      apply(b.dataset.themeSet);
+      try { localStorage.setItem(KEY, b.dataset.themeSet); } catch (e) {}
+    });
+  });
+})();
+</script>
+</body>
+</html>

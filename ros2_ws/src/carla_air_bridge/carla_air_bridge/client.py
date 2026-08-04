@@ -10,6 +10,7 @@ import importlib.util
 import os
 import socket
 import threading
+import time
 
 _PROTOCOL_PATH = os.environ.get(
     "TESTBED_PROTOCOL",
@@ -43,50 +44,166 @@ class SimBridgeError(RuntimeError):
         self.remote_traceback = tb
 
 
-class SimBridgeClient:
-    """Blocking, thread-safe RPC client. One instance == one connection.
+class _Slot:
+    """One in-flight call: somewhere for the reader thread to put the answer."""
 
-    Calls on a single instance are serialised by `self._lock`, which is required: the wire
-    protocol is a stream, and two threads interleaving frames on the same socket corrupts
-    both replies. To get parallelism, open a second instance — the sidecar handles each
-    connection on its own thread with its own AirSim client. The bridge node does exactly
-    that: one client for telemetry and control, one for image capture.
+    __slots__ = ("event", "reply", "last_activity", "method")
+
+    def __init__(self, method):
+        self.event = threading.Event()
+        self.reply = None
+        self.method = method
+        self.last_activity = time.monotonic()
+
+
+class SimBridgeClient:
+    """Thread-safe RPC client. One instance == one connection.
+
+    **Replies are matched to calls by id, by a reader thread.** That is not a refinement; it
+    is what makes a slow call survivable. The obvious design - send, then block reading the
+    next frame - assumes the next frame off the socket is your reply. It is not, the moment
+    any caller gives up early:
+
+        caller sends id 41 (reset), waits, gives up at the timeout, raises
+        the sidecar finishes anyway and writes the id 41 reply into the socket
+        caller sends id 42 (state) and reads ... the buffered id 41 reply
+
+    From then on every call gets the previous call's answer, forever, with no resync. That is
+    exactly how a 40-episode sweep died: `state()` unpacked `reset()`'s reply and raised
+    `KeyError: 'position'`, which rclpy does not catch, so the whole bridge node exited(1).
+    See docs/rpc-path.html.
+
+    With a reader thread the abandoned reply is popped and DROPPED, and the stream stays in
+    step. A timeout then costs one failed call rather than the graph.
+
+    Calls are still serialised on the write side by `self._lock` - two threads interleaving
+    frames would corrupt both. To get parallelism, open a second instance; the sidecar
+    handles each connection on its own thread with its own AirSim client.
     """
 
-    def __init__(self, path: str = DEFAULT_SOCKET, timeout: float = 60.0):
+    #: How long to wait with NO news at all before giving up on a call. Not a limit on how
+    #: long a call may take: any progress frame resets it (see `_reader`), so a `reset` that
+    #: keeps reporting can run for minutes while a wedged one fails promptly. That
+    #: distinction is the entire point - a fixed ceiling cannot tell slow from dead.
+    DEFAULT_PATIENCE_S = 60.0
+
+    def __init__(self, path: str = DEFAULT_SOCKET, timeout: float = DEFAULT_PATIENCE_S):
         self.path = path
         self.timeout = timeout
         self._sock: socket.socket | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()          # serialises WRITES only
         self._next_id = 0
+        self._pending: dict[int, _Slot] = {}
+        self._pending_lock = threading.Lock()
+        self._reader: threading.Thread | None = None
+        self._closing = False
+        self._dead: str | None = None          # why the connection ended, if it has
 
     def connect(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(self.timeout)
+        # No socket timeout. The reader blocks here indefinitely on purpose - waiting is now
+        # the caller's decision, per call, and a blocking read is how a late reply gets
+        # consumed instead of buffered.
         s.connect(self.path)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
         self._sock = s
+        self._closing = False
+        self._dead = None
+        self._reader = threading.Thread(target=self._read_loop, daemon=True,
+                                        name=f"simbridge-reader-{os.path.basename(self.path)}")
+        self._reader.start()
         return self
 
     def close(self):
+        self._closing = True
         if self._sock:
+            try:
+                self._sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             self._sock.close()
             self._sock = None
+        self._fail_all("connection closed")
 
     @property
     def connected(self) -> bool:
-        return self._sock is not None
+        return self._sock is not None and self._dead is None
+
+    # ------------------------------------------------------------------ reader
+
+    def _read_loop(self):
+        sock = self._sock
+        try:
+            while not self._closing:
+                frame = protocol.recv(sock)
+                rid = frame.get("id")
+                if "progress" in frame and "ok" not in frame:
+                    # Liveness, not an answer. Refresh the slot's clock and keep reading.
+                    with self._pending_lock:
+                        slot = self._pending.get(rid)
+                    if slot is not None:
+                        slot.last_activity = time.monotonic()
+                    continue
+                with self._pending_lock:
+                    slot = self._pending.pop(rid, None)
+                if slot is None:
+                    # THE WHOLE POINT: a reply whose caller already gave up. Consumed and
+                    # dropped here, so it can never be mistaken for the next call's answer.
+                    self.late_replies += 1
+                    continue
+                slot.reply = frame
+                slot.event.set()
+        except Exception as exc:                                        # noqa: BLE001
+            if not self._closing:
+                self._fail_all(f"reader stopped: {exc}")
+        else:
+            self._fail_all("connection closed by the sidecar")
+
+    def _fail_all(self, why):
+        self._dead = why
+        with self._pending_lock:
+            slots, self._pending = list(self._pending.values()), {}
+        for slot in slots:
+            slot.reply = {"ok": False, "error": why}
+            slot.event.set()
+
+    # -------------------------------------------------------------------- call
+
+    late_replies = 0
 
     def call(self, method: str, **args):
         if method not in protocol.METHODS:
             raise SimBridgeError(method, "not a known method — see protocol.METHODS")
         if self._sock is None:
             raise SimBridgeError(method, "not connected")
+        if self._dead:
+            raise SimBridgeError(method, self._dead)
+
+        slot = _Slot(method)
         with self._lock:
             self._next_id += 1
             rid = self._next_id
-            protocol.send(self._sock, {"id": rid, "method": method, "args": args})
-            reply = protocol.recv(self._sock)
+            with self._pending_lock:
+                self._pending[rid] = slot
+            try:
+                protocol.send(self._sock, {"id": rid, "method": method, "args": args})
+            except OSError:
+                with self._pending_lock:
+                    self._pending.pop(rid, None)
+                raise
+
+        # Wait in slices so a progress frame can extend the deadline. Waiting on the whole
+        # patience at once would ignore progress entirely.
+        while True:
+            if slot.event.wait(1.0):
+                break
+            if time.monotonic() - slot.last_activity >= self.timeout:
+                with self._pending_lock:
+                    self._pending.pop(rid, None)   # tombstone gone; the reader will drop it
+                raise SimBridgeError(
+                    method, f"no reply and no progress for {self.timeout:.0f}s (id {rid})")
+
+        reply = slot.reply or {}
         if not reply.get("ok"):
             raise SimBridgeError(method, reply.get("error", "unknown"), reply.get("traceback", ""))
         return reply.get("result")
