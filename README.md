@@ -11,7 +11,7 @@ so they port to hardware by deleting one node rather than rewriting the stack.
 sim_bridge (py3.10) ──UDS/msgpack──> carla_air_bridge ──> control ──> /fmu/in/trajectory_setpoint
   carla + airsim                      /fmu/out/*  odometry, IMU, baro, mag, GPS, lidar
   traffic + weather                   /camera/*   rgb · depth · segmentation
-                                      /sim/*      reset · traffic · weather (services)
+                                      /sim/*      reset · traffic · destroy · weather · camera · chase (services)
 ```
 
 **Vision-language navigation is one thing you can build on it**, not what it is. The
@@ -55,7 +55,7 @@ git clone <this repo> carla-air_testing && cd carla-air_testing
                                    # pass a directory to put the 18 GB release elsewhere;
                                    # it is remembered, no shell-profile export needed
 
-./.venv/bin/python -m pytest tests/ -q     # 117 passed, 1 skipped — no sim needed
+./.venv/bin/python -m pytest tests/ -q     # 156 passed, 1 skipped — no sim needed
 ```
 
 ## Run an example
@@ -97,41 +97,50 @@ Other entry points:
 
 ## Results
 
-**Oracle 15/15 on the open scenarios, 0/5 on the one with a building in the way; geometric
-0/20.** The harness reaches goals when something points at them, a depth-following heuristic
-with no language understanding reaches none, and one scenario now defeats both. That gap is
-the space a VLM has to fill.
+**Oracle 14/19, geometric 0/20** over the three open scenarios plus the blocked one. The
+harness reaches goals when something points at them, a depth-following heuristic with no
+language understanding reaches none, and one scenario now defeats both. That gap is the space
+a VLM has to fill.
 
-Measured over **50 seeded episodes** — 5 seeds x 4 scenarios x 2 backends, zero collisions.
+Re-measured **2026-08-03 over 40 seeded episodes** — 5 seeds x 4 benchmark scenarios x 2
+backends, zero collisions. This supersedes an earlier 50-episode run; both are in
+[`docs/todo.md`](docs/todo.md) under `E-01b`, with the difference explained rather than overwritten.
 
 | scenario | straight line? | oracle (N=5) | geometric (N=5) |
 |---|---|---|---|
-| `cross_the_plaza` | solves it | **5/5** · 18.2 m median | 0/5 · 185.7 m |
-| `follow_the_avenue` | solves it | **5/5** · 18.7 m median | 0/5 · 187.0 m |
-| `rain_descent` | solves it | **5/5** · 14.1 m median | 0/5 · 81.4 m |
-| `avoid_the_block` | **blocked by a tower** | 0/5 · 70.6 m median | 0/5 · 249.4 m |
+| `cross_the_plaza` | solves it | **5/5** | 0/5 |
+| `follow_the_avenue` | solves it | **5/5** | 0/5 |
+| `rain_descent` | solves it | **4/5** | 0/5 |
+| `avoid_the_block` | **blocked by a tower** | 0/5 | 0/5 |
 
-Every failure is `max_steps`; nothing crashes. `geometric` wanders. The oracle's 15 successful
-episodes land between 13.7 m and 19.8 m of the goal, so the harness itself is not the noise.
+`rain_descent` slipped from 5/5 to 4/5, failure mode `model_declared_done` — the oracle stopped
+short. One episode also missed the deadline, which is why the oracle denominator is 19 rather
+than 20. Neither is a model result; both are the harness, and both are recorded rather than
+rounded away.
 
 `avoid_the_block` is **meant** to defeat the oracle. The oracle is handed the goal and steers
-straight at it, so a scenario built to block the straight line fails it by construction — its
-five finals span just 1.0 m (70.0–71.0 m), all of them parked against the same tower face. It
-is the first scenario where a real model has room to beat both baselines rather than tie them;
+straight at it, so a scenario built to block the straight line fails it by construction —
 `survey_buildings.py --route` proves a way around exists at 1.18x the direct distance. The
 other three remain straight-line-solvable, which is honest as a baseline and thin as a
 benchmark — see `E-02b` in [`docs/todo.md`](docs/todo.md).
 
-Measured with the full graph running:
+Two further scenarios ship as **demonstrations, not benchmarks**: `busy_street` and
+`street_level`, the latter flying at 3.5 m AGL with per-scenario controller overrides. They are
+not scored above and no result from them should be read as one.
+
+Measured with the full graph running, **2026-08-04**, at the shipped 960x720 camera:
 
 | | |
 |---|---|
-| `/fmu/out/vehicle_odometry` | 20.0 Hz |
-| `/camera/{rgb,depth}/image_raw` | 7.8 Hz |
-| `/vlm/annotation` | 0.9 Hz — a slow model is the design point |
+| `/fmu/out/vehicle_odometry` | 19.5 Hz |
+| `/camera/rgb/image_raw` | 8.1 Hz — 960x720, `bgr8` |
+| `/camera/depth/image_raw` | 7.9 Hz — 160x120, `32FC1` |
 | `/fmu/in/trajectory_setpoint` | 10.0 Hz |
 | Grounding accuracy | ~3 m residual on a 64 m ray |
 | Real-time factor | **1.000** on both clocks, 60 FPS |
+
+The camera rate did not fall when the buffer went from 640x480 to 960x720 — 2.25x the pixels
+at the same 8 Hz. The bottleneck is the readback and transport, not the render.
 
 Evidence: [`docs/worklog/`](docs/worklog/).
 
@@ -141,7 +150,7 @@ Evidence: [`docs/worklog/`](docs/worklog/).
 |---|---|
 | [`docs/ros2-api.html`](docs/ros2-api.html) | **Commanding the aircraft from ROS 2** — five commands, twelve sensor streams, message types and code. Every figure measured against the running simulator. |
 | [`docs/dataflow.html`](docs/dataflow.html) | **How the data moves** — every protocol hop from UE4 render target to velocity setpoint, and why each one is there. |
-| [`docs/rpc-path.html`](docs/rpc-path.html) | **The sidecar RPC path** — where a call lives, how it flows, and how one slow reply desynchronises the stream permanently. Backlog E-06. |
+| [`docs/rpc-path.html`](docs/rpc-path.html) | **The sidecar RPC path** — where a call lives, how it flows, and how one slow reply desynchronised the stream permanently. Backlog E-06, fixed. |
 | [`docs/guide.html`](docs/guide.html) | This README and the quick start, rendered as one page. |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, the measured numbers, and the traps that cost time. |
 | [`docs/todo.md`](docs/todo.md) | The backlog: what is open, why, and how each item will be verified. |
@@ -177,10 +186,14 @@ configs/               testbed.yaml (THE source) · sim/settings.json (generated
 scripts/               install (one command) · setup · fetch_release · fetch_vendor
                        · build · release_path · run_sim · bringup
                        · stop · status · run_episode · run_sweep · run_conformance
+                       · demo (one command to a video) · combine_views
                        · record_flight · survey_buildings
-tests/                 test_offline · test_scenarios · test_survey · test_claude_backend
-                       · test_config (117, no sim) · conformance/
+tests/                 offline · scenarios · survey · claude_backend · config · interfaces
+                       · sidecar_locks · rpc_correlation · control_limits
+                       (156 passed, 1 skipped — no sim, GPU or display) · conformance/
 examples/              ros2_full_control.py — fly it from plain ROS 2, no project imports
+                       ros2_world_control · ros2_traffic_flyover · ros2_city_tour
+                       ros2_street_level · vlm_navigation/ (the optional VLM)
 docs/                  ros2-api.html · dataflow.html · rpc-path.html · guide.html
                        architecture · references · worklog · todo
 ```
@@ -193,7 +206,7 @@ Nothing installs into `~` or the system: `vendor/` holds uv, the standalone CPyt
 
 **Anything that can speak ROS 2.** The aircraft takes `TrajectorySetpoint` (position or
 velocity), `VehicleAttitudeSetpoint` and `VehicleCommand` for takeoff/land; the world takes
-four services on `/sim/*`. `examples/ros2_full_control.py` and `examples/ros2_world_control.py`
+six services on `/sim/*` — reset, traffic, destroy, weather, camera pose, chase recording. `examples/ros2_full_control.py` and `examples/ros2_world_control.py`
 are complete working clients that import nothing from this project.
 
 ### The vision-language example

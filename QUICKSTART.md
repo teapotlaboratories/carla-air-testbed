@@ -60,7 +60,7 @@ shell profile:**
 Verify without touching the simulator:
 
 ```bash
-./.venv/bin/python -m pytest tests/ -q     # expect: 117 passed, 1 skipped
+./.venv/bin/python -m pytest tests/ -q     # expect: 156 passed, 1 skipped
 ```
 
 Why a separate Python: the CARLA-Air client is an ABI-tagged `cpython-310` extension and
@@ -326,7 +326,7 @@ Try the baseline and see the contrast:
 Other things to try:
 
 ```bash
-# all four scenarios, three seeds each
+# one scenario, three seeds (six scenarios ship; four are scored, two are demos)
 ./scripts/run_episode.sh --scenario follow_the_avenue --seeds 1 2 3
 
 # record a flight video (out/flight.mp4)
