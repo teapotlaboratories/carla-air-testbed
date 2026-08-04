@@ -24,6 +24,7 @@ in offboard, and matching the real requirement here is the point of a PX4-shaped
 from __future__ import annotations
 
 import math
+import time
 
 import numpy as np
 import rclpy
@@ -50,6 +51,34 @@ class OffboardController(Node):
         self.declare_parameter("rate_hz", 10.0)
         self.declare_parameter("setpoint_duration_s", 0.5)
         self.declare_parameter("max_speed_mps", 5.0)
+        # Slew rate on the commanded velocity, m/s per second. 0 disables it.
+        #
+        # Without this the velocity is recomputed from scratch every tick and jumps the
+        # instant a new waypoint arrives - which for a VLM is a fresh direction every ~4 s,
+        # so the aircraft snaps onto each new heading at full speed. That reads as a series
+        # of lurches in the chase footage and, at street level, is what puts a wall inside
+        # the stopping distance.
+        #
+        # 2.5 m/s^2 reaches the 5 m/s cap in two seconds: brisk, but a corner taken over two
+        # seconds instead of one tick.
+        self.declare_parameter("max_accel_mps2", 2.5)
+        # Slew rate on the HEADING, degrees per second. 0 disables it.
+        #
+        # The heading is derived from the instantaneous velocity, and the velocity is
+        # recomputed every tick at 10 Hz - so any wobble in the velocity becomes a wobble in
+        # where the aircraft is pointing, ten times a second. On the chase camera that reads
+        # as constant jitter, and it is worse than cosmetic: the drone camera is bolted to
+        # the airframe, so the frame the model is shown swings with it.
+        #
+        # 22.5 deg/s: a right angle takes four seconds, which is roughly one VLM decision
+        # cycle. 45 was tried first and still read as jittery on the chase camera - the
+        # limit has to be slow relative to how often the heading is REVISED, not merely
+        # slow in absolute terms.
+        self.declare_parameter("max_yaw_rate_dps", 22.5)
+        self._last_v = None
+        self._last_v_t = 0.0
+        self._last_yaw = None
+        self._last_yaw_t = 0.0
         self.declare_parameter("max_step_m", 20.0)
         self.declare_parameter("standoff_m", 8.0)
         self.declare_parameter("arrival_radius_m", 2.0)
@@ -70,7 +99,7 @@ class OffboardController(Node):
 
         self.create_subscription(VehicleOdometry, "/fmu/out/vehicle_odometry",
                                  self._on_odom, PX4_QOS)
-        self.create_subscription(GroundedWaypoint, "/vlm/grounded_waypoint",
+        self.create_subscription(GroundedWaypoint, "/control/waypoint",
                                  self._on_waypoint, 5)
 
         rate = float(self.get_parameter("rate_hz").value)
@@ -153,6 +182,8 @@ class OffboardController(Node):
 
         if self._target is None:
             # No waypoint yet — hold. Never send nothing: see the module docstring.
+            self._last_v = None   # a hold restarts the ramp
+            self._last_yaw = None
             sp.velocity = [0.0, 0.0, 0.0]
             self.pub_sp.publish(sp)
             return
@@ -162,6 +193,8 @@ class OffboardController(Node):
         dist = float(np.linalg.norm(err))
 
         if dist < float(self.get_parameter("arrival_radius_m").value):
+            self._last_v = None   # a hold restarts the ramp
+            self._last_yaw = None
             sp.velocity = [0.0, 0.0, 0.0]
             self.pub_sp.publish(sp)
             if not self._arrived:
@@ -172,11 +205,39 @@ class OffboardController(Node):
 
         speed = min(float(self.get_parameter("max_speed_mps").value), dist)
         v = err / dist * speed
+
+        # Limit how fast the COMMAND may change, not how fast the aircraft may fly. The
+        # target is what the VLM moved; the ramp is what stops the airframe being asked to
+        # follow a step.
+        accel = float(self.get_parameter("max_accel_mps2").value)
+        now = time.monotonic()
+        if accel > 0.0 and self._last_v is not None:
+            dt = max(1e-3, min(0.5, now - self._last_v_t))
+            dv = v - self._last_v
+            mag = float(np.linalg.norm(dv))
+            cap = accel * dt
+            if mag > cap:
+                v = self._last_v + dv * (cap / mag)
+        self._last_v, self._last_v_t = v.copy(), now
+
         sp.velocity = [float(v[0]), float(v[1]), float(v[2])]
 
         # Face where we are going; a camera pointing off-axis annotates the wrong scene.
         if abs(v[0]) + abs(v[1]) > 0.5:
-            sp.yaw = float(math.atan2(v[1], v[0]))
+            want = float(math.atan2(v[1], v[0]))
+            rate = math.radians(float(self.get_parameter("max_yaw_rate_dps").value))
+            if rate > 0.0 and self._last_yaw is not None:
+                dt = max(1e-3, min(0.5, now - self._last_yaw_t))
+                # Shortest way round. Without the wrap a heading crossing +/-pi takes the
+                # long way and the aircraft spins almost a full turn to face 1 degree away.
+                delta = math.atan2(math.sin(want - self._last_yaw),
+                                   math.cos(want - self._last_yaw))
+                cap = rate * dt
+                if abs(delta) > cap:
+                    want = self._last_yaw + math.copysign(cap, delta)
+                    want = math.atan2(math.sin(want), math.cos(want))
+            self._last_yaw, self._last_yaw_t = want, now
+            sp.yaw = want
 
         self.pub_sp.publish(sp)
 

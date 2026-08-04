@@ -81,3 +81,43 @@ scenarios:
     weather: CloudyNoon
     traffic_vehicles: 30
     traffic_walkers: 20
+
+  # A VLM task in a LIVE environment, and deliberately low. The other scenarios fly at
+  # 72-107 m AGL where cars are confetti and pedestrians invisible — fine for measuring
+  # navigation, useless for showing a model reason about a street.
+  #
+  # DEMO, not a benchmark: the instruction names no destination while the scoring measures
+  # distance to one, so it is scored on a task it was not given. Kept because it produces
+  # the footage; do not quote a rate from it.
+  - name: busy_street
+    instruction: "follow the street ahead, staying above the cars and people below"
+    start_ned: [107.6, -159.4, -26.0]
+    goal_ned: [190.0, -155.0, -26.0]
+    max_steps: 30
+    timeout_s: 240.0
+    traffic_vehicles: 40
+    traffic_walkers: 40
+    traffic_radius_m: 70.0
+
+  # Street level, flown by a VLM. 3.5 m above the road — the origin is 27.45 m up, so a
+  # POSITIVE NED z is below it.
+  #
+  # The instruction NAMES THE DESTINATION, unlike busy_street.
+  - name: street_level
+    instruction: "fly north along this street, between the buildings, and stop at the open junction ahead"
+    start_ned: [107.6, -159.4, 23.95]
+    goal_ned: [200.0, -145.0, 23.95]
+    max_steps: 60
+    timeout_s: 600.0
+    traffic_vehicles: 40
+    traffic_walkers: 40
+    traffic_radius_m: 70.0
+    # DEMO SETTINGS, applied by run_episode and restored afterwards. They live here rather
+    # than in configs/testbed.yaml because they are wrong for every other scenario: 0.5 m/s
+    # pushed four benchmark scenarios past their timeouts and would have doubled the E-01b
+    # sweep to ~4 h. A demo must not be able to invalidate a measurement.
+    control:
+      max_speed_mps: 0.5       # ~3 m per decision at Claude's ~6 s p50
+      max_yaw_rate_dps: 5.625  # a right angle takes 16 s
+      max_step_m: 6.0
+      min_altitude_m: -24.0    # NEGATIVE: permits 3.45 m AGL, i.e. street level

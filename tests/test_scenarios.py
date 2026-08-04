@@ -65,7 +65,7 @@ def test_goal_is_reachable_within_the_step_budget(s):
     backend manages. Anything under 2x is a scenario that fails for arithmetic reasons.
     """
     dist = math.dist(s["start_ned"], s["goal_ned"])
-    budget = s.get("max_steps", 30) * CTRL["max_step_m"]
+    budget = s.get("max_steps", 30) * _ctrl_for(s)["max_step_m"]
     assert budget >= 2.0 * dist, (
         f"{s['name']}: {dist:.0f} m to goal but only {budget:.0f} m of travel budget "
         f"({s.get('max_steps', 30)} steps x {CTRL['max_step_m']} m)")
@@ -79,7 +79,7 @@ def test_timeout_allows_the_flight(s):
     is merely optimistic costs real minutes on every seed.
     """
     dist = math.dist(s["start_ned"], s["goal_ned"])
-    flight_s = dist / CTRL["max_speed_mps"]
+    flight_s = dist / _ctrl_for(s)["max_speed_mps"]
     assert s.get("timeout_s", 240.0) >= 1.5 * flight_s, (
         f"{s['name']}: {dist:.0f} m needs >= {flight_s:.0f} s of pure flight, "
         f"timeout is {s.get('timeout_s', 240.0):.0f} s")
@@ -96,10 +96,24 @@ def test_success_radius_is_above_the_station_keeping_floor(s):
         "~4 m post-setpoint relaxation")
 
 
+def _ctrl_for(s):
+    """The controller settings THIS scenario will actually fly under.
+
+    A scenario may override any of them in a `control:` block, applied by run_episode and
+    restored afterwards. Checking every scenario against the global values would fail the
+    ones that override — and, worse, would pass a scenario whose override is the thing that
+    breaks it.
+    """
+    merged = dict(CTRL)
+    merged.update({k: float(v) for k, v in (s.get("control") or {}).items() if k in CTRL})
+    return merged
+
+
 @pytest.mark.parametrize("s", ALL)
 def test_altitudes_are_inside_the_controller_envelope(s):
     """NED: altitude is -z. A goal outside the clamp can never be reached."""
-    lo, hi = CTRL["min_altitude_m"], CTRL["max_altitude_m"]
+    ctrl = _ctrl_for(s)
+    lo, hi = ctrl["min_altitude_m"], ctrl["max_altitude_m"]
     for label, ned in (("start", s["start_ned"]), ("goal", s["goal_ned"])):
         alt = -ned[2]
         assert lo <= alt <= hi, (
