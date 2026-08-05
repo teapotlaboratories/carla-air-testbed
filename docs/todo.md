@@ -1293,12 +1293,15 @@ all of them in the teardown path rule 1 is about:
 > A start pose that far off changes what the camera sees, and "the goal is outside the field
 > of view" is exactly the mechanism recorded below.
 >
-> **Re-measured after D-03 was fixed: 9 of 9 succeeded**, with start-pose errors of 1.4-5.7 m
-> where four of the previous ten had started 18-37 m low. Against the pre-fix rate that is
-> P(9 of 9) = 0.044 vs 12/17, or 0.067 vs all 20/27 pre-fix runs — **suggestive, and not
-> conclusive at n=9.** It is consistent with D-03 having been the whole of D-01, and equally
-> consistent with a lucky streak. Nobody should quote 9/9 as the rate; the honest next step is
-> another 20 runs, and `avoid_the_block` and `follow_the_avenue` alongside it.
+> **Re-measured after D-03 was fixed: 16 of 16** (9, then 7 more while verifying D-04), with
+> start-pose errors of 1.4-5.7 m where four of the previous ten had started 18-37 m low.
+> P(16 of 16 | the pre-fix rate of 20/27) = **0.008**. At n=9 this was suggestive; at n=16 it
+> is hard to explain as a streak, and D-03 looks like it was the substance of D-01.
+>
+> Still not a closed case: all 16 are **one scenario and one seed**. `avoid_the_block` and
+> `follow_the_avenue` have not been re-run at all, and the E-01b table was measured against
+> the broken reset. Nobody should quote 16/16 as *the* rate — it is the rate for
+> `cross_the_plaza` seed 1.
 
 **Closed, not fixed, and not because it stopped mattering.** The mechanism was found and it
 lives in the navigation stack, which the scope agreed the same day puts outside this
@@ -1471,7 +1474,7 @@ spent a day on hypotheses that did not survive measurement.
 - **Note:** `reset()` was changed the same day (D-02's yaw hold). Whether that is related is
   unknown; there is no before-measurement at this altitude to compare against.
 
-### D-04 · The sidecar wedges on `destroy` after several episodes — **open** *(2026-08-04)*
+### D-04 · The sidecar wedges on `destroy` after several episodes — **fixed** *(2026-08-04)*
 
 Twice in one session, after roughly four to nine consecutive episodes, `/sim/destroy_actors`
 stopped answering and every following episode died the same way:
@@ -1487,11 +1490,37 @@ This is squarely in scope: a simulator that stops answering after N episodes can
 sweep, and E-06 closed a *different* death (an uncaught CARLA `TimeoutException` killing the
 sidecar) that this is not.
 
-- **Where to look:** `destroy_all` uses `apply_batch_sync`, so a CARLA-side stall would block
-  the dispatch thread holding the slow lock. `CARLA_TIMEOUT_S` is 120 s while the client gives
-  up at 30, so the sidecar may still be waiting when the caller has gone.
-- **Verify:** run episodes back to back until it recurs, with a trace, and record how many.
-  Both occurrences today were incidental to another measurement; neither was instrumented.
+**Root cause: `ChaseCamera.stop()` deadlocks on its own bounded queue**, and does it while
+holding the sidecar's slow lock. Found with a SIGUSR1 stack dump added for the purpose:
+
+    threading.py:320 in wait
+    queue.py:140 in put           <- blocked putting into a FULL queue
+    chase.py:136 in stop
+    server.py:428 in chase_stop
+
+with a second thread parked in `_handle`'s `with lock:` — that is `destroy`, waiting forever.
+
+The race: `stop()` sets `self._writer = None`, and `_drain` **exits the moment it sees that**,
+so the sentinel offered on the next line has no consumer. CARLA's sensor thread has meanwhile
+been filling a bounded queue at the chase frame rate, so a busy episode ends with it full and
+the `put` never returns. Intermittent because it needs the queue full at that instant, which
+is why it took four to nine episodes — long enough for the encoder to fall behind.
+
+`stop()` no longer blocks: the sentinel goes in with `put_nowait`, making room by dropping a
+frame if it must, and the queue is drained afterwards rather than left holding 1080p buffers.
+It also says so if the drain thread will not exit, instead of returning counts from a
+recording still being written.
+
+- **Verified:** 7 consecutive episodes with no wedge, where it previously died at the 4th.
+  `tests/test_chase_stop.py` covers it with no simulator — 4 tests, and the old code **hangs**
+  them, which is the proof they bite.
+- **Kept:** `_install_stack_dumper()` in the sidecar. `kill -USR1 <pid>` dumps every thread's
+  stack. It found this in one shot after two sessions of guessing, and a wedge is invisible to
+  `status.sh` — the simulator, sidecar and bridge were all still running with the socket
+  present.
+- **My hypothesis was wrong first:** I blamed the 1 Hz world tick starving the slow lock.
+  Six spawn/destroy cycles against a live tick came back at 1.2 s and 0.0 s with no
+  contention. The dump beat the reasoning.
 
 ### D-02 · `reset()` commands yaw zero and does not get it — **done** *(2026-08-04)*
 

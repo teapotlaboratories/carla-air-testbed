@@ -133,10 +133,44 @@ class ChaseCamera:
             writer, self._writer = self._writer, None
         if writer is None:
             return {"frames": 0, "dropped": 0}
-        self._queue.put(None)                      # sentinel: drain and exit
+        # NEVER block here. `_drain` exits the moment it sees `self._writer is None`, which
+        # the line above just did — so by the time this sentinel is offered there may be no
+        # consumer left. Meanwhile CARLA's sensor thread has been filling a BOUNDED queue at
+        # the chase frame rate, so a busy episode ends with it full. A plain
+        # `self._queue.put(None)` then blocks forever.
+        #
+        # And it blocks while holding the sidecar's slow lock, so it does not merely lose the
+        # recording: `destroy`, `spawn_traffic` and every other slow-class call queue behind
+        # it and never return. Measured as `destroy: no response after 30.0s` with the
+        # simulator, sidecar and bridge all still running and the socket present — a wedge
+        # invisible to `status.sh`. See todo.md D-04; found with the SIGUSR1 stack dump.
+        #
+        # A race, which is why it was intermittent: it needs the queue to be full at the
+        # instant stop() runs, i.e. after an episode long enough for the encoder to fall
+        # behind.
+        for _ in range(3):
+            try:
+                self._queue.put_nowait(None)
+                break
+            except queue.Full:
+                try:
+                    self._queue.get_nowait()      # make room; the frame is being dropped
+                    self.frames_dropped += 1
+                except queue.Empty:
+                    pass
         if self._thread is not None:
             self._thread.join(timeout=10.0)
+            if self._thread.is_alive():
+                # Say so rather than return numbers from a recording still being written.
+                print("chase: drain thread did not exit within 10s", flush=True)
             self._thread = None
+        # Release whatever is still queued: the frames are gone either way, and holding a
+        # full queue of 1080p buffers until the next recording is pure resident memory.
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
         codec = getattr(writer, "codec", "?")
         writer.close()
         return {"frames": self.frames_written, "dropped": self.frames_dropped,

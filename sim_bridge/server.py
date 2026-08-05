@@ -22,6 +22,7 @@ import os
 import socket
 import sys
 import threading
+import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -518,8 +519,19 @@ def _handle(bridge: SimBridge, conn: socket.socket):
                 lock = bridge.slow_lock
             _CURRENT.conn, _CURRENT.rid = conn, rid
             try:
+                # Time the WAIT separately from the WORK. D-04 is a `destroy` that stops
+                # answering while the sidecar is alive, and those two numbers tell apart the
+                # two explanations: destroy itself being slow, versus destroy queued behind a
+                # 1 Hz world tick that holds the same lock and grows with actor count.
+                _t0 = time.monotonic()
                 with lock:
+                    _waited = time.monotonic() - _t0
+                    _t1 = time.monotonic()
                     result = getattr(bridge, method)(**args)
+                _worked = time.monotonic() - _t1
+                if _waited > 1.0 or _worked > 5.0:
+                    print(f"slow rpc: {method} waited {_waited:.1f}s for the lock, "
+                          f"ran {_worked:.1f}s", flush=True)
                 protocol.send(conn, {"id": rid, "ok": True, "result": result})
             except Exception as exc:  # noqa: BLE001 — must not kill the server
                 protocol.send(conn, {"id": rid, "ok": False, "error": str(exc),
@@ -555,6 +567,25 @@ def serve(bridge: SimBridge, path: str):
             os.unlink(path)
 
 
+def _install_stack_dumper():
+    """`kill -USR1 <sidecar pid>` prints every thread's stack to the sidecar log.
+
+    Added after D-04: the sidecar stopped answering `destroy` twice in one session while
+    `status.sh` still showed it running with its socket present. A wedge is invisible to a
+    process count, and without this the only way to ask what it was doing was to guess.
+
+    faulthandler writes to fd 2 from a signal handler, so it works even when every Python
+    thread is blocked in a C call, which is exactly the case worth catching.
+    """
+    import faulthandler
+    import signal
+    faulthandler.enable()
+    if hasattr(faulthandler, "register"):
+        faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+        print("stack dumper: kill -USR1 %d to dump all thread stacks" % os.getpid(),
+              flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--socket", default=protocol.DEFAULT_SOCKET)
@@ -563,6 +594,7 @@ def main():
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
 
+    _install_stack_dumper()
     bridge = SimBridge(args.carla_port, args.airsim_port, args.seed)
     d = bridge.describe()
     print(f"connected: map={d['map']} camera_hfov={d['camera']['hfov_deg']:.1f} "
