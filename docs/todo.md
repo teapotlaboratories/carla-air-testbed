@@ -751,6 +751,36 @@ with no rate change at all.
 
 ## Evaluation
 
+### E-01c · Re-baseline after D-03 — **done** *(2026-08-05)*
+
+E-01b was measured while `reset()` was landing the aircraft up to 32 m below its commanded
+altitude (D-03), so every episode in it started somewhere the scenario had not asked for. Re-run
+in full after the fix: 40 episodes, 5 seeds x 4 scenarios x 2 backends, zero collisions.
+
+| backend | scenario | E-01b (2026-08-03) | E-01c (2026-08-05) |
+|---|---|---|---|
+| oracle | `cross_the_plaza` | 5/5 | **5/5** · 18.3 m |
+| oracle | `follow_the_avenue` | 5/5 | **5/5** · 18.3 m |
+| oracle | `rain_descent` | **4/5** | **5/5** · 14.6 m |
+| oracle | `avoid_the_block` | 0/5 | 0/5 · 69.9 m *(by design)* |
+| oracle | **all** | **14/19** | **15/20** |
+| geometric | **all** | 0/20 | **0/20** — exact |
+
+Two things the fix bought, both small and both real:
+
+- **`rain_descent` is back to 5/5.** E-01b's loss was `model_declared_done` — the oracle
+  stopping short, which is what a wrong start altitude produces.
+- **The denominator is 20 again.** E-01b lost an episode to a missed deadline, hence 14/19.
+  Nothing was lost this time.
+
+`geometric` reproduces **exactly** at 0/20, every failure `max_steps`, which is the control:
+the fix did not simply make everything easier.
+
+- **Caveat kept:** one pass per cell. The non-determinism itself is fixed and measured —
+  `cross_the_plaza` seed 1 went from 12/17 on repeat to 16/16 — but a single cell here is
+  still a sample, not a rate.
+- Raw: `out/sweep-20260805-080540/summary.json`.
+
 ### E-01b · Re-baseline after the reset change — **done** *(2026-08-03)*
 
 The first 40-episode sweep to run end to end since 2026-08-01. Zero sidecar deaths, zero node

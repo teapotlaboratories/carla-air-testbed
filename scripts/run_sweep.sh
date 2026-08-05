@@ -32,8 +32,21 @@ RELEASE="$("$PROJ/scripts/release_path.sh")"
 [ -d "$RELEASE" ] || { echo "no release at $RELEASE - run ./scripts/install.sh" >&2; exit 1; }
 export CARLAAIR_RELEASE="$RELEASE"
 
-cleanup() { "$PROJ/scripts/stop.sh" --all >/dev/null 2>&1 || true; }
-trap cleanup EXIT INT TERM
+# EXIT does the work; INT/TERM only stop the script, which then reaches EXIT. Trapping
+# cleanup directly on INT would tear the stack down and RESUME at the next line, flying the
+# rest of the sweep against a simulator that is no longer there — the same bug found in
+# demo.sh on 2026-08-04. Guarded as well, so it cannot run twice by any other path.
+_CLEANED=0
+cleanup() {
+    [ "$_CLEANED" -eq 1 ] && return
+    _CLEANED=1
+    "$PROJ/scripts/stop.sh" --all >/dev/null 2>&1 || true
+    # A sweep is the thing most likely to be left running overnight, so say what it left
+    # behind rather than trusting that stop.sh got everything.
+    "$PROJ/scripts/status.sh" 2>/dev/null | sed -n "/processes/,/stacked/p" | sed "s/^/  /"
+}
+trap cleanup EXIT
+trap 'echo; echo "interrupted."; exit 130' INT TERM
 
 n_total=$(( $(echo $SEEDS | wc -w) * $(echo $SCENARIOS | wc -w) * $(echo $BACKENDS | wc -w) ))
 echo "sweep: $n_total episodes — backends [$BACKENDS] x scenarios [$SCENARIOS] x seeds [$SEEDS]"
@@ -44,23 +57,48 @@ for backend in $BACKENDS; do
     echo "=== bringing the graph up with backend=$backend ==="
     "$PROJ/scripts/stop.sh" --all >/dev/null 2>&1
     sleep 3
-    # Two processes now, not one: the simulator has no VLM in it (todo.md R-02), so the
-    # backend is started separately against its ROS 2 interface.
+    # THREE processes now, not one. The simulator has no VLM in it (R-02) and, since
+    # 2026-08-04, no waypoint following or episode scoring either — those moved to
+    # examples/navigation when navigation went out of scope. Both are started separately
+    # against the ROS 2 interface, exactly as any user's own stack would be.
     setsid "$PROJ/scripts/bringup.sh" --config "$CONFIG" \
         > "$OUT/bringup-$backend.log" 2>&1 &
-    # Wait for the whole graph, not just the simulator: the episode service is the last
-    # thing to appear and is what run_episode.py actually needs.
+    # Wait for the SIMULATOR. This used to wait for "episode runner ready", which bringup
+    # stopped printing when the episode runner moved out of it — the wait would simply time
+    # out and skip the backend.
     ok=0
     for _ in $(seq 1 60); do
         sleep 5
-        if grep -q "episode runner ready" "$OUT/bringup-$backend.log" 2>/dev/null; then ok=1; break; fi
+        if grep -q "bridged to CARLA-Air" "$OUT/bringup-$backend.log" 2>/dev/null; then ok=1; break; fi
     done
     if [ "$ok" -ne 1 ]; then
-        echo "  ERROR: graph did not come up for $backend — see $OUT/bringup-$backend.log" >&2
+        echo "  ERROR: the simulator did not come up for $backend — see $OUT/bringup-$backend.log" >&2
         tail -5 "$OUT/bringup-$backend.log" >&2
         continue
     fi
+    # A software-rasterised run is worse than no run: it produces numbers nobody can compare
+    # against anything. Observed once on 2026-08-04, and tested against before that cost a
+    # whole sweep.
+    if ! grep -q "hardware rendering confirmed" "$OUT/bringup-$backend.log" 2>/dev/null; then
+        echo "  ERROR: $backend is not rendering on the GPU — refusing to sweep" >&2
+        grep -m1 "SOFTWARE" "$OUT/bringup-$backend.log" >&2 || true
+        continue
+    fi
     grep -m1 "hardware rendering confirmed" "$OUT/bringup-$backend.log" | sed 's/^/  /'
+
+    # Waypoint following and episode scoring — out of scope for the simulator since
+    # 2026-08-04, so the sweep starts them itself.
+    setsid "$PROJ/examples/navigation/run.sh" > "$OUT/nav-$backend.log" 2>&1 &
+    ok=0
+    for _ in $(seq 1 24); do
+        sleep 5
+        if grep -q "episode_runner\|offboard_control" "$OUT/nav-$backend.log" 2>/dev/null; then ok=1; break; fi
+    done
+    if [ "$ok" -ne 1 ]; then
+        echo "  ERROR: the navigation example did not start — see $OUT/nav-$backend.log" >&2
+        tail -5 "$OUT/nav-$backend.log" >&2
+        continue
+    fi
 
     setsid "$PROJ/examples/vlm_navigation/run.sh" --backend "$backend" \
         > "$OUT/vlm-$backend.log" 2>&1 &

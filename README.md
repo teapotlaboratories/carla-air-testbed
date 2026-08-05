@@ -113,32 +113,33 @@ Other entry points:
 
 ## Results
 
-**Oracle 14/19, geometric 0/20** over the three open scenarios plus the blocked one. The
-harness reaches goals when something points at them, a depth-following heuristic with no
-language understanding reaches none, and one scenario now defeats both. That gap is the space
-a VLM has to fill.
+**Oracle 15/20, geometric 0/20.** The harness reaches goals when something points at them, a
+depth-following heuristic with no language understanding reaches none, and one scenario
+defeats both. That gap is the space a VLM has to fill.
 
-Re-measured **2026-08-03 over 40 seeded episodes** — 5 seeds x 4 benchmark scenarios x 2
-backends, zero collisions. This supersedes an earlier 50-episode run; both are in
-[`docs/todo.md`](docs/todo.md) under `E-01b`, with the difference explained rather than overwritten.
+Re-measured **2026-08-05 over 40 seeded episodes** — 5 seeds x 4 benchmark scenarios x 2
+backends, zero collisions — after `D-03` was fixed. **That fix is why this table changed**: the
+previous baseline was measured while `reset()` was landing the aircraft up to 32 m below its
+commanded altitude, so episodes were starting somewhere the scenario had not asked for. Both
+runs are in [`docs/todo.md`](docs/todo.md) with the difference explained rather than
+overwritten.
 
 | scenario | straight line? | oracle (N=5) | geometric (N=5) |
 |---|---|---|---|
-| `cross_the_plaza` | solves it | **5/5** | 0/5 |
-| `follow_the_avenue` | solves it | **5/5** | 0/5 |
-| `rain_descent` | solves it | **4/5** | 0/5 |
-| `avoid_the_block` | **blocked by a tower** | 0/5 | 0/5 |
+| `cross_the_plaza` | solves it | **5/5** · 18.3 m median | 0/5 · 106.7 m |
+| `follow_the_avenue` | solves it | **5/5** · 18.3 m median | 0/5 · 187.0 m |
+| `rain_descent` | solves it | **5/5** · 14.6 m median | 0/5 · 61.6 m |
+| `avoid_the_block` | **blocked by a tower** | 0/5 · 69.9 m median | 0/5 · 239.2 m |
 
-> **These are single passes, and the same seed does not always repeat.** Re-running
-> `cross_the_plaza` seed 1 on the oracle with nothing changed gave 3 successes in 7 attempts,
-> against the 5/5 below. The table was really measured and is not withdrawn, but it carries an
-> unmeasured variance and should not be quoted as reproducible. See `D-01` in
-> [`docs/todo.md`](docs/todo.md).
+Every failure is `max_steps`; nothing crashed and nothing collided. The oracle solves all three
+open scenarios cleanly, which the 2026-08-03 run did not — it scored `rain_descent` 4/5 and
+lost an episode to a missed deadline, both consistent with starting from the wrong place.
 
-`rain_descent` slipped from 5/5 to 4/5, failure mode `model_declared_done` — the oracle stopped
-short. One episode also missed the deadline, which is why the oracle denominator is 19 rather
-than 20. Neither is a model result; both are the harness, and both are recorded rather than
-rounded away.
+> **On repeatability**, because the previous version of this table could not be reproduced:
+> the same seed used to give different answers — `cross_the_plaza` seed 1 came out 12/17 on
+> repeat against a documented 5/5. Since `D-03`, that seed is **16/16**. This table is still
+> one pass per cell, so treat a single cell as a sample; the underlying non-determinism is
+> fixed and measured, which was not true a day ago.
 
 `avoid_the_block` is **meant** to defeat the oracle. The oracle is handed the goal and steers
 straight at it, so a scenario built to block the straight line fails it by construction —
