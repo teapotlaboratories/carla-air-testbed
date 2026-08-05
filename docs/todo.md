@@ -1291,11 +1291,14 @@ all of them in the teardown path rule 1 is about:
 > across ten real episodes, four began 18-37 m low. **The single failing run of that batch,
 > `run9`, was the worst outlier at +37.5 m**, starting 45 m above the street instead of 82.5.
 > A start pose that far off changes what the camera sees, and "the goal is outside the field
-> of view" is exactly the mechanism recorded below. That is a correlation with **one** failure,
-> not proof — three runs starting 18-23 m low succeeded — but it is a *simulator* defect
-> plausibly driving the thing that was ruled out of scope, and the reasoning below assumed the
-> starting conditions were sound. Do not treat D-01 as settled until D-03 is fixed and the rate
-> re-measured.
+> of view" is exactly the mechanism recorded below.
+>
+> **Re-measured after D-03 was fixed: 9 of 9 succeeded**, with start-pose errors of 1.4-5.7 m
+> where four of the previous ten had started 18-37 m low. Against the pre-fix rate that is
+> P(9 of 9) = 0.044 vs 12/17, or 0.067 vs all 20/27 pre-fix runs — **suggestive, and not
+> conclusive at n=9.** It is consistent with D-03 having been the whole of D-01, and equally
+> consistent with a lucky streak. Nobody should quote 9/9 as the rate; the honest next step is
+> another 20 runs, and `avoid_the_block` and `follow_the_avenue` alongside it.
 
 **Closed, not fixed, and not because it stopped mattering.** The mechanism was found and it
 lives in the navigation stack, which the scope agreed the same day puts outside this
@@ -1379,7 +1382,7 @@ repeat, 5/5 was a sample rather than a property.
 - **Do not guess at the cause** until there is a trace. Evidence in
   `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
 
-### D-03 · `reset()` lands the aircraft BELOW its commanded altitude — **open, measured** *(2026-08-04)*
+### D-03 · `reset()` lands the aircraft BELOW its commanded altitude — **fixed** *(2026-08-04)*
 
 Started as one observation from `ros2_traffic_flyover.py`. Measured with
 `tests/conformance/p12_reset_altitude.py` — 32 resets through the **real** `Vehicle.reset()`,
@@ -1419,6 +1422,26 @@ settled it:
   Mean +10.9 m, worst +37.5 m. **Bimodal** — six starts inside 4 m, four between 18 and 37 m
   low.
 
+**Fixed by converging rather than trusting one `join()`.** `moveToPositionAsync().join()`
+returns when SimpleFlight decides it has arrived, which is not the same as being there.
+`reset()` now commands the hold, checks where the aircraft actually ended up, and re-commands
+up to `RESET_ATTEMPTS` times until it is within `RESET_TOLERANCE_M` (6 m) — reporting through
+`on_stage` each time, and saying so loudly rather than raising if it cannot converge.
+
+Same grid, 32 resets, after the fix:
+
+| commanded | before (worst) | after (worst) |
+|---|---|---|
+| z = -55.0 | 32.2 m | **3.3 m** |
+| z = -30.0 | 30.5 m | **1.7 m** |
+| z = -8.0 | 28.4 m | **1.6 m** |
+| z = +23.95 | 4.2 m | 3.3 m (was already fine) |
+
+And on the real episode path, start-pose error across nine episodes: **5.7, 3.2, 1.5, 1.4,
+4.9, 3.6, 1.7, 4.1, 2.8 m** — where four of the previous ten started 18–37 m low.
+
+- **Cost:** a reset that needs a second or third attempt takes longer. Episodes went from
+  roughly 60 s to roughly 130 s wall clock in this batch, which matters for sweep budgets.
 - **Verify a fix by:** the same grid, and by whichever explanation accounts for the episode
   logs too.
 - **Consequence if it holds:** every episode starts up to 18 m below its scenario's stated
@@ -1447,6 +1470,28 @@ spent a day on hypotheses that did not survive measurement.
   is the shape to copy — it already resets in a loop and reports a spread.
 - **Note:** `reset()` was changed the same day (D-02's yaw hold). Whether that is related is
   unknown; there is no before-measurement at this altitude to compare against.
+
+### D-04 · The sidecar wedges on `destroy` after several episodes — **open** *(2026-08-04)*
+
+Twice in one session, after roughly four to nine consecutive episodes, `/sim/destroy_actors`
+stopped answering and every following episode died the same way:
+
+    RuntimeError: destroy: no response after 30.0s
+
+`status.sh` shows the simulator, the sidecar and the bridge all still running with the socket
+present — so it is a wedge, not a crash, and nothing in the process counts reveals it. The
+first occurrence followed a run killed mid-flight, which would explain it; the second did not,
+which does not.
+
+This is squarely in scope: a simulator that stops answering after N episodes cannot host a
+sweep, and E-06 closed a *different* death (an uncaught CARLA `TimeoutException` killing the
+sidecar) that this is not.
+
+- **Where to look:** `destroy_all` uses `apply_batch_sync`, so a CARLA-side stall would block
+  the dispatch thread holding the slow lock. `CARLA_TIMEOUT_S` is 120 s while the client gives
+  up at 30, so the sidecar may still be waiting when the caller has gone.
+- **Verify:** run episodes back to back until it recurs, with a trace, and record how many.
+  Both occurrences today were incidental to another measurement; neither was instrumented.
 
 ### D-02 · `reset()` commands yaw zero and does not get it — **done** *(2026-08-04)*
 

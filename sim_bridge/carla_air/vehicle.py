@@ -24,6 +24,12 @@ from . import frames
 
 
 class Vehicle:
+    #: How close the aircraft must end up to the pose `reset()` was given, in metres. The
+    #: documented station-keeping floor is ~4 m, so this is that plus room for the settle.
+    RESET_TOLERANCE_M = 6.0
+    #: How many times `reset()` will re-command the hold before giving up and saying so.
+    RESET_ATTEMPTS = 4
+
     #: How long a ground-truth environment read stays good. Temperature, pressure and density
     #: do not meaningfully move over a flight, and re-reading them every tick is 20% of the
     #: sensor call's cost for no new information.
@@ -110,11 +116,37 @@ class Vehicle:
         #     explicit hold        worst  0.9 deg, median  0.3 deg
         # Intermittent, which is what made it survive so long — most resets look fine.
         # See tests/conformance/p11_reset_attitude.py and todo.md D-02.
-        self._c.moveToPositionAsync(
-            n, e, d, speed,
-            yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0.0),
-            vehicle_name=self._name).join()
-        time.sleep(settle_s)
+        #
+        # And CONVERGE, rather than trusting one join(). `moveToPositionAsync().join()`
+        # returns when SimpleFlight decides it has arrived, which is not the same as being
+        # there: measured across ten real episodes commanded to z = -55, four began between
+        # 18 and 37 m BELOW it, and the aircraft is always low, never high. The likely path is
+        # that it is unpowered through the placement sleep and the arm, falls, and the hold
+        # gives up before it has climbed back — which is why street level was the one accurate
+        # altitude in the grid, having nowhere to fall to.
+        #
+        # So: command, check what actually happened, and command again. Bounded, because a
+        # reset that cannot converge must fail loudly rather than spin — and `hard=True`
+        # exists for a simulator that is genuinely wedged.
+        # See tests/conformance/p12_reset_altitude.py and todo.md D-03.
+        for attempt in range(self.RESET_ATTEMPTS):
+            self._c.moveToPositionAsync(
+                n, e, d, speed,
+                yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0.0),
+                vehicle_name=self._name).join()
+            time.sleep(settle_s)
+            pos = self.state()["position"]
+            miss = math.dist(pos, (n, e, d))
+            if miss <= self.RESET_TOLERANCE_M:
+                if attempt:
+                    say(f"converged after {attempt + 1}")
+                break
+            say(f"re-holding ({miss:.1f} m out)")
+        else:
+            # Reported, not raised: a start pose that is metres out still flies, and failing
+            # the episode outright would be worse than flying it with the error recorded.
+            # The caller gets the real position back and can decide.
+            say(f"NOT CONVERGED: {miss:.1f} m from the commanded pose")
 
         # Take the epoch AFTER everything has settled, and after a hard reset in particular:
         # a hard reset restarts sim time, so an epoch captured beforehand would be in the
