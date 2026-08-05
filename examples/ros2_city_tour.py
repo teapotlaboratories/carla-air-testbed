@@ -111,7 +111,11 @@ class Tour(Node):
     def offboard(self, on):
         cli = self.create_client(SetParameters, "/offboard_control/set_parameters")
         try:
-            if not cli.wait_for_service(timeout_sec=15.0):
+            # Short: `offboard_control` is in examples/navigation and bringup.sh has not
+            # started it since 2026-08-04, so absence is the ordinary case and waiting 15 s
+            # for it adds 15 s to every run. If it IS running it must be disabled — it holds
+            # a 15 m NED floor and streams at 10 Hz, and it wins every conflict.
+            if not cli.wait_for_service(timeout_sec=1.0):
                 return False
             req = SetParameters.Request()
             req.parameters = [Parameter(name="enabled", value=on).to_parameter_msg()]

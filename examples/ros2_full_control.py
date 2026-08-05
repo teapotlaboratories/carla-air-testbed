@@ -113,16 +113,22 @@ class FullControlDemo(Node):
         self.create_subscription(PointCloud2, "/sensors/lidar/points", self._store("lidar"), 1)
 
     def set_autonomy(self, enabled: bool) -> bool:
-        """Enable or disable the offboard controller that `bringup.sh` also started.
+        """Enable or disable the offboard controller, IF somebody started one.
 
         Two publishers on one setpoint topic is not a conflict either of them can detect —
         the bridge simply forwards whatever arrived last, and at 10 Hz against this example's
         occasional commands the autonomy loop wins every time.
         """
+        # `offboard_control` lives in examples/navigation and is NOT started by bringup.sh
+        # since 2026-08-04, so "not running" is the ordinary case and must not read as a
+        # fault. A short probe, because waiting 15 s for a node nobody launched is 15 s
+        # added to every run of this example. The warning that matters is the opposite one:
+        # if it IS running, it streams setpoints at 10 Hz and will win every conflict.
         client = self.create_client(SetParameters, "/offboard_control/set_parameters")
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warn(
-                "offboard_control not reachable - if it is running, it will fight these commands")
+        if not client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info(
+                "offboard_control is not running - nothing to disable, which is the normal "
+                "case after bringup.sh (it starts the simulator only)")
             return False
         request = SetParameters.Request()
         request.parameters = [Parameter(

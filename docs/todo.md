@@ -1368,6 +1368,29 @@ repeat, 5/5 was a sample rather than a property.
 - **Do not guess at the cause** until there is a trace. Evidence in
   `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
 
+### D-03 · A low reset may miss its commanded altitude by 15 m — **open, one observation** *(2026-08-04)*
+
+`examples/ros2_traffic_flyover.py` commands `hold_ned` z = **-8.0** and the reset reports
+settling at **+7.5** — 15.5 m low, i.e. 20 m above the street where 35.5 m was asked for.
+The documented tolerance is ~9 m (`QUICKSTART.md`: "a ~9 m start-pose error is normal", the
+station-keeping floor), and today's episode resets at other altitudes came in well inside it:
+
+    commanded z  23.9  ->  18.2   error 5.7 m
+    commanded z -55.0  -> -51.9   error 4.1 m
+    commanded z  -8.0  ->  +7.5   error 15.5 m   <- this one
+
+**One observation, and deliberately not chased.** It is the same family as D-02 — what
+`reset()` actually delivers versus what it commands — and it is in scope for the same reason.
+But a single sample cannot distinguish an altitude-dependent effect, a speed-dependent one
+(the flyover resets at 8 m/s, `run_episode` at 10), or ordinary variance, and this project has
+spent a day on hypotheses that did not survive measurement.
+
+- **Verify:** reset to a range of altitudes, N repeats each, and report the error against
+  commanded as a function of altitude and approach speed. `tests/conformance/p11_reset_attitude.py`
+  is the shape to copy — it already resets in a loop and reports a spread.
+- **Note:** `reset()` was changed the same day (D-02's yaw hold). Whether that is related is
+  unknown; there is no before-measurement at this altitude to compare against.
+
 ### D-02 · `reset()` commands yaw zero and does not get it — **done** *(2026-08-04)*
 
 `Vehicle.reset()` places the aircraft with `airsim.Quaternionr(0, 0, 0, 1)` — yaw zero.
