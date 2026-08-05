@@ -293,3 +293,55 @@ quiet, it is self-sustaining and the loop gain is the thing to look at. That is 
 navigation-stack property and out of scope for this repository — which would make the right
 outcome for D-01 "documented, bounded, and not this repository's to fix", with the simulator's
 own contribution (D-02) already closed.
+
+---
+
+## Reopened: the aircraft was not starting where the scenario said
+
+D-01 was closed as out of scope on the reasoning that the oscillation lives in the navigation
+loop and the simulator's only contribution was D-02, which was fixed. **That closure was
+premature**, and the thing that overturned it came from a different investigation entirely.
+
+D-03 began as one odd reading from `ros2_traffic_flyover.py`. Measured properly it is
+systematic: `reset()` lands the aircraft **below** its commanded altitude, 13–21 m at any
+height with room to fall, and accurately only at street level where there is nowhere to fall
+to. I then argued with myself about whether real episodes were affected, because one episode
+log said 4.1 m against the probe's 17.9 m.
+
+**I was quoting one sample against eight.** Two checks settled it:
+
+- the same grid through `/sim/reset_vehicle`, 6 s apart, exactly as an episode does it:
+  16.0 / 15.4 / 13.6 m mean at z = -55 / -30 / -8, and 3.3 m at street level;
+- the traces, which record where the aircraft actually was when each episode began.
+
+Aircraft z at the start of ten real episodes, commanded -55.0:
+
+    -3.6  +2.1  +2.7  +3.1  +3.2  +3.5      <- six starts inside 4 m
+    +18.0  +19.4  +22.8  +37.5              <- four starts 18-37 m LOW
+
+Mean +10.9 m, worst +37.5 m. Bimodal, like everything else in this investigation.
+
+### The part that matters
+
+**`run9` — the single failing episode of that batch — is the +37.5 m outlier.** It began at
+z = -17.5 instead of -55.0: 45 m above the street where the scenario asked for 82.5.
+
+A start pose that far off changes what the camera sees. And "the goal ends up outside the
+field of view, so the annotation clamps to the frame border" is precisely the mechanism this
+worklog recorded two sections ago and attributed to loop dynamics.
+
+**This is a correlation with one failure, not a proof.** Three runs started 18–23 m low and
+succeeded, so a bad start pose is plainly not sufficient on its own. But the reasoning that
+closed D-01 assumed the starting conditions were sound, and they were not — so the conclusion
+does not stand on the evidence it was built on, whatever turns out to be true.
+
+D-01 is marked under review rather than reopened outright: the honest position is that it was
+closed for a reason that has since been undermined, and it cannot be settled until D-03 is
+fixed and the rate re-measured against starts that actually land where they were told.
+
+### What this run of the day looks like in hindsight
+
+Five hypotheses, four refuted by measurement, and the fifth — reset altitude — found only
+because an example I was verifying for an unrelated reason printed a number that looked wrong.
+The two things that kept paying were recording what actually happened and re-checking my own
+samples. Both refutations today came from data I already had and had not looked at properly.

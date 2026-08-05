@@ -1286,6 +1286,17 @@ all of them in the teardown path rule 1 is about:
 
 ### D-01 · The same seed does not give the same result — **closed as out of scope** *(2026-08-04)*
 
+> **This closure was PREMATURE and is under review** *(2026-08-04, same day)*. See D-03: the
+> aircraft does not reliably start an episode at the altitude the scenario commands — measured
+> across ten real episodes, four began 18-37 m low. **The single failing run of that batch,
+> `run9`, was the worst outlier at +37.5 m**, starting 45 m above the street instead of 82.5.
+> A start pose that far off changes what the camera sees, and "the goal is outside the field
+> of view" is exactly the mechanism recorded below. That is a correlation with **one** failure,
+> not proof — three runs starting 18-23 m low succeeded — but it is a *simulator* defect
+> plausibly driving the thing that was ruled out of scope, and the reasoning below assumed the
+> starting conditions were sound. Do not treat D-01 as settled until D-03 is fixed and the rate
+> re-measured.
+
 **Closed, not fixed, and not because it stopped mattering.** The mechanism was found and it
 lives in the navigation stack, which the scope agreed the same day puts outside this
 repository. The simulator's own contribution to it was D-02, and that is fixed.
@@ -1396,12 +1407,17 @@ The likely shape, **not yet proven**: `simSetVehiclePose` places the aircraft, t
 unpowered through the 0.5 s sleep and the arm, falls, and `moveToPositionAsync(...).join()`
 returns before it has climbed back. At 3.5 m AGL there is nowhere to fall to.
 
-**One thing does not fit, and is not explained.** Today's episode logs report 4.1 m error at
-z = -55.0 through the ROS service, where this probe measures 17.9 m mean at the same altitude
-and speed. Same `reset()`, same numbers commanded. Either the service path differs from the
-direct call in some way not yet identified, or back-to-back resets in a loop behave
-differently from one reset after other activity. **That must be resolved before any fix**,
-because it decides whether real episodes are affected at all.
+**Resolved 2026-08-04: real episodes are affected.** The apparent contradiction was my own
+sampling — I quoted a single 4.1 m episode log against eight probe samples. Two checks
+settled it:
+
+- **The ROS service path reproduces it.** Same grid through `/sim/reset_vehicle` with 6 s
+  between resets, i.e. exactly what an episode does: 16.0 / 15.4 / 13.6 m mean at -55 / -30 /
+  -8, and 3.3 m at street level. Not a probe artefact, not back-to-back resets.
+- **The traces say so directly.** Aircraft z at the moment ten real episodes began, against a
+  commanded -55.0: -3.6, +2.1, +2.7, +3.1, +3.2, +3.5, **+18.0, +19.4, +22.8, +37.5**.
+  Mean +10.9 m, worst +37.5 m. **Bimodal** — six starts inside 4 m, four between 18 and 37 m
+  low.
 
 - **Verify a fix by:** the same grid, and by whichever explanation accounts for the episode
   logs too.
