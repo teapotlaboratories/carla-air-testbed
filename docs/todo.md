@@ -1368,7 +1368,48 @@ repeat, 5/5 was a sample rather than a property.
 - **Do not guess at the cause** until there is a trace. Evidence in
   `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
 
-### D-03 · A low reset may miss its commanded altitude by 15 m — **open, one observation** *(2026-08-04)*
+### D-03 · `reset()` lands the aircraft BELOW its commanded altitude — **open, measured** *(2026-08-04)*
+
+Started as one observation from `ros2_traffic_flyover.py`. Measured with
+`tests/conformance/p12_reset_altitude.py` — 32 resets through the **real** `Vehicle.reset()`,
+against a bare simulator with no ROS graph — and it is systematic, not variance:
+
+| commanded | AGL | error @ 8 m/s | error @ 10 m/s |
+|---|---|---|---|
+| z = -55.0 | 82.5 m | mean 14.7, worst 25.2 | mean 21.1, worst **32.2** |
+| z = -30.0 | 57.5 m | mean 15.8, worst 21.7 | mean 20.1, worst 30.5 |
+| z = -8.0 | 35.5 m | mean 13.3, worst 21.8 | mean 20.8, worst 28.4 |
+| z = +23.95 | **3.5 m** | mean **3.3**, worst 3.5 | mean **3.5**, worst 4.2 |
+
+Against a documented tolerance of ~9 m. Three things fall out:
+
+- **The z-error is always POSITIVE** — +9.1 to +18.5 m — and positive NED z is *downward*.
+  The aircraft consistently ends up **below** where it was told to be. This is a sag, not
+  scatter.
+- **It tracks altitude, not speed** (spread 14.5 m across altitudes vs 4.6 m across speeds),
+  and the one accurate row is street level — the only altitude with no room to fall.
+- **Faster is worse**: 10 m/s misses by more than 8 m/s at every altitude. Consistent with
+  `moveToPositionAsync` declaring arrival on a lookahead that scales with velocity, so a
+  faster command gives up further out.
+
+The likely shape, **not yet proven**: `simSetVehiclePose` places the aircraft, then it is
+unpowered through the 0.5 s sleep and the arm, falls, and `moveToPositionAsync(...).join()`
+returns before it has climbed back. At 3.5 m AGL there is nowhere to fall to.
+
+**One thing does not fit, and is not explained.** Today's episode logs report 4.1 m error at
+z = -55.0 through the ROS service, where this probe measures 17.9 m mean at the same altitude
+and speed. Same `reset()`, same numbers commanded. Either the service path differs from the
+direct call in some way not yet identified, or back-to-back resets in a loop behave
+differently from one reset after other activity. **That must be resolved before any fix**,
+because it decides whether real episodes are affected at all.
+
+- **Verify a fix by:** the same grid, and by whichever explanation accounts for the episode
+  logs too.
+- **Consequence if it holds:** every episode starts up to 18 m below its scenario's stated
+  altitude, which makes start poses — and anything measured from them — not what the scenario
+  says.
+
+### D-03 (original single observation, kept for the record)
 
 `examples/ros2_traffic_flyover.py` commands `hold_ned` z = **-8.0** and the reset reports
 settling at **+7.5** — 15.5 m low, i.e. 20 m above the street where 35.5 m was asked for.
