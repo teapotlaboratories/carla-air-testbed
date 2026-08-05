@@ -11,6 +11,11 @@ scenario design as a policy challenge, benchmark scores. Those are built on this
 examples/. The test: could a user with a completely different navigation stack still want it?
 See AGENTS.md, section "Scope".
 
+YOU BRING THE AGENT. The simulator's only interface is ROS 2, and whatever decides where the
+aircraft goes is the user's, connecting from outside over the public topics and services.
+Nothing here ships, hosts or containerises an agent; bringup.sh starts none (ros2 node list is
+/carla_air_bridge alone); the simulator must be fully usable with nothing attached.
+
 It is NOT drone-sim, the sibling project on the same machine that owns the real
 hardware; nothing here can reach a real aircraft.
 

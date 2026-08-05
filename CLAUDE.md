@@ -17,6 +17,12 @@ A **drone simulator with a ROS 2 interface** on CARLA-Air v0.1.7 — a quadrotor
 photorealistic city with live traffic and weather, headless, no containers. It is an
 **integration** project: changes are judged by a simulator run, not by a clean build.
 
+**You bring the agent.** The simulator's only interface is ROS 2. Whatever decides where the
+aircraft goes is the user's and connects from outside, over the public topics and services.
+Nothing here ships, hosts or containerises an agent; `bringup.sh` starts none — after it,
+`ros2 node list` is `/carla_air_bridge` alone — and the simulator must be fully usable with
+nothing attached to it.
+
 **Scope (2026-08-04): the product is the simulator.** Fidelity, determinism, the ROS 2
 surface. **Navigation and VLM work is out of scope** — waypoint following, grounding, prompts,
 model choice, scenario design as a policy challenge, benchmark scores. They are built *on*

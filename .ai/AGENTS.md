@@ -38,6 +38,35 @@ or model tuning, scenario design meant to challenge a policy, and benchmark scor
 Those are things you *build on* this simulator, and they belong in `examples/` — as consumers
 of the public interface, importing nothing from the project.
 
+### You bring the agent; this repository does not ship or host one
+
+The simulator's **only** interface is ROS 2 — `/fmu/*`, `/camera/*`, `/sensors/*`, `/sim/*`.
+Whatever decides where the aircraft goes is **the user's, and it connects from outside**: its
+own process, on the same DDS domain, over the same public topics and services anyone else
+would use. There is no privileged channel, no shared process, no in-tree hook, and nothing it
+must import from here.
+
+Concretely, and these are commitments rather than descriptions:
+
+- **The agent is not packaged with the simulator, and is not containerised with it.** `P-01`
+  is about containerising the *simulator* — the sidecar, the ROS graph, the release. It has
+  never contemplated an image containing somebody's navigation stack or model, and must not
+  grow one.
+- **The agent is not started by `bringup.sh`.** After bringup, `ros2 node list` is
+  `/carla_air_bridge` and nothing else. If a change adds a node there that interprets a camera
+  or chooses a waypoint, it is in the wrong place.
+- **The agent is not a dependency.** The simulator must be fully usable — every sensor, every
+  command, every world service — with nothing attached to it at all.
+- **No credentials, model names or provider SDKs belong in the simulator's config.** They live
+  with whatever example needs them, and `configs/testbed.yaml` should not know that a VLM
+  exists.
+
+What ships in `examples/` exists to *prove the interface is sufficient*, not because anyone is
+expected to run it. `examples/ros2_full_control.py` is the load-bearing one: it takes off,
+flies waypoints, holds a velocity, commands an attitude and lands, **importing nothing from
+this project**. If that ever stops being true, the interface has stopped standing on its own
+and the fix is in the simulator, not in the example.
+
 The test for a proposed change: **could a user with a completely different navigation stack
 still want it?** If the answer needs a particular policy to be interesting, it is out.
 

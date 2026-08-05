@@ -19,6 +19,14 @@ See-Point-Fly loop — *frame → 2D annotation → 3D displacement → velocity
 [`examples/vlm_navigation/`](examples/vlm_navigation/), started separately and talking only to
 the interface above. Skip it and the simulator is unchanged.
 
+**You bring the agent.** Whatever decides where the aircraft goes is *yours*, and it connects
+from outside — its own process, on the same DDS domain, over the same public topics and
+services anyone else would use. Nothing here ships or hosts an agent, nothing containerises one
+with the simulator, and `bringup.sh` starts none: after it, `ros2 node list` is
+`/carla_air_bridge` and nothing else. The simulator is fully usable with nothing attached to
+it. What lives in `examples/` is there to prove the interface is sufficient, not because you
+are expected to run it.
+
 **Scope.** The product is the simulator: a faithful world, faithful sensors, and a ROS 2
 interface that behaves the way real hardware would. **Navigation is out of scope** — waypoint
 following, obstacle avoidance, pixel-to-world grounding, prompt and model choice, and

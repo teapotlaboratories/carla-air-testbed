@@ -27,6 +27,12 @@ still want it?* If it needs a particular policy to be interesting, it is out. Fu
 and the two things this contradicts in the current tree:
 [AGENTS.md → Scope](AGENTS.md#scope--what-this-repository-is-for).
 
+**You bring the agent.** The simulator's only interface is ROS 2, and whatever decides where
+the aircraft goes is the user's, connecting from outside over the public topics and services.
+Nothing here ships, hosts or containerises an agent; `bringup.sh` starts none (`ros2 node list`
+is `/carla_air_bridge` alone); the simulator must be fully usable with nothing attached. See
+[AGENTS.md → You bring the agent](AGENTS.md#you-bring-the-agent-this-repository-does-not-ship-or-host-one).
+
 Most important rules:
 
 - **Stop every process when a flight test is done.** Any run that puts the aircraft in

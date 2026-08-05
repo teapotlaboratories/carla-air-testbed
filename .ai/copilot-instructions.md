@@ -14,6 +14,11 @@ surface. **Navigation and VLM work is out of scope**: waypoint following, ground
 model choice, scenario design as a policy challenge, benchmark scores. Those are built *on*
 this and live in `examples/`. The test: *could a user with a completely different navigation
 stack still want it?* See [AGENTS.md → Scope](AGENTS.md#scope--what-this-repository-is-for).
+
+**You bring the agent.** The simulator's only interface is ROS 2, and whatever decides where
+the aircraft goes is the user's, connecting from outside over the public topics and services.
+Nothing here ships, hosts or containerises an agent; `bringup.sh` starts none (`ros2 node list`
+is `/carla_air_bridge` alone); the simulator must be fully usable with nothing attached.
  It is
 **not** `drone-sim`, the sibling project on the same machine that owns the real hardware.
 Nothing here can reach a real aircraft.
