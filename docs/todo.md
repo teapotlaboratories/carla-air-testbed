@@ -850,7 +850,10 @@ Note the rule collision this created, now written into
 so it fails an obstacle scenario *by construction* and can no longer serve as that scenario's
 validator. `--route` is the replacement proof.
 
-### V-01b · Local vLLM on GPU 1 — **open, and now the unblocked path**
+### V-01b · Local vLLM on GPU 1 — **out of scope** *(2026-08-04)*
+
+> Model choice. Kept for the reasoning, not as work to pick up here — see the scope table
+> at the top of this file.
 
 The other half of the V-01 fork. It needs no API credentials and no per-call cost, which is
 the deciding factor if the operator has a Claude.ai subscription rather than API access —
@@ -1024,7 +1027,11 @@ progress instrumentation that named the culprit.
 - **Verify:** 40 episodes complete with no `terminate` in `out/sim_bridge.log`, and the
   result matches the E-01 baseline (oracle 15/20, geometric 0/20, zero collisions).
 
-### E-02b · The other three scenarios still have nothing in the way — **open**
+### E-02b · The other three scenarios still have nothing in the way — **out of scope** *(2026-08-04)*
+
+> Scenario design as a policy challenge. Kept for the reasoning; not work for this
+> repository. It remains true that three of the four benchmark scenarios are
+> straight-line solvable, which is worth knowing when reading any score from them.
 
 `--check` reports `cross_the_plaza`, `follow_the_avenue` and `rain_descent` as CLEAR: a
 straight line solves all three, and the 100% oracle rate on them measures the harness, not the
@@ -1504,6 +1511,28 @@ spent a day on hypotheses that did not survive measurement.
 - **Note:** `reset()` was changed the same day (D-02's yaw hold). Whether that is related is
   unknown; there is no before-measurement at this altitude to compare against.
 
+### D-05 · A fixed reset tolerance is wrong at street level — **open** *(2026-08-05)*
+
+`RESET_TOLERANCE_M` is a flat 6 m, which is sensible at 82 m AGL and meaningless at 3.5 m.
+`examples/ros2_street_level.py` asks for z = 23.95 (3.5 m AGL) and was placed at 27.0 — **0.5 m
+AGL**, 3 m low, or 86% of the entire flight altitude gone. The D-03 converge loop never
+retried, because 3 m is inside tolerance.
+
+Not caused by the D-03 fix: `p12_reset_altitude.py` measured street level at 3.3 m error both
+before and after, consistently. What the fix did was make every *other* altitude accurate
+enough that this one now stands out.
+
+- **Open question, and the reason this is filed rather than fixed:** whether the converge loop
+  *can* correct it. The street-level error was identical across 8 resets before and after the
+  fix, which looks like a floor rather than a miss — possibly ground effect, a collision
+  volume, or SimpleFlight refusing to descend the last few metres. Tightening the tolerance
+  without knowing that would just make every street-level reset burn `RESET_ATTEMPTS` and then
+  report failure.
+- **Verify:** `p12` with a tolerance of 1 m and street level in the grid — does it converge, or
+  exhaust its attempts at the same 3.3 m?
+- **Consequence today:** anything flying near the ground starts lower than it asked for.
+  `street_level` is a demonstration and is not scored, so nothing measured depends on this yet.
+
 ### D-04 · The sidecar wedges on `destroy` after several episodes — **fixed** *(2026-08-04)*
 
 Twice in one session, after roughly four to nine consecutive episodes, `/sim/destroy_actors`
@@ -1587,7 +1616,20 @@ separating the two is exactly why this is filed on its own.
   degree or two, not ten.
 - Evidence: `docs/worklog/2026-08-04-scenarios-do-not-repeat.md`.
 
-### E-03 · Record an MCAP bag per episode — **open, and now blocking D-01** *(raised 2026-08-04)*
+### E-03 · Record an MCAP bag per episode — **done** *(2026-08-04)*
+
+Landed as `scripts/record_trace.sh` (MCAP via rosbag2) and `scripts/analyse_trace.sh`, plus
+`--split` for separating an annotation from the projection of it. Simulator-side rather than
+wired into the episode runner, which is an example now.
+
+It paid for itself the day it landed. Three things came out of traces that no amount of
+reading found: the failing runs oscillate laterally rather than taking a longer route;
+`bearing_only` correlates with SUCCESS, not failure — the opposite of what had been recorded
+in two places; and the aircraft was starting up to 37 m below its commanded altitude, which
+became D-03.
+
+Cameras are excluded by default — RGB at 960x720 and 8 Hz is ~16 MB/s, so a three-minute
+episode would be ~3 GB — with `--camera` and `--all` for when that is what you want.
 
 *(Partly overtaken by E-05: "a failed episode leaves a JSON and nothing to look at" is no
 longer true. What a bag still adds over video is **replayability** — feeding the recorded
@@ -1601,7 +1643,9 @@ merely counted.
 - **Verify:** a bag replays and the grounding node produces the same waypoints from it.
   Note `.gitignore` already excludes `*.mcap` and `rosbag2_*/`.
 
-### E-04 · Anchor scenarios to real map features — **open**
+### E-04 · Anchor scenarios to real map features — **out of scope** *(2026-08-04)*
+
+> Same: scenario design. Kept for the reasoning.
 
 Start and goal coordinates were hand-picked from one spawn point. They lint clean and the
 oracle proves them navigable, but nothing ties them to junctions, plazas or landmarks a

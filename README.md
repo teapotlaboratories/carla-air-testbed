@@ -304,7 +304,11 @@ Failsafes, lockstep, EKF2 and arming logic need a different lane.
 
 **Sweeps run in real time.** Both clocks hold RTF 1.000, and faster-than-real-time is not
 available — AirSim's `ClockSpeed` accelerates the aircraft while CARLA's world stays at 1×,
-so the two halves desync. Budget `timeout × seeds` of wall clock.
+so the two halves desync. Budget `timeout × seeds` of wall clock — and note that since
+`reset()` began converging on its commanded pose (D-03, 2026-08-05) a reset can take several
+attempts, so an episode is roughly **130 s** rather than 60, and a 40-episode sweep about
+**2 hours**. The old numbers bought their speed by starting the aircraft up to 32 m from where
+the scenario asked.
 
 The substrate has sharp edges, all measured, each worked around in exactly one place: the
 vehicle runs away after `reset()` unless commanded, station-keeping is loose to ~4 m,
