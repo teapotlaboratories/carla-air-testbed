@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Refuse a commit that puts CODE on the default branch.
+#
+# Installed by scripts/install_hooks.sh. Not advisory.
+#
+# WHY THIS EXISTS RATHER THAN A FIRMER SENTENCE. .ai/AGENTS.md has always said code changes
+# go on a feature branch. An audit on 2026-08-06 found 19 of the 27 commits since the previous
+# merge had gone straight to `main` with code in them — every container script, a reset fix, a
+# deadlock fix, the H.264 work — over a full day, unnoticed by anyone including the agent
+# writing them. The rule was not unclear. It was unenforced.
+#
+# If this fires, the fix is to branch. Your staged changes come with you:
+#
+#     git switch -c feat/<name>
+#     git commit
+#
+# `--no-verify` exists and this cannot stop you using it. Using it is a decision to break a
+# rule the repository states in six places, not a workaround.
+set -uo pipefail
+
+DEFAULT_BRANCH="${TESTBED_DEFAULT_BRANCH:-main}"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+[ "$branch" = "$DEFAULT_BRANCH" ] || exit 0
+
+# Paths that count as code. docker/, examples/ and tests/ are here because the original rule
+# omitted them and the omission was used.
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+code="$(printf '%s\n' "$staged" | grep -E '^(sim_bridge|ros2_ws|scripts|configs|docker|examples|tests|webui)/' || true)"
+[ -n "$code" ] || exit 0
+
+cat >&2 <<EOF
+
+  ✗ refusing to commit code to '$DEFAULT_BRANCH'.
+
+    .ai/AGENTS.md: code changes go on a feature branch and land through a PR —
+    always, every feature, no size exemption.
+
+    staged code files:
+$(printf '%s\n' "$code" | sed 's/^/      /')
+
+    take them with you:
+
+      git switch -c feat/<name>
+      git commit
+
+    Doc-only changes (docs/, README, .ai/) may go straight to $DEFAULT_BRANCH.
+
+EOF
+exit 1
