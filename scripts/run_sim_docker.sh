@@ -81,11 +81,17 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 mkdir -p "$PROJ/out"
 
 echo "launching $MAP in $NAME on GPU $GPU (image $IMAGE)"
-# --network host: the sidecar and the ROS graph run outside the container for now and reach
-#   the simulator on 127.0.0.1:2000 and :41451, exactly as they do today.
+# --network host: the sidecar and the ROS graph reach the simulator on 127.0.0.1:2000 and
+#   :41451, exactly as they do on the host.
+# --ipc shareable: so the other containers can JOIN this IPC namespace, which is what lets
+#   Fast-DDS use shared memory between them instead of loopback UDP. `--ipc host` is refused
+#   by this daemon under rootless/nested Docker ("error mounting mqueue ... operation not
+#   permitted"), so shareable + `--ipc container:` is the way, and is what the sibling
+#   project does for the same reason.
 # --gpus: the inner quotes are required. See --help.
 docker run -d --name "$NAME" \
     --network host \
+    --ipc shareable --shm-size=2g \
     --gpus "\"device=nvidia.com/gpu=$GPU\"" \
     -v "$RELEASE:/opt/carla-air" \
     -v "$PROJ/configs/sim/settings.json:/home/sim/Documents/AirSim/settings.json:ro" \

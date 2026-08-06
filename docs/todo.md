@@ -1805,9 +1805,49 @@ merely running — it produces the same result.
 
 - **The release is mounted, never baked.** It is a licensed 18 GB binary drop that changes
   independently of this repository.
-- **`--network host`**, so the sidecar and ROS graph outside the container reach :2000 and
-  :41451 exactly as they do today. Containerising those two is the next step and neither is
-  blocked — both images already built and ran.
+**All three containerised the same day, and a scored episode flown entirely in containers.**
+
+    ./scripts/stack_up.sh --config configs/testbed.yaml
+    ./scripts/stack_run.sh -d examples/navigation/run.sh
+    ./scripts/stack_run.sh -d examples/vlm_navigation/run.sh --backend oracle
+    ./scripts/stack_run.sh scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
+    ./scripts/stack_up.sh --down
+
+| container | image | what it is |
+|---|---|---|
+| `carla-air-sim` | `carla-air/sim:v0.1.7` | CarlaUE4 on the GPU, owns the network and IPC namespaces |
+| `carla-air-bridge` | `carla-air/sim-bridge:1` | the 3.10 sidecar — Ubuntu 22.04 ships CPython 3.10 natively, so no uv and no standalone interpreter build |
+| `carla-air-ros` | `carla-air/ros:1` | the 3.12 graph, on `ros:jazzy-ros-base` |
+
+Result: **SUCCESS 19.0 m in 13 steps**, reset error 1.1 m, chase 300 frames 0 dropped —
+the documented baseline.
+
+**Three things that had to be got right, each found by it failing:**
+
+- **`--ipc shareable` on the simulator.** The joiners use `--ipc container:`, and `--ipc host`
+  is refused by this daemon under rootless/nested Docker. Without it the ROS container will
+  not start at all.
+- **The repository is mounted at its OWN absolute path**, not at `/workspace`.
+  `colcon build --symlink-install` fills the install tree with absolute symlinks, so any other
+  mount point leaves them dangling: `Package 'bringup' not found`.
+- **`python3-msgpack` in the ROS image.** `sim_bridge/protocol.py` is imported by the ROS-side
+  client and imports it at module scope; without it the bridge node dies with a bare
+  `ModuleNotFoundError` naming nothing about the seam.
+
+**A consequence worth knowing before reaching for the host.** The containers share one IPC
+namespace and Fast-DDS prefers shared memory, so a HOST process discovers the graph and then
+receives nothing — measured: `ros2 topic hz` on the host reported NO DATA for topics
+publishing at 16 Hz inside. That is what `stack_run.sh` is for. It is not a bug to fix by
+disabling shared memory; it is what containerising the graph means.
+
+- **Still mounted, not baked:** the 18 GB release and the repository itself. The environment
+  is the slow, stable part and belongs in an image; the code changes every few minutes. A
+  hermetic image that bakes the source is a reasonable follow-up and is not what makes this
+  reproducible today.
+- **`stack_up.sh --down` removes every `carla-air-*` container**, not only the three it starts,
+  and reports what it left. The examples and one-shot runs hold the same resources, and a
+  teardown that misses them is the containerised form of the leftover-graph failure rule 1
+  exists for.
 - **`stop.sh --all` and `status.sh` now know about the container.** Without that, rule 1 had a
   hole: `stop.sh` would report success while the container held 3.3 GB of VRAM.
 - **Not yet measured:** whether the container costs throughput. Odometry read 16.2 Hz against
