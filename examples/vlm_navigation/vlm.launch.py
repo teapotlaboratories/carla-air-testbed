@@ -21,7 +21,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.conditions import UnlessCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,15 +33,22 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("params", default_value=default_params),
         DeclareLaunchArgument(
-            "backend", default_value="geometric",
-            description="mock | scripted | geometric | oracle | claude"),
-        DeclareLaunchArgument(
             "instruction", default_value="fly forward and stay clear of buildings"),
+        # `backend:=none` starts the GROUNDING LAYER ONLY, for anyone bringing their own
+        # model. Grounding is the pixel-to-NED transform; it consumes /vlm/annotation and
+        # does not care what produced it. Without this the only way to reuse it was to run
+        # `ros2 run grounding grounding_node` by hand, or to run a shipped backend that then
+        # competes with your own for the same topic — see examples/byo_agent.py.
+        DeclareLaunchArgument(
+            "backend", default_value="geometric",
+            description="mock | scripted | geometric | oracle | claude | none"),
         Node(
             package="vlm_client", executable="vlm_node", name="vlm_client", output="screen",
             parameters=[LaunchConfiguration("params"),
                         {"backend": LaunchConfiguration("backend"),
                          "instruction": LaunchConfiguration("instruction")}],
+            condition=UnlessCondition(PythonExpression(
+                ["'", LaunchConfiguration("backend"), "' == 'none'"])),
         ),
         Node(
             package="grounding", executable="grounding_node", name="grounding",

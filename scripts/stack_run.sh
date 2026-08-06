@@ -73,4 +73,11 @@ DOCKER_ARGS=(
 )
 [ "$DETACH" -eq 1 ] && DOCKER_ARGS+=(-d) || DOCKER_ARGS+=(-i)
 
-exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" "$PROJ/$CMD $*"
+# Source ROS and the workspace before running. The .sh examples do it themselves, but a
+# bare .py cannot, and `stack_run.sh examples/byo_agent.py` failing with
+# "No module named 'rclpy'" is a gap in the runner rather than in the thing being run.
+# Sourcing twice is harmless.
+exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" \
+    "source /opt/ros/jazzy/setup.bash \
+     && source $PROJ/ros2_ws/install/setup.bash \
+     && exec $PROJ/$CMD $*"
