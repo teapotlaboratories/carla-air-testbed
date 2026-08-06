@@ -109,6 +109,12 @@ across the namespace, and the result is a graph that discovers cleanly and deliv
 Measured: NO DATA without it, 17.9 Hz with it. A genuinely remote machine is never offered
 that locator and does not need the profile — but it costs nothing to keep it set.
 
+Verified on two DIFFERENT interfaces, because binding to 0.0.0.0 only means anything if a
+second address actually works: over NetBird (100.127.184.189) odometry at 17.9 Hz, and over
+the LAN (10.0.0.72) odometry at 16.1 Hz with the camera at 4.0 Hz. NOT verified from a
+genuinely separate machine — there is only one host here — so the remaining unknown is
+whether something upstream drops the traffic, not whether the configuration is right.
+
 Ctrl-C to stop. Data flows peer-to-peer; this process only brokers introductions, so your
 camera frames never pass through it.
 EOF
