@@ -1741,7 +1741,33 @@ network, no key. See `tests/test_claude_backend.py`.
 
 ## Packaging
 
-### P-01 · Containerise the stack — **blocked on non-nested Docker**
+### P-01 · Containerise the stack — **blocker may be stale, needs retesting** *(2026-08-06)*
+
+> **The recorded blocker no longer describes this machine.** It was deferred on 2026-08-01
+> because `/etc/cdi-local` held 61 driver libs and **no `libGLX_nvidia.so.0`**, so Vulkan could
+> not create an instance in a nested container. Rechecked 2026-08-06:
+>
+> - `libGLX_nvidia.so.0` is present on this host **and inside a nested Docker container**, at
+>   `/usr/lib/x86_64-linux-gnu/`;
+> - both `/etc/cdi-local/nvidia.yaml` and `/etc/cdi/nvidia.yaml` reference it;
+> - `docker` is usable from here and `--device nvidia.com/gpu=all` resolves.
+>
+> What is still missing in the container is the **ICD JSON** — `/usr/share/vulkan/icd.d/` is
+> empty — which is a text file pointing at the library, and is a problem this repository
+> already solves: `run_sim.sh` synthesises a corrected ICD from `ldconfig` when the system one
+> is unusable, for exactly this reason in the distrobox.
+>
+> **Not claimed: that it works.** No Vulkan instance has been created in a container. What is
+> established is that the specific cause on record is gone, and the remaining gap has existing
+> code for it. The next step is to rebuild the `sim` image and try, not to keep quoting a
+> blocker measured five days ago against a machine that has changed.
+>
+> Also worth separating: **two of the three images never needed Vulkan.** `sim-bridge` ran the
+> full offline suite and the `ros:jazzy-ros-base` image built every message and loaded the
+> cross-interpreter seam. Containerising the sidecar and the ROS graph while leaving the
+> simulator on the host is available today and does not depend on any of the above.
+
+### P-01 · Containerise the stack — original entry, blocked on non-nested Docker
 
 Deferred 2026-08-01, not abandoned. The work was reverted from the tree; this entry keeps
 what was learned so it resumes from here rather than from scratch.
