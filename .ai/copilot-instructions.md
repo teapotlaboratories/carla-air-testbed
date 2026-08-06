@@ -84,8 +84,9 @@ Note `colcon --symlink-install` still needs a rebuild for `ament_python` package
 
 Only when explicitly asked in that request, and **never during weekday work hours** (Mon–Fri
 08:00–17:59 Pacific; the machine clock is UTC, convert first). No back-dating or `--amend`
-to dodge the window. Code changes branch and land through a PR; doc-only changes may go
-straight to the default branch. Run `/review` before any merge and resolve what it flags;
+to dodge the window. Code changes branch and land through a PR — ALWAYS, every feature, no
+size exemption, enforced by a pre-commit hook (`scripts/install_hooks.sh`); doc-only changes
+may go straight to the default branch. Run `/review` before any merge and resolve what it flags;
 default merge is `--rebase`. Never merge unreviewed.
 
 ## No AI attribution anywhere

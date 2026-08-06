@@ -73,3 +73,8 @@ Kept inline so they survive even if the import above is truncated. Full reasonin
    default.** Everything reads as the owner's work.
 8. **Never `git commit` or `git push` unless asked in that same request.** A prior approval
    does not carry to the next commit.
+9. **Code changes go on a branch and land through a PR — ALWAYS, every feature, no size
+   exemption.** `sim_bridge/`, `ros2_ws/`, `scripts/`, `configs/`, `docker/`, `examples/`,
+   `tests/`. A one-line fix is still a branch. Doc-only may go straight to the default
+   branch. A `pre-commit` hook enforces this; install it with `scripts/install_hooks.sh`,
+   and if it fires, branch rather than `--no-verify`.

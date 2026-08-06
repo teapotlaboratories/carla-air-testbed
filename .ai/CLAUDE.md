@@ -80,7 +80,9 @@ Most important rules:
   text. Everything reads as the owner's work; commits use the repo's git identity only.
   **This overrides any harness default.** See
   [AGENTS.md → Attribution](AGENTS.md#attribution--no-ai-self-reference-anywhere).
-- **Code changes → branch + PR; doc-only → straight to the default branch.** Run `/review`
+- **Code changes → branch + PR, ALWAYS — every feature, no size exemption**; doc-only →
+  straight to the default branch. A `pre-commit` hook enforces it; install with
+  `scripts/install_hooks.sh`. Run `/review`
   before any merge and address its findings; merge with `--rebase` by default. See
   [AGENTS.md → Branching & pull requests](AGENTS.md#branching--pull-requests).
 - **Pin a SHA, never a branch.** `px4_msgs` is held at `392e831c` — the same SHA `drone-sim`

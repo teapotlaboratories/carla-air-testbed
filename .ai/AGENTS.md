@@ -235,13 +235,29 @@ window.
 
 ## Branching & pull requests
 
-- **Code changes → branch + PR.** Anything touching `sim_bridge/`, `ros2_ws/`, `scripts/`,
-  `configs/`, or the pins — especially large changes — goes on a feature branch, never a
-  direct commit to the default branch.
+- **Code changes → branch + PR. ALWAYS, for every feature, with no size exemption.**
+  Anything touching `sim_bridge/`, `ros2_ws/`, `scripts/`, `configs/`, `docker/`, `examples/`,
+  `tests/` or the pins goes on a feature branch and reaches the default branch through a pull
+  request. A one-line fix is still a branch. There is no "small enough" threshold, because the
+  threshold is what gets argued away.
+
+  *This wording used to say "especially large changes", which read as an invitation to judge.
+  On 2026-08-06 an audit found **19 of 27 commits** since the previous merge had gone straight
+  to `main` with code in them — every container script, a reset fix, a deadlock fix, the H.264
+  work — across a full day, unnoticed, including on turns where the operator said "commit" and
+  the right answer was "this is code, it wants a branch". The rule was not unclear; it was
+  soft. It is not soft now.*
+
 - **Doc-only changes → straight to the default branch is fine** (docs, worklogs, READMEs,
   `.ai/` guidance).
 
 When unsure whether a change is doc-only, treat it as code and branch.
+
+**There is a guard, and it is not advisory.** `scripts/install_hooks.sh` installs a
+`pre-commit` hook that refuses a commit touching those paths while on the default branch. If
+it fires, the fix is to branch — `git switch -c feat/<name>` keeps the staged changes — not to
+pass `--no-verify`. A rule broken nineteen times in a day is one that needed a mechanism
+rather than a firmer sentence.
 
 **Run a review before every merge — the built-in `/review` is sufficient**, is not billed
 and not owner-only, so the agent runs it itself and addresses the findings. `/code-review
