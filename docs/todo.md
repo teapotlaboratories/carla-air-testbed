@@ -1757,10 +1757,33 @@ network, no key. See `tests/test_claude_backend.py`.
 > already solves: `run_sim.sh` synthesises a corrected ICD from `ldconfig` when the system one
 > is unusable, for exactly this reason in the distrobox.
 >
-> **Not claimed: that it works.** No Vulkan instance has been created in a container. What is
-> established is that the specific cause on record is gone, and the remaining gap has existing
-> code for it. The next step is to rebuild the `sim` image and try, not to keep quoting a
-> blocker measured five days ago against a machine that has changed.
+> **Retested properly 2026-08-06, and the blocker is REAL but differently shaped.** Walking it
+> forward step by step in a throwaway `ubuntu:24.04` container:
+>
+> | step | result |
+> |---|---|
+> | `--gpus '"device=nvidia.com/gpu=0"'` (what `drone-sim` uses) vs `--device nvidia.com/gpu=all` | **identical** — the flag is not the difference |
+> | `NVIDIA_DRIVER_CAPABILITIES=graphics,...` | no change; the ICD is injected either way |
+> | ICD location | `/etc/vulkan/icd.d/nvidia_icd.x86_64.json` — my first probe looked only in `/usr/share/vulkan/icd.d` and wrongly reported it absent |
+> | what the ICD points at | `/usr/lib64/libGLX_nvidia.so.0` — the **Fedora host path**, absent in an Ubuntu container. The same bug `run_sim.sh` fixes in the distrobox |
+> | corrected ICD -> real path | gets further: `libXext.so.6: cannot open shared object file` |
+> | add `libvulkan1 libxext6 libx11-6` | library now loads, and the failure becomes the one on record: `Could not get 'vkCreateInstance' via 'vk_icdGetInstanceProcAddr'` |
+> | bind-mount `libnvidia-api.so.1` (present in the distrobox, missing in the container) | **no change** |
+>
+> `ldd` reports nothing unresolved, because the missing piece is `dlopen`ed at runtime — which
+> is exactly why this surfaces as a missing entry point rather than a load error. The driver
+> core is there: `libnvidia-glvkspirv.so.610.43.03` and `libnvidia-glcore.so.610.43.03` both
+> present.
+>
+> **The open question, and it needs the operator.** `drone-sim` reportedly runs Cosys-AirSim in
+> a container on this machine. Its `sim_up.sh:200` uses
+> `--gpus '"device=nvidia.com/gpu=0"'` and `drone-sim/unreal:ue5.8`, whose image carries
+> `libvulkan.so.1` and a **second** ICD using a bare soname rather than an absolute path. But
+> that image ships no `vulkaninfo`, so **it has not been shown here that its container renders
+> on the GPU rather than falling back to llvmpipe** — which is what every configuration tested
+> above does. If that sim is confirmed GPU-rendering, the difference is in its image and is
+> worth copying; if it is not, then these measurements are consistent and nested Vulkan simply
+> does not work on this box.
 >
 > Also worth separating: **two of the three images never needed Vulkan.** `sim-bridge` ran the
 > full offline suite and the `ros:jazzy-ros-base` image built every message and loaded the
