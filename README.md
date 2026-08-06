@@ -173,6 +173,7 @@ Evidence: [`docs/worklog/`](docs/worklog/).
 |---|---|
 | [`docs/ros2-api.html`](docs/ros2-api.html) | **Commanding the aircraft from ROS 2** — five commands, twelve sensor streams, message types and code. Every figure measured against the running simulator. |
 | [`docs/dataflow.html`](docs/dataflow.html) | **How the data moves** — every protocol hop from UE4 render target to velocity setpoint, and why each one is there. |
+| [`docs/containers.html`](docs/containers.html) | **The stack in containers** — what runs where, how a frame reaches your code, and the two ways to fly it from outside a container. Diagrams of the namespaces and the data path. |
 | [`docs/rpc-path.html`](docs/rpc-path.html) | **The sidecar RPC path** — where a call lives, how it flows, and how one slow reply desynchronised the stream permanently. Backlog E-06, fixed. |
 | [`docs/guide.html`](docs/guide.html) | This README and the quick start, rendered as one page. |
 | [`docs/architecture.md`](docs/architecture.md) | What runs where, the measured numbers, and the traps that cost time. |

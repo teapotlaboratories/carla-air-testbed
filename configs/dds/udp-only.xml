@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast-DDS with shared memory turned OFF, so a HOST process can talk to the containerised
+  stack.
+
+      export FASTRTPS_DEFAULT_PROFILES_FILE=$PWD/configs/dds/udp-only.xml
+      export ROS_DOMAIN_ID=42
+      ros2 topic hz /fmu/out/vehicle_odometry
+
+  Why it is needed. The stack's containers share ONE IPC namespace and Fast-DDS prefers
+  shared memory over loopback UDP. A host process is in a different IPC namespace, so it
+  discovers the graph and then receives nothing — measured: NO DATA for topics publishing at
+  16 Hz inside. Forcing UDP costs a little throughput and makes the graph reachable from
+  anywhere on the network namespace.
+
+  Measured 2026-08-06: /fmu/out/vehicle_odometry at 13.9 Hz from the host with this profile,
+  against 16.4 Hz from inside a joined container.
+
+  The alternative, and the faster one, is to run your node in a container that JOINS the
+  stack's namespaces — scripts/stack_run.sh does exactly that.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>udp_only</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="udp_participant" is_default_profile="true">
+      <rtps>
+        <userTransports><transport_id>udp_only</transport_id></userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

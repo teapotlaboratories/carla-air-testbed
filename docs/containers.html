@@ -1,0 +1,681 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>carla-air testbed - the stack in containers</title>
+<style>
+  :root{
+    --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
+    --ink:#161A18; --ink-soft:#4A524C; --ink-faint:#6B736C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --air-wash:#DCEAF2;
+    --ground:#C8892B; --ground-wash:#F2E8D6;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+    --display:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;
+    --body:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#111512; --panel:#171C19; --sunk:#0D110F;
+      --ink:#E4E7E0; --ink-soft:#9BA49C; --ink-faint:#7C857D;
+      --rule:#2C332E; --rule-soft:#232925;
+      --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+      --air:#3BA5D4; --air-wash:#132A36;
+      --ground:#E0A643; --ground-wash:#2A2416;
+      --ok:#5FA351; --stop:#D25638;
+      --thead:#0B0E0C; --thead-ink:#D8DCD4;
+      --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
+    --ink:#161A18; --ink-soft:#4A524C; --ink-faint:#6B736C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --air-wash:#DCEAF2;
+    --ground:#C8892B; --ground-wash:#F2E8D6;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+  }
+  :root[data-theme="dark"]{
+    --paper:#111512; --panel:#171C19; --sunk:#0D110F;
+    --ink:#E4E7E0; --ink-soft:#9BA49C; --ink-faint:#7C857D;
+    --rule:#2C332E; --rule-soft:#232925;
+    --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+    --air:#3BA5D4; --air-wash:#132A36;
+    --ground:#E0A643; --ground-wash:#2A2416;
+    --ok:#5FA351; --stop:#D25638;
+    --thead:#0B0E0C; --thead-ink:#D8DCD4;
+    --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:var(--body);font-size:16px;line-height:1.62}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:2.5rem clamp(1rem,4vw,2.5rem) 6rem;
+        display:flex;flex-direction:column;gap:2.75rem}
+  .prose{max-width:66ch;display:flex;flex-direction:column;gap:1rem}
+  .prose > *{margin:0}
+
+  .eyebrow{font-family:var(--display);font-size:.68rem;font-weight:700;letter-spacing:.16em;
+           text-transform:uppercase;color:var(--ground)}
+  h1{font-family:var(--display);font-size:clamp(1.9rem,4.6vw,2.6rem);font-weight:800;
+     letter-spacing:-.018em;line-height:1.06;margin:.3rem 0 0;text-wrap:balance}
+  .lede{font-size:1.06rem;color:var(--ink-soft);max-width:62ch;text-wrap:pretty;margin:.6rem 0 0}
+  h2{font-family:var(--display);font-size:1.2rem;font-weight:800;letter-spacing:.015em;
+     margin:0 0 .2rem;padding-bottom:.4rem;border-bottom:2px solid var(--chrome);
+     text-wrap:balance;display:flex;align-items:baseline;gap:.6rem}
+  h2 .n{font-family:var(--mono);font-size:.75rem;font-weight:700;color:var(--chrome-ink);
+        border:1px solid var(--chrome);border-radius:2px;padding:.05rem .35rem;flex:none}
+  h3{font-family:var(--display);font-size:.95rem;font-weight:700;letter-spacing:.02em;margin:0}
+  p{text-wrap:pretty}
+  a{color:var(--chrome-ink)}
+  strong{font-weight:700}
+  code{font-family:var(--mono);font-size:.86em;background:var(--sunk);
+       border:1px solid var(--rule-soft);border-radius:2px;padding:.05em .32em}
+
+  section{display:flex;flex-direction:column;gap:1.1rem}
+
+
+  /* ---- diagrams: inline SVG, themed through the same tokens as everything else.
+     Hand-built rather than a diagram library so they render identically in the artifact
+     viewer, an inline preview, and a plain browser opening the saved file. ---- */
+  svg.dg{display:block;width:100%;height:auto}
+  svg.dg text{font-family:var(--display);fill:var(--ink)}
+  svg.dg .t-node{font-size:13px;font-weight:700}
+  svg.dg .t-sub{font-size:10.5px;font-family:var(--mono);fill:var(--ink-soft)}
+  svg.dg .t-grp{font-size:9.5px;font-weight:700;letter-spacing:.13em;fill:var(--ink-faint)}
+  svg.dg .t-wire{font-size:10.5px;font-family:var(--mono);fill:var(--chrome-ink)}
+  svg.dg .t-note{font-size:10px;font-family:var(--mono);fill:var(--ink-faint)}
+  svg.dg .box{fill:var(--panel);stroke:var(--rule);stroke-width:1.4}
+  svg.dg .box.g{fill:var(--ground-wash);stroke:var(--ground)}
+  svg.dg .box.a{fill:var(--air-wash);stroke:var(--air)}
+  svg.dg .grp{fill:none;stroke:var(--rule);stroke-width:1.2;stroke-dasharray:5 4}
+  svg.dg .wire{stroke:var(--chrome);stroke-width:1.5;fill:none}
+  svg.dg .wire.dash{stroke-dasharray:4 3}
+  svg.dg .life{stroke:var(--rule);stroke-width:1.2;stroke-dasharray:3 4}
+  svg.dg .loopbox{fill:none;stroke:var(--ground);stroke-width:1.2;stroke-dasharray:4 3}
+
+  /* ---- figures ---- */
+  .figure{border:1px solid var(--rule);border-radius:4px;background:var(--panel);overflow:hidden}
+  .figure figcaption{font-family:var(--display);font-size:.66rem;letter-spacing:.11em;
+       text-transform:uppercase;color:var(--ink-soft);padding:.5rem .8rem;
+       border-bottom:1px solid var(--rule)}
+  .figure .scroll{overflow-x:auto;padding:1.1rem}
+
+  /* ---- the two interpreter halves ---- */
+  .halves{display:grid;gap:1rem;grid-template-columns:1fr}
+  @media(min-width:820px){.halves{grid-template-columns:1fr auto 1fr;align-items:stretch}}
+  .half{border:1px solid var(--rule);border-radius:4px;padding:.9rem 1rem;
+        display:flex;flex-direction:column;gap:.5rem}
+  .half.g{background:var(--ground-wash);border-color:var(--ground)}
+  .half.a{background:var(--air-wash);border-color:var(--air)}
+  .half .tag{font-family:var(--display);font-size:.63rem;letter-spacing:.12em;
+             text-transform:uppercase;font-weight:700}
+  .half.g .tag{color:var(--ground)} .half.a .tag{color:var(--air)}
+  .half ul{margin:0;padding-left:1.05rem;font-size:.88rem;color:var(--ink-soft)}
+  .half li{margin:.18rem 0}
+  .seam{display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:.35rem;padding:.5rem;min-width:9rem}
+  .seam .bar{width:2px;flex:1;min-height:1.6rem;background:var(--chrome)}
+  .seam .lbl{font-family:var(--mono);font-size:.68rem;color:var(--chrome-ink);
+             text-align:center;line-height:1.35}
+
+  /* ---- tables ---- */
+  .tw{overflow-x:auto;border:1px solid var(--rule);border-radius:4px}
+  table{border-collapse:collapse;width:100%;font-size:.85rem;
+        font-variant-numeric:tabular-nums}
+  thead th{background:var(--thead);color:var(--thead-ink);text-align:left;
+           font-family:var(--display);font-size:.64rem;letter-spacing:.11em;
+           text-transform:uppercase;padding:.5rem .75rem;font-weight:700;white-space:nowrap}
+  td,tbody th{padding:.45rem .75rem;border-top:1px solid var(--rule-soft);
+              text-align:left;vertical-align:top}
+  tbody th{font-weight:600;white-space:nowrap;font-family:var(--mono);font-size:.82rem}
+  tbody tr:nth-child(even){background:var(--panel)}
+  td code,tbody th code{background:transparent;border:0;padding:0}
+  .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+
+  .pill{display:inline-block;font-family:var(--display);font-size:.6rem;font-weight:700;
+        letter-spacing:.08em;text-transform:uppercase;padding:.12rem .4rem;border-radius:2px;
+        color:#fff;white-space:nowrap}
+  .pill.air{background:var(--air)} .pill.ground{background:var(--ground)}
+  .pill.net{background:var(--chrome)} .pill.stop{background:var(--stop)}
+
+  /* ---- callouts ---- */
+  .note{border-left:3px solid var(--chrome);background:var(--panel);
+        padding:.8rem 1rem;border-radius:0 3px 3px 0;font-size:.93rem;
+        display:flex;flex-direction:column;gap:.5rem}
+  .note.trap{border-left-color:var(--stop)}
+  .note.why{border-left-color:var(--ground)}
+  .note > *{margin:0}
+  .note .t{font-family:var(--display);font-size:.64rem;font-weight:700;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--ink-soft)}
+
+  pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);
+      font-size:.78rem;line-height:1.6;margin:0;padding:.9rem 1rem;border-radius:3px;
+      overflow-x:auto}
+  pre .c{color:var(--code-dim)}
+  /* This page's snippets also mark shell keywords, literals and strings. Same palette as
+     docs/guide.html so the code blocks read as one family across the doc set. */
+  pre .k{color:#7FD8A0}
+  pre .n{color:#E0A643}
+  pre .s{color:#8FC7E8}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:1px;
+         background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+  .stat{background:var(--panel);padding:.7rem .85rem;display:flex;flex-direction:column;gap:.15rem}
+  .stat .k{font-family:var(--display);font-size:.6rem;letter-spacing:.1em;
+           text-transform:uppercase;color:var(--ink-faint)}
+  .stat .v{font-family:var(--mono);font-size:1.15rem;font-weight:600;
+           font-variant-numeric:tabular-nums}
+
+  /* ---- theme switcher ---- */
+  /* Escapes the 66ch prose column so the switcher lines up with the stats strip
+     below it rather than floating in the middle of the page. */
+  .topbar{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;max-width:none}
+  .topbar .eyebrow{margin:0}
+  .themer{margin-left:auto;display:inline-flex;border:1px solid var(--rule);
+          border-radius:3px;overflow:hidden;background:var(--panel)}
+  .themer button{font-family:var(--display);font-size:.62rem;font-weight:700;
+          letter-spacing:.1em;text-transform:uppercase;padding:.32rem .6rem;
+          border:0;border-right:1px solid var(--rule);background:transparent;
+          color:var(--ink-soft);cursor:pointer;line-height:1.6}
+  .themer button:last-child{border-right:0}
+  .themer button:hover{color:var(--ink)}
+  .themer button[aria-pressed="true"]{background:var(--chrome);color:#fff}
+  .themer button:focus-visible{outline:2px solid var(--chrome);outline-offset:-2px}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <header class="prose">
+    <div class="topbar">
+      <div class="eyebrow">carla-air testbed &middot; containers</div>
+      <div class="themer" role="group" aria-label="Colour theme">
+        <button type="button" data-theme-set="auto"  aria-pressed="true">Auto</button>
+        <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+        <button type="button" data-theme-set="dark"  aria-pressed="false">Dark</button>
+      </div>
+    </div>
+    <h1>The stack in containers</h1>
+    <p class="lede">
+      Three containers, one GPU, and a drone you fly over ROS 2 from outside all of them.
+      This page is what runs where, how a frame gets from the render thread to your code, and
+      the two ways to reach the graph &mdash; both measured on 2026-08-06, neither guessed.
+    </p>
+  </header>
+
+  <section class="prose">
+    <div class="stats">
+      <div class="stat"><span class="k">Containers</span><span class="v">3</span></div>
+      <div class="stat"><span class="k">GPU held</span><span class="v">3.3 GB</span></div>
+      <div class="stat"><span class="k">Render</span><span class="v">discrete</span></div>
+      <div class="stat"><span class="k">Episode</span><span class="v">19.0 m</span></div>
+      <div class="stat"><span class="k">Steps</span><span class="v">13</span></div>
+    </div>
+    <p style="font-size:.87rem;color:var(--ink-soft)">
+      19.0&nbsp;m in 13 steps is the <em>documented baseline</em> for <code>cross_the_plaza</code>.
+      The containerised stack does not merely run &mdash; it produces the same answer, which is
+      the only claim worth making about it.
+    </p>
+  </section>
+
+  <!-- ============================ WHAT RUNS WHERE ============================ -->
+  <section class="prose">
+    <h2>What runs where</h2>
+    <p>
+      The split is not a packaging preference. <code>libcarla</code> is an ABI-tagged
+      <strong>cpython-310</strong> extension and ROS 2 Jazzy is <strong>3.12</strong>; neither
+      interpreter can load the other&rsquo;s C extensions. That is why this project is two
+      processes, and why it is two images.
+    </p>
+  </section>
+
+  <figure class="figure">
+    <div class="scroll">
+      <svg role="img" viewBox="0 0 860 420" style="max-width:100%;height:auto"
+           aria-label="Three containers: the simulator owns the network and IPC namespaces; the sidecar and ROS graph join them. The release and repository are bind-mounted; a shared volume carries the Unix socket.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+          <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1584B5"/>
+          </marker>
+        </defs>
+
+        <!-- namespace envelope -->
+        <rect x="18" y="54" width="560" height="316" rx="6" fill="none"
+              stroke="currentColor" stroke-opacity=".33" stroke-dasharray="5 4"/>
+        <text x="30" y="46" font-size="11.5" fill="currentColor" opacity=".75"
+              font-family="ui-sans-serif,system-ui,sans-serif">
+          shared network + IPC namespace (donated by the simulator)
+        </text>
+
+        <!-- sim -->
+        <rect x="42" y="80" width="216" height="112" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="56" y="104" font-size="13" font-weight="700" fill="currentColor">carla-air-sim</text>
+        <text x="56" y="124" font-size="11.5" fill="currentColor" opacity=".8">CarlaUE4 &middot; Unreal</text>
+        <text x="56" y="141" font-size="11.5" fill="#1584B5">hardware Vulkan, GPU 1</text>
+        <text x="56" y="160" font-size="11" fill="currentColor" opacity=".65">serves :2000 and :41451</text>
+        <text x="56" y="177" font-size="11" fill="currentColor" opacity=".65">--ipc shareable</text>
+
+        <!-- bridge -->
+        <rect x="42" y="228" width="216" height="112" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="56" y="252" font-size="13" font-weight="700" fill="currentColor">carla-air-bridge</text>
+        <text x="56" y="272" font-size="11.5" fill="currentColor" opacity=".8">sidecar &middot; python 3.10</text>
+        <text x="56" y="289" font-size="11" fill="currentColor" opacity=".65">carla + airsim clients</text>
+        <text x="56" y="306" font-size="11" fill="currentColor" opacity=".65">Ubuntu 22.04 ships 3.10</text>
+        <text x="56" y="325" font-size="11" fill="currentColor" opacity=".65">serves the UDS socket</text>
+
+        <!-- ros -->
+        <rect x="330" y="228" width="216" height="112" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="344" y="252" font-size="13" font-weight="700" fill="currentColor">carla-air-ros</text>
+        <text x="344" y="272" font-size="11.5" fill="currentColor" opacity=".8">bridge node &middot; python 3.12</text>
+        <text x="344" y="289" font-size="11" fill="currentColor" opacity=".65">ros:jazzy-ros-base</text>
+        <text x="344" y="306" font-size="11" fill="currentColor" opacity=".65">publishes /fmu, /camera, /sim</text>
+        <text x="344" y="325" font-size="11" fill="currentColor" opacity=".65">ROS_DOMAIN_ID 42</text>
+
+        <!-- edges inside -->
+        <line x1="150" y1="192" x2="150" y2="226" stroke="#1584B5" stroke-width="1.6" marker-end="url(#arw)"/>
+        <text x="158" y="213" font-size="11" fill="#1584B5">127.0.0.1:2000 / :41451</text>
+
+        <line x1="258" y1="284" x2="328" y2="284" stroke="#1584B5" stroke-width="1.6" marker-end="url(#arw)"/>
+        <text x="246" y="274" font-size="11" fill="#1584B5">UDS</text>
+
+        <!-- mounts -->
+        <rect x="622" y="86" width="216" height="72" rx="4" fill="none" stroke="currentColor" stroke-opacity=".55" stroke-dasharray="3 3"/>
+        <text x="636" y="108" font-size="12" font-weight="700" fill="currentColor" opacity=".85">release, 18 GB</text>
+        <text x="636" y="126" font-size="11" fill="currentColor" opacity=".6">mounted, never baked</text>
+        <text x="636" y="143" font-size="11" fill="currentColor" opacity=".6">/opt/carla-air</text>
+        <line x1="620" y1="122" x2="262" y2="130" stroke="currentColor" stroke-opacity=".45" marker-end="url(#ar)"/>
+
+        <rect x="622" y="206" width="216" height="72" rx="4" fill="none" stroke="currentColor" stroke-opacity=".55" stroke-dasharray="3 3"/>
+        <text x="636" y="228" font-size="12" font-weight="700" fill="currentColor" opacity=".85">repository</text>
+        <text x="636" y="246" font-size="11" fill="currentColor" opacity=".6">at its OWN absolute path</text>
+        <text x="636" y="263" font-size="11" fill="currentColor" opacity=".6">symlink-install needs it</text>
+        <line x1="620" y1="242" x2="550" y2="270" stroke="currentColor" stroke-opacity=".45" marker-end="url(#ar)"/>
+
+        <rect x="622" y="308" width="216" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity=".55" stroke-dasharray="3 3"/>
+        <text x="636" y="330" font-size="12" font-weight="700" fill="currentColor" opacity=".85">volume: carla-air-run</text>
+        <text x="636" y="348" font-size="11" fill="currentColor" opacity=".6">/run/carla-air/sim.sock</text>
+        <line x1="620" y1="338" x2="550" y2="320" stroke="currentColor" stroke-opacity=".45" marker-end="url(#ar)"/>
+      </svg>
+    </div>
+    <figcaption>
+      The simulator donates the namespaces; the other two join, so 127.0.0.1 means the same
+      thing to all three. Dashed boxes are bind mounts, not images.
+    </figcaption>
+  </figure>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>Container</th><th>Image</th><th>Interpreter</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr><th><code>carla-air-sim</code></th><td><code>carla-air/sim:v0.1.7</code></td><td>&mdash;</td>
+            <td>CarlaUE4 on the GPU. Owns the network and IPC namespaces and serves CARLA on
+                :2000 and AirSim on :41451.</td></tr>
+        <tr><th><code>carla-air-bridge</code></th><td><code>carla-air/sim-bridge:1</code></td><td>3.10</td>
+            <td>The sidecar. Holds the <code>carla</code> and <code>airsim</code> clients and
+                answers RPC over a Unix socket.</td></tr>
+        <tr><th><code>carla-air-ros</code></th><td><code>carla-air/ros:1</code></td><td>3.12</td>
+            <td>The bridge node. Turns sidecar RPC into <code>/fmu/*</code>,
+                <code>/camera/*</code>, <code>/sensors/*</code> and the <code>/sim/*</code>
+                services.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================ DATA FLOW ============================ -->
+  <section class="prose">
+    <h2>Where the data flows</h2>
+    <p>
+      One camera frame crosses four boundaries on its way to your code, and the interesting one
+      is the third: a process boundary that exists because two Python versions cannot share a
+      C extension.
+    </p>
+  </section>
+
+  <figure class="figure">
+    <div class="scroll">
+      <svg role="img" viewBox="0 0 880 300" style="max-width:100%;height:auto"
+           aria-label="A camera frame travels from the Unreal render target through AirSim RPC to the 3.10 sidecar, over a Unix socket with msgpack framing to the 3.12 ROS bridge, and out as ROS 2 topics to your agent.">
+        <defs>
+          <marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1584B5"/>
+          </marker>
+          <marker id="fg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#C8892B"/>
+          </marker>
+        </defs>
+
+        <!-- the seam -->
+        <line x1="440" y1="34" x2="440" y2="252" stroke="#C8892B" stroke-width="1.4" stroke-dasharray="6 4"/>
+        <text x="448" y="48" font-size="11.5" font-weight="700" fill="#C8892B">the two-interpreter seam</text>
+        <text x="448" y="64" font-size="11" fill="#C8892B" opacity=".85">3.10 &#8592; | &#8594; 3.12</text>
+
+        <!-- boxes -->
+        <rect x="24" y="96" width="150" height="66" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="38" y="122" font-size="12.5" font-weight="700" fill="currentColor">Unreal</text>
+        <text x="38" y="140" font-size="11" fill="currentColor" opacity=".7">render target, GPU</text>
+
+        <rect x="234" y="96" width="150" height="66" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="248" y="122" font-size="12.5" font-weight="700" fill="currentColor">sidecar 3.10</text>
+        <text x="248" y="140" font-size="11" fill="currentColor" opacity=".7">airsim client</text>
+
+        <rect x="496" y="96" width="150" height="66" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="510" y="122" font-size="12.5" font-weight="700" fill="currentColor">bridge 3.12</text>
+        <text x="510" y="140" font-size="11" fill="currentColor" opacity=".7">rclpy publisher</text>
+
+        <rect x="706" y="96" width="150" height="66" rx="4" fill="none" stroke="#1584B5" stroke-width="1.8"/>
+        <text x="720" y="122" font-size="12.5" font-weight="700" fill="#1584B5">your agent</text>
+        <text x="720" y="140" font-size="11" fill="#1584B5" opacity=".85">any ROS 2 client</text>
+
+        <!-- arrows -->
+        <line x1="174" y1="129" x2="232" y2="129" stroke="#1584B5" stroke-width="1.6" marker-end="url(#fa)"/>
+        <text x="150" y="184" font-size="11" fill="currentColor" opacity=".75">AirSim RPC</text>
+        <text x="150" y="199" font-size="11" fill="currentColor" opacity=".55">:41451, msgpack</text>
+
+        <line x1="384" y1="129" x2="494" y2="129" stroke="#C8892B" stroke-width="1.8" marker-end="url(#fg)"/>
+        <text x="392" y="184" font-size="11" fill="#C8892B">Unix socket</text>
+        <text x="392" y="199" font-size="11" fill="#C8892B" opacity=".8">4-byte length + msgpack</text>
+        <text x="392" y="214" font-size="11" fill="#C8892B" opacity=".8">/run/carla-air/sim.sock</text>
+
+        <line x1="646" y1="129" x2="704" y2="129" stroke="#1584B5" stroke-width="1.6" marker-end="url(#fa)"/>
+        <text x="620" y="184" font-size="11" fill="currentColor" opacity=".75">ROS 2 topics</text>
+        <text x="620" y="199" font-size="11" fill="currentColor" opacity=".55">DDS, domain 42</text>
+
+        <!-- return path -->
+        <path d="M781,162 L781,240 L309,240 L309,164" fill="none" stroke="#1584B5"
+              stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#fa)"/>
+        <text x="470" y="258" font-size="11" fill="#1584B5" text-anchor="middle">
+          /fmu/in/trajectory_setpoint &mdash; commands travel the same path in reverse
+        </text>
+      </svg>
+    </div>
+    <figcaption>
+      A frame out, a setpoint back. The amber hop is the only one that exists for a language
+      reason rather than a physical one.
+    </figcaption>
+  </figure>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Hop</th><th>Carried by</th><th>Measured</th></tr></thead>
+      <tbody>
+        <tr><th>Unreal &rarr; sidecar</th><td><code>AirSim msgpack-rpc :41451</code></td><td class="num">&mdash;</td></tr>
+        <tr><th>sidecar &rarr; bridge</th><td><code>Unix socket, 4-byte length + msgpack</code></td><td class="num">&mdash;</td></tr>
+        <tr><th><code>/fmu/out/vehicle_odometry</code></th><td><code>DDS</code></td><td class="num">16.4 Hz</td></tr>
+        <tr><th><code>/camera/rgb/image_raw</code></th><td><code>DDS</code></td><td class="num">4.5 Hz</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================ CONTROL FROM OUTSIDE ============================ -->
+  <section class="prose">
+    <h2>Flying it from outside the containers</h2>
+    <p>
+      The simulator ships no navigator. Whatever decides where the aircraft goes is
+      <strong>yours</strong>, and it connects over the public ROS 2 interface like any other
+      client. There are two ways in, and the choice is about which namespace your code lives in.
+    </p>
+  </section>
+
+  <div class="note trap">
+    <span class="t">Read this before debugging a silent graph</span>
+    <p>
+      The containers share one IPC namespace and Fast-DDS <strong>prefers shared memory</strong>
+      over loopback UDP. A process on the host is in a different IPC namespace, so it discovers
+      the graph and then receives nothing. Measured: <code>ros2 topic hz</code> on the host
+      reported <strong>NO DATA</strong> for topics publishing at 16&nbsp;Hz inside. Nothing
+      errors. This is not a bug to fix &mdash; it is what containerising a DDS graph means.
+    </p>
+  </div>
+
+  <figure class="figure">
+    <div class="scroll">
+      <svg role="img" viewBox="0 0 860 300" style="max-width:100%;height:auto"
+           aria-label="Two ways to reach the graph: join the container namespaces and use shared memory, or run on the host with Fast-DDS forced to UDP only.">
+        <defs>
+          <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3F7A34"/>
+          </marker>
+          <marker id="cb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1584B5"/>
+          </marker>
+          <marker id="cx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#A3341F"/>
+          </marker>
+        </defs>
+
+        <!-- the graph -->
+        <rect x="330" y="112" width="200" height="76" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="430" y="140" font-size="13" font-weight="700" fill="currentColor" text-anchor="middle">the ROS 2 graph</text>
+        <text x="430" y="159" font-size="11" fill="currentColor" opacity=".7" text-anchor="middle">inside carla-air-ros</text>
+        <text x="430" y="176" font-size="11" fill="currentColor" opacity=".7" text-anchor="middle">domain 42</text>
+
+        <!-- option A: joined container -->
+        <rect x="26" y="42" width="212" height="76" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.8"/>
+        <text x="40" y="68" font-size="12.5" font-weight="700" fill="#3F7A34">your node, in a container</text>
+        <text x="40" y="86" font-size="11" fill="#3F7A34" opacity=".85">joins network + IPC</text>
+        <text x="40" y="103" font-size="11" fill="#3F7A34" opacity=".85">scripts/stack_run.sh</text>
+        <path d="M238,88 C290,92 300,120 328,134" fill="none" stroke="#3F7A34" stroke-width="1.8" marker-end="url(#ca)"/>
+        <text x="250" y="112" font-size="11" fill="#3F7A34">shared memory &mdash; 16.4 Hz</text>
+
+        <!-- option B: host, udp -->
+        <rect x="26" y="196" width="212" height="76" rx="4" fill="none" stroke="#1584B5" stroke-width="1.8"/>
+        <text x="40" y="222" font-size="12.5" font-weight="700" fill="#1584B5">your node, on the host</text>
+        <text x="40" y="240" font-size="11" fill="#1584B5" opacity=".85">Fast-DDS forced to UDP</text>
+        <text x="40" y="257" font-size="11" fill="#1584B5" opacity=".85">configs/dds/udp-only.xml</text>
+        <path d="M238,234 C292,230 302,182 328,168" fill="none" stroke="#1584B5" stroke-width="1.8" marker-end="url(#cb)"/>
+        <text x="250" y="212" font-size="11" fill="#1584B5">loopback UDP &mdash; 13.9 Hz</text>
+
+        <!-- the failing default -->
+        <rect x="612" y="196" width="220" height="76" rx="4" fill="none" stroke="#A3341F" stroke-width="1.4" stroke-dasharray="4 3"/>
+        <text x="626" y="222" font-size="12.5" font-weight="700" fill="#A3341F">host, default settings</text>
+        <text x="626" y="240" font-size="11" fill="#A3341F" opacity=".85">discovers the graph,</text>
+        <text x="626" y="257" font-size="11" fill="#A3341F" opacity=".85">receives nothing</text>
+        <path d="M610,224 C570,208 560,190 532,176" fill="none" stroke="#A3341F" stroke-width="1.4"
+              stroke-dasharray="4 3" marker-end="url(#cx)"/>
+        <text x="536" y="238" font-size="11" fill="#A3341F">NO DATA</text>
+      </svg>
+    </div>
+    <figcaption>
+      Two routes that work and one that silently does not. The rates are measured, one sample
+      each &mdash; treat them as an ordering, not a benchmark.
+    </figcaption>
+  </figure>
+
+  <section class="prose">
+    <h3>Route A &mdash; run your node in the stack</h3>
+    <p>Faster, and what <code>stack_run.sh</code> exists for. Your container joins the same
+       network and IPC namespaces, so shared memory works.</p>
+  </section>
+<pre><span class="c"># bring the stack up</span>
+./scripts/stack_up.sh --config configs/testbed.yaml
+
+<span class="c"># anything in the repo, inside the stack</span>
+./scripts/stack_run.sh -d examples/navigation/run.sh
+./scripts/stack_run.sh scripts/run_episode.sh --scenario cross_the_plaza --seeds 1
+
+<span class="c"># or your own image, joined by hand</span>
+docker run --rm -it \
+  --network container:carla-air-sim \
+  --ipc container:carla-air-sim \
+  -e ROS_DOMAIN_ID=42 \
+  your/agent:latest</pre>
+
+  <section class="prose">
+    <h3>Route B &mdash; stay on the host</h3>
+    <p>Slower and simpler. Force Fast-DDS off shared memory and the graph appears.</p>
+  </section>
+<pre><span class="c"># measured: /fmu/out/vehicle_odometry at 13.9 Hz from the host</span>
+<span class="k">export</span> FASTRTPS_DEFAULT_PROFILES_FILE=<span class="s">$PWD/configs/dds/udp-only.xml</span>
+<span class="k">export</span> ROS_DOMAIN_ID=<span class="n">42</span>
+ros2 topic hz /fmu/out/vehicle_odometry</pre>
+
+  <section class="prose">
+    <h3>What you get either way</h3>
+  </section>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Interface</th><th>Direction</th><th>Carries</th></tr></thead>
+      <tbody>
+        <tr><th><code>/fmu/out/*</code></th><td>read</td>
+            <td>odometry, IMU, barometer, magnetometer, GPS &mdash; PX4-shaped</td></tr>
+        <tr><th><code>/camera/*</code></th><td>read</td>
+            <td>rgb, depth, segmentation, <code>camera_info</code>, camera pose</td></tr>
+        <tr><th><code>/sensors/lidar/points</code></th><td>read</td><td>semantic lidar</td></tr>
+        <tr><th><code>/fmu/in/*</code></th><td>write</td>
+            <td>trajectory setpoint, attitude, vehicle command &mdash; takeoff, land, fly</td></tr>
+        <tr><th><code>/sim/*</code></th><td>call</td>
+            <td>reset vehicle, spawn traffic, destroy actors, set weather, camera pose,
+                chase recording</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note why">
+    <span class="t">Nothing here ships an agent</span>
+    <p>
+      <code>examples/ros2_full_control.py</code> takes off, flies a waypoint, holds a velocity,
+      commands an attitude and lands &mdash; importing <strong>nothing</strong> from this
+      project. That is the test that the interface stands on its own, and it is why the answer
+      to &ldquo;how do I control the drone&rdquo; is the same whether you are in a container or
+      not.
+    </p>
+  </div>
+
+  <!-- ============================ GOTCHAS ============================ -->
+  <section class="prose">
+    <h2>Three things that had to be right</h2>
+    <p>Each was found by it failing, and each fails in a way that names something else.</p>
+  </section>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>What</th><th>Symptom if you skip it</th></tr></thead>
+      <tbody>
+        <tr><th><code>--ipc shareable</code> on the simulator</th>
+            <td>the ROS container will not start: <code>failed to join IPC
+                namespace &hellip; non-shareable IPC</code>. <code>--ipc host</code> is refused
+                by this daemon under rootless/nested Docker.</td></tr>
+        <tr><th>repository mounted at its <em>own</em> absolute path</th>
+            <td><code>Package 'bringup' not found</code>.
+                <code>colcon build --symlink-install</code> fills the install tree with
+                absolute symlinks; any other mount point leaves them dangling.</td></tr>
+        <tr><th><code>python3-msgpack</code> in the ROS image</th>
+            <td>the bridge node dies at import with a bare
+                <code>ModuleNotFoundError</code> naming nothing about the seam
+                &mdash; <code>protocol.py</code> imports it at module scope.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note trap">
+    <span class="t">And the one that cost five days</span>
+    <p>
+      GPU passthrough was recorded as impossible here. It was a missing
+      <strong>GLVND</strong> package set: <code>libGLX_nvidia.so.0</code> is a GLVND
+      <em>vendor</em> library, and without <code>libglvnd0</code>/<code>libgl1</code>/<code>libegl1</code>
+      it loads and exposes no entry points &mdash; then falls back to <code>llvmpipe</code>
+      <em>silently</em>. Plus a symlink, because the injected ICD names a Fedora path that does
+      not exist in an Ubuntu container. Full account in
+      <code>docs/worklog/2026-08-06-gpu-in-a-container.md</code>.
+    </p>
+  </div>
+
+  <!-- ============================ VERIFY ============================ -->
+  <section class="prose">
+    <h2>Proving it is on the GPU</h2>
+    <p>
+      A container that started is not a container that is rendering, and the software fallback
+      is silent. <code>run_sim_docker.sh</code> refuses to report success without the VRAM
+      check; these are how you confirm it yourself.
+    </p>
+  </section>
+<pre><span class="c"># the process, and what it holds — expect GB-scale against a container path</span>
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader
+<span class="c">#   383488, /opt/carla-air/CarlaUE4/Binaries/Linux/CarlaUE4-Linux-Shipping, 3318 MiB</span>
+
+<span class="c"># sustained load on the card you asked for, and only that card</span>
+nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader
+<span class="c">#   0, 0 %, 115 MiB      1, 42 %, 3434 MiB</span>
+
+<span class="c"># rule out the fallback explicitly — expect 0</span>
+docker logs carla-air-sim 2>&amp;1 | grep -caiE <span class="s">'llvmpipe|lavapipe|swiftshader'</span>
+
+<span class="c"># and always, when the test is done</span>
+./scripts/stack_up.sh --down</pre>
+
+  <div class="note">
+    <span class="t">Teardown is not tidiness</span>
+    <p>
+      <code>--down</code> removes every <code>carla-air-*</code> container, not just the three
+      it starts, and prints what it left. A leftover container holds 3.3&nbsp;GB of VRAM exactly
+      like a leftover process does, and the examples and one-shot runs hold the same resources.
+    </p>
+  </div>
+
+  <footer class="prose" style="border-top:1px solid var(--rule);padding-top:1.4rem">
+    <p style="font-size:.85rem;color:var(--ink-faint)">
+      Measured 2026-08-06 on the <code>carbonite</code> workstation &mdash; driver 610.43.03,
+      Docker 29.6.2 rootless and nested, GPU 1 an RTX 5060 Ti. Every rate on this page is one
+      sample; they are an ordering, not a benchmark. Companion pages:
+      <code>docs/dataflow.html</code>, <code>docs/ros2-api.html</code>,
+      <code>docs/rpc-path.html</code>.
+    </p>
+  </footer>
+
+</div>
+
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-theme-set]'));
+  var KEY = 'carla-air-theme';
+
+  // "auto" means: remove the attribute and let prefers-color-scheme decide. The stylesheet
+  // already defines every token three times &mdash; media query, [data-theme=light], [data-theme=dark]
+  // &mdash; so this only has to pick which of those wins.
+  function apply(choice) {
+    if (choice === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', choice);
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === choice));
+    });
+  }
+
+  var stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) { /* private mode: just don't persist */ }
+
+  // Only adopt a stored choice. When the page is opened inside a viewer that stamps
+  // data-theme itself, an unset preference must leave that stamp alone rather than
+  // clearing it and fighting the host.
+  if (stored === 'light' || stored === 'dark' || stored === 'auto') {
+    apply(stored);
+  } else if (root.getAttribute('data-theme')) {
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === root.getAttribute('data-theme')));
+    });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var choice = b.dataset.themeSet;
+      apply(choice);
+      try { localStorage.setItem(KEY, choice); } catch (e) { /* not fatal */ }
+    });
+  });
+})();
+</script>
