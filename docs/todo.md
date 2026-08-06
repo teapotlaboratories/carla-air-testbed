@@ -1741,6 +1741,67 @@ network, no key. See `tests/test_claude_backend.py`.
 
 ## Packaging
 
+### P-02 · Reach the graph from another machine — **done** *(2026-08-06)*
+
+> **Filed after the fact.** Same wrong order as E-05 and T-04, and recorded rather than
+> backdated: `scripts/discovery_server.sh`, `examples/byo_agent.py` and `docs/containers.html`
+> were all written before this entry existed.
+
+Containerising the stack made a question urgent that the host setup never raised: how does a
+client that is not on this machine reach the graph at all? DDS finds peers by **multicast**,
+which does not cross a VPN, a routed subnet or the internet, so the default configuration
+cannot work off-box however the firewall is set.
+
+`scripts/discovery_server.sh` runs a Fast-DDS discovery server — every participant announces
+itself to one known address over unicast, and anything pointed at the same address gets the
+whole graph. Data still flows peer-to-peer, so the server never carries camera frames.
+`stack_up.sh` and `stack_run.sh` both honour `DISCOVERY_SERVER=<host>:<port>` and validate it,
+because a malformed value reaches Fast-DDS as a silently-ignored address and an ignored
+discovery setting presents as an empty graph.
+
+**Verified on two different interfaces**, since binding to `0.0.0.0` proves nothing on its own:
+
+| via | address | measured |
+|---|---|---|
+| NetBird | `100.127.184.189:11811` | odometry 17.9 Hz |
+| LAN | `10.0.0.72:11811` | odometry 16.1 Hz, camera 4.0 Hz |
+
+**Two things that cost the debugging, both now in the script's own output:**
+
+- **`ROS_SUPER_CLIENT=true` is not optional.** A plain discovery client is only told about
+  participants it has already matched on a subscribed topic, and `ros2 topic echo` introspects
+  the graph *before* it can subscribe, to resolve the message type. Without it you get
+  `Could not determine the type for the passed topic` while the publisher is right there.
+- **Discovery and transport are separate problems.** With the discovery server alone the
+  client discovered cleanly and received **nothing**: Fast-DDS advertises a shared-memory
+  locator to same-host peers and a client outside the IPC namespace cannot use it.
+  `configs/dds/udp-only.xml` alongside it gives 17.9 Hz. A genuinely remote machine is never
+  offered that locator — but the local rehearsal of a remote setup is, which is exactly when
+  someone hits it.
+
+- **Not verified:** connecting from a genuinely separate machine. There is one host here, so
+  what remains unknown is whether something upstream drops the traffic, not whether the
+  configuration is right.
+- **Deliberately not addressed:** bandwidth. `/camera/rgb/image_raw` is **133 Mbit/s** raw at
+  the shipped resolution. The operator's call was to ship the transport and ignore that; the
+  sidecar already has JPEG encoding (`view_jpeg`), so a compressed image topic is small work
+  if a link ever complains.
+
+**Also landed alongside, and also filed late:**
+
+- `examples/byo_agent.py` — a bring-your-own-agent template importing nothing from this
+  project but the message package. It documents the three insertion points (a pixel on
+  `/vlm/annotation`, a point on `/control/waypoint`, raw setpoints on
+  `/fmu/in/trajectory_setpoint`) and the two traps that bite: PX4 topics are
+  BEST_EFFORT + TRANSIENT_LOCAL so a RELIABLE subscriber silently gets nothing, and an
+  annotation must carry the IMAGE's stamp rather than `now` or grounding pairs it with the
+  wrong depth frame.
+- `--backend none` on the VLM example, so the grounding layer can run **without** a shipped
+  backend competing for the same topic. Verified: annotations at 6.05 Hz became waypoints at
+  6.09 Hz.
+- `docs/containers.html` — what runs in each container, where the data flows, and how to fly
+  it from outside, with diagrams of the namespaces and the data path.
+
 ### P-01 · Containerise the stack — **UNBLOCKED** *(2026-08-06)*
 
 **Hardware Vulkan works in a nested container on this machine.** Verified from a plain
