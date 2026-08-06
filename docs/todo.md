@@ -1741,54 +1741,57 @@ network, no key. See `tests/test_claude_backend.py`.
 
 ## Packaging
 
-### P-01 · Containerise the stack — **blocker may be stale, needs retesting** *(2026-08-06)*
+### P-01 · Containerise the stack — **UNBLOCKED** *(2026-08-06)*
 
-> **The recorded blocker no longer describes this machine.** It was deferred on 2026-08-01
-> because `/etc/cdi-local` held 61 driver libs and **no `libGLX_nvidia.so.0`**, so Vulkan could
-> not create an instance in a nested container. Rechecked 2026-08-06:
->
-> - `libGLX_nvidia.so.0` is present on this host **and inside a nested Docker container**, at
->   `/usr/lib/x86_64-linux-gnu/`;
-> - both `/etc/cdi-local/nvidia.yaml` and `/etc/cdi/nvidia.yaml` reference it;
-> - `docker` is usable from here and `--device nvidia.com/gpu=all` resolves.
->
-> What is still missing in the container is the **ICD JSON** — `/usr/share/vulkan/icd.d/` is
-> empty — which is a text file pointing at the library, and is a problem this repository
-> already solves: `run_sim.sh` synthesises a corrected ICD from `ldconfig` when the system one
-> is unusable, for exactly this reason in the distrobox.
->
-> **Retested properly 2026-08-06, and the blocker is REAL but differently shaped.** Walking it
-> forward step by step in a throwaway `ubuntu:24.04` container:
->
-> | step | result |
-> |---|---|
-> | `--gpus '"device=nvidia.com/gpu=0"'` (what `drone-sim` uses) vs `--device nvidia.com/gpu=all` | **identical** — the flag is not the difference |
-> | `NVIDIA_DRIVER_CAPABILITIES=graphics,...` | no change; the ICD is injected either way |
-> | ICD location | `/etc/vulkan/icd.d/nvidia_icd.x86_64.json` — my first probe looked only in `/usr/share/vulkan/icd.d` and wrongly reported it absent |
-> | what the ICD points at | `/usr/lib64/libGLX_nvidia.so.0` — the **Fedora host path**, absent in an Ubuntu container. The same bug `run_sim.sh` fixes in the distrobox |
-> | corrected ICD -> real path | gets further: `libXext.so.6: cannot open shared object file` |
-> | add `libvulkan1 libxext6 libx11-6` | library now loads, and the failure becomes the one on record: `Could not get 'vkCreateInstance' via 'vk_icdGetInstanceProcAddr'` |
-> | bind-mount `libnvidia-api.so.1` (present in the distrobox, missing in the container) | **no change** |
->
-> `ldd` reports nothing unresolved, because the missing piece is `dlopen`ed at runtime — which
-> is exactly why this surfaces as a missing entry point rather than a load error. The driver
-> core is there: `libnvidia-glvkspirv.so.610.43.03` and `libnvidia-glcore.so.610.43.03` both
-> present.
->
-> **The open question, and it needs the operator.** `drone-sim` reportedly runs Cosys-AirSim in
-> a container on this machine. Its `sim_up.sh:200` uses
-> `--gpus '"device=nvidia.com/gpu=0"'` and `drone-sim/unreal:ue5.8`, whose image carries
-> `libvulkan.so.1` and a **second** ICD using a bare soname rather than an absolute path. But
-> that image ships no `vulkaninfo`, so **it has not been shown here that its container renders
-> on the GPU rather than falling back to llvmpipe** — which is what every configuration tested
-> above does. If that sim is confirmed GPU-rendering, the difference is in its image and is
-> worth copying; if it is not, then these measurements are consistent and nested Vulkan simply
-> does not work on this box.
->
-> Also worth separating: **two of the three images never needed Vulkan.** `sim-bridge` ran the
-> full offline suite and the `ros:jazzy-ros-base` image built every message and loaded the
-> cross-interpreter seam. Containerising the sidecar and the ROS graph while leaving the
-> simulator on the host is available today and does not depend on any of the above.
+**Hardware Vulkan works in a nested container on this machine.** Verified from a plain
+`ubuntu` base, on GPU 1:
+
+    deviceType = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+    deviceName = NVIDIA GeForce RTX 5060 Ti
+    driverName = NVIDIA
+
+The recipe, and it is short:
+
+```bash
+docker run --gpus '"device=nvidia.com/gpu=1"' <image>   # the inner quotes are required
+```
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libvulkan1 libxext6 libx11-6 libglvnd0 libgl1 libegl1 \
+ && mkdir -p /usr/lib64 \
+ && ln -sf /lib/x86_64-linux-gnu/libGLX_nvidia.so.0 /usr/lib64/libGLX_nvidia.so.0
+```
+
+Confirmed on **both** `ubuntu:22.04` (the sidecar's cpython-3.10 base) and `ubuntu:24.04`
+(ROS Jazzy), so neither image is constrained by it.
+
+**Two causes, and the second is the one nobody had:**
+
+1. CDI injects an ICD pointing at `/usr/lib64/libGLX_nvidia.so.0` — the Fedora-family host
+   path — which does not resolve in an Ubuntu container. The same bug `run_sim.sh` already
+   works around in the distrobox. Necessary to fix, **not sufficient**.
+2. `libGLX_nvidia.so.0` is a GLVND **vendor** library. Without `libGLX.so.0` / `libEGL.so.1`
+   present it loads but exposes no entry points, which surfaces as
+   `Could not get 'vkCreateInstance' via 'vk_icdGetInstanceProcAddr'` and a silent fall back
+   to llvmpipe.
+
+**Ruled out along the way**, each by changing one variable: the `--gpus` vs `--device` form
+(identical), `NVIDIA_DRIVER_CAPABILITIES` (no effect — the CDI spec is static), the Ubuntu
+base and loader version (identical either way, so the original "22.04 → 24.04 still fails"
+was true and beside the point), the GPU (0 and 1 behave the same), and bind-mounting
+`libnvidia-api.so.1`.
+
+Found by diffing a known-good container against a failing one after the operator supplied a
+measured account of the working `drone-sim` renderer — 58 libraries against 48, and the ten
+extra were all `libGLX*`/`libEGL*`. Full account:
+`docs/worklog/2026-08-06-gpu-in-a-container.md`.
+
+- **Next:** rebuild the `sim` image with the block above and run Town10HD in it, checking VRAM
+  and `DeviceName` rather than "it started" — the operator's document gives the verification
+  commands, and this project's own rule 3 says the same thing.
+- Unchanged and still true: `sim-bridge` and the `ros:jazzy-ros-base` images already built and
+  ran. The simulator was the only one blocked.
 
 ### P-01 · Containerise the stack — original entry, blocked on non-nested Docker
 
