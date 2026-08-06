@@ -1154,7 +1154,45 @@ treat as the Atlantic), and `ros_domain_id` never leaks into the ROS parameter f
 
 ## Tooling
 
-### T-02 · H.264 recording, and cheaper live streams — **in progress** *(2026-08-02)*
+### T-02 · H.264 recording, and cheaper live streams — **done** *(2026-08-06)*
+
+**The sync is fixed.** Three previous attempts failed in flight, each costing a recording, and
+the reasons are now measured rather than guessed — reproduced with synthetic frames in
+`tests/test_h264_timing.py`, no simulator involved, which is why they survived three tries
+made only in flight.
+
+Two causes, both real:
+
+1. **`stream.time_base` alone does nothing.** libav overwrites it while muxing, so hand-set
+   PTS end up read against a different base. Measured on a 10.15 s synthetic clip: stream
+   time_base only produced a **507 s** file. `frame.time_base` must be set on every frame;
+   with it the same clip comes out at 10.20 s.
+2. **PTS must be strictly increasing.** Two frames in the same millisecond, or one stamp
+   stepping backwards, both raise exactly the recorded failure —
+   `av.error.ArgumentError: Invalid argument ... returned 22` — from `close()`, i.e. after the
+   whole episode is encoded. Real capture stamps do both routinely. A monotonic guard is what
+   makes the approach survivable, and its absence is what beat the first two attempts.
+
+`combine_views.py` no longer rescales a file that is already real-time; it detects that from
+the container duration against the recorded span, so old recordings still get the old
+correction.
+
+**And a regression this uncovered, which had been silently degrading every episode recording
+for two days.** `examples/navigation/run.sh` did not export `vendor/py312`, so when the
+recorder moved out of `bringup.sh` (which does) on 2026-08-04, `import av` failed on the ROS
+side and `VideoWriter` fell back to **mp4v** — no timestamps, nominal-rate playback, and a file
+no browser can play. Silently. The fallback now says so on stderr; a silent fallback on a
+measurement path is a bug in the fallback, not in the environment.
+
+Verified on a real flight, all three streams:
+
+| stream | duration | codec | real span | would have been |
+|---|---|---|---|---|
+| chase | 30.10 s | h264 | 30.05 s | 30.10 s |
+| onboard | 26.41 s | h264 | 26.28 s | **15.50 s** |
+| depth | 26.41 s | h264 | 26.28 s | **15.50 s** |
+
+The onboard stream was playing 1.7x too fast. That is the drift, and it is gone.
 
 **Why there was no H.264.** Not a missing feature — a licensing boundary. `opencv-python`
 bundles its *own* FFmpeg (avcodec 59.37.100) built without `libx264`, because x264 is GPL and

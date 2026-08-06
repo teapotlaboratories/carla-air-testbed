@@ -32,6 +32,34 @@ try:
 except ImportError:                      # pragma: no cover - environment, not logic
     HAVE_AV = False
 
+#: Set once the fallback has been announced, so a 20 Hz recorder does not print per frame.
+_WARNED_FALLBACK = False
+
+
+def _warn_fallback(path):
+    """Say out loud that this recording is degraded.
+
+    The fallback exists so a fresh clone still records something, and that is worth keeping.
+    What is not worth keeping is doing it in silence: mp4v carries no timestamps, so the file
+    plays at its nominal rate instead of real time, and no browser will play it.
+
+    That happened for two days without anyone noticing. The recorder moved out of `bringup.sh`
+    into `examples/navigation/` on 2026-08-04 and the example did not export
+    `vendor/py312`, so `import av` failed on the ROS side and every episode recording quietly
+    became mp4v at the wrong length. A silent fallback on a measurement path is a bug in the
+    fallback, not in the environment.
+    """
+    global _WARNED_FALLBACK
+    if _WARNED_FALLBACK:
+        return
+    _WARNED_FALLBACK = True
+    import sys
+    print(f"WARNING: PyAV not importable — recording {path} as mp4v.\n"
+          f"         The file will play at its NOMINAL rate, not real time, and browsers "
+          f"cannot play it.\n"
+          f"         Add vendor/py312 to PYTHONPATH (ROS side) or run scripts/fetch_vendor.sh.",
+          file=sys.stderr, flush=True)
+
 
 class VideoWriter:
     """H.264 when PyAV is available, `mp4v` when it is not.
@@ -41,11 +69,17 @@ class VideoWriter:
     is worth far less than losing the run.
     """
 
+    #: The timebase every frame is stamped in. A millisecond is fine for video — 1 ms is
+    #: 1/33rd of a frame at 30 fps — and coarse enough that the monotonic guard almost never
+    #: has to nudge anything.
+    TIME_BASE = Fraction(1, 1000)
+
     def __init__(self, path, width, height, fps=10.0, crf=26, preset="medium"):
         self.path, self.width, self.height = path, int(width), int(height)
         self.fps = float(fps)
         self.frames = 0
         self._t_first = self._t_last = None
+        self._last_pts = None
         self._container = None
         self._stream = None
         self._cv = None
@@ -63,9 +97,12 @@ class VideoWriter:
             # in exactly the place this was meant to be viewable.
             stream.pix_fmt = "yuv420p"
             stream.options = {"crf": str(int(crf)), "preset": str(preset)}
+            stream.time_base = self.TIME_BASE
+            stream.codec_context.time_base = self.TIME_BASE
             self._stream = stream
             self.codec = "h264"
         else:
+            _warn_fallback(path)
             import cv2
             self._cv = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
                                        self.fps, (self.width, self.height))
@@ -96,31 +133,34 @@ class VideoWriter:
             frame_bgr = np.ascontiguousarray(frame_bgr)
         vframe = av.VideoFrame.from_ndarray(frame_bgr, format="bgr24")
 
-        # REPEAT frames rather than stamp them. Setting frame.pts by hand looked cleaner and
-        # encoded fine, then threw `av.error.ArgumentError` when close() muxed the encoder's
-        # FLUSH packets - libx264 reorders, and hand-set timestamps stopped agreeing with the
-        # DTS the muxer expects. The failure surfaced at close, i.e. after a whole episode had
-        # been recorded, and lost the file.
+        # Stamp the frame with WHEN IT HAPPENED, so the file is real-time regardless of
+        # what the source managed. Three earlier attempts at this failed and cost whole
+        # recordings; the reasons are now measured rather than guessed, and both are handled
+        # here.
         #
-        # Emitting the frame N times at the nominal rate cannot upset the muxer at all, and
-        # gets the same thing: a file whose length is real elapsed time. H.264 codes a
-        # duplicate as a near-empty P-frame, so the cost is small.
-        # Timestamps are NOT set here, deliberately. Three attempts to make this writer
-        # produce a real-time file all failed in ways that cost whole recordings:
+        # 1. `stream.time_base` ALONE IS NOT ENOUGH. libav overwrites it while muxing, so the
+        #    pts values end up read against a different base. Measured on a 10.15 s synthetic
+        #    clip: stream time_base only -> a 507 s file. `frame.time_base` must be set on
+        #    every frame; with it, the same clip comes out at 10.20 s.
+        # 2. PTS MUST BE STRICTLY INCREASING. Two frames landing in the same millisecond, or
+        #    one timestamp stepping backwards, both produce exactly the failure recorded
+        #    before — `av.error.ArgumentError: Invalid argument ... returned 22`, raised by
+        #    close() when the flush packets are muxed, i.e. after the whole episode is
+        #    recorded. Real capture stamps do both. The guard below is what makes this safe.
         #
-        #   explicit PTS          -> av.error.ArgumentError when close() muxed the encoder's
-        #                            flush packets; the file was lost AFTER a full episode
-        #   PTS with bf=0         -> same, at 1080p from the chase thread
-        #   repeat frames to fill -> doubled the encode cost; the chase queue backed up and
-        #                            dropped 615 of 889 frames
-        #
-        # So the writer stays dumb and always closes. `t_s` is recorded instead: the span it
-        # covers is written beside the file, and whatever composites the streams rescales
-        # them. A wrong timeline in a sidecar is fixable; a file that will not close is not.
+        # See tests/test_h264_timing.py, which reproduces both failures without a simulator —
+        # which is why they survived three attempts made only in flight.
         if t_s is not None:
             if self._t_first is None:
                 self._t_first = float(t_s)
             self._t_last = float(t_s)
+            pts = int(round((float(t_s) - self._t_first) / self.TIME_BASE))
+            if self._last_pts is not None and pts <= self._last_pts:
+                pts = self._last_pts + 1        # never go backwards, never repeat
+            vframe.pts = pts
+            vframe.time_base = self.TIME_BASE
+            self._last_pts = pts
+
         for packet in self._stream.encode(vframe):
             self._container.mux(packet)
         self.frames += 1

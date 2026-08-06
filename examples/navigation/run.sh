@@ -25,6 +25,14 @@ set -u
 
 export ROS_DOMAIN_ID="${TESTBED_ROS_DOMAIN_ID:-42}"
 
+# PyAV lives in vendor/py312 for the ROS side, and the recorder needs it. Without this the
+# writer falls back to mp4v — which cannot carry timestamps, so the recording plays at its
+# nominal rate rather than real time, and cannot be played in a browser either. It fell back
+# SILENTLY from 2026-08-04, when the recorder moved out of bringup (which does export this)
+# into this example, until 2026-08-06. Appended, never prepended: vendor/ must not shadow a
+# ROS-supplied module.
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PROJ/vendor/py312"
+
 LAUNCH_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in

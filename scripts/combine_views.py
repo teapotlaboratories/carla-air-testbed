@@ -64,9 +64,29 @@ def main(chase_path, onboard_path, out_path, depth_path=None):
     o_rate, o_span = real_rate(onboard_path, os_)
     c_nom = float(cs.average_rate or 30)
     o_nom = float(os_.average_rate or 8)
-    # How much faster the file plays than reality, per stream.
-    c_scale = (c_nom / c_rate) if c_rate else 1.0
-    o_scale = (o_nom / o_rate) if o_rate else 1.0
+
+    def scale_for(container, stream, rate, nom, span, label):
+        """How much faster this file plays than reality.
+
+        Since 2026-08-06 the writer stamps every frame with when it happened, so a new file
+        is ALREADY real-time and rescaling it would break what it fixed. Detect that from the
+        file rather than from a flag: if the container's own duration already matches the span
+        recorded beside it, there is nothing to correct.
+
+        Files recorded before that still need the old correction, and there are plenty of them
+        in `out/`, so both paths stay.
+        """
+        if not rate:
+            return 1.0
+        dur = float(container.duration) / 1_000_000 if container.duration else 0.0
+        if span and dur and abs(dur - span) < max(0.5, 0.05 * span):
+            print(f"  {label}: already real-time ({dur:.1f}s for a {span:.1f}s span) — "
+                  f"no rescale")
+            return 1.0
+        return nom / rate
+
+    c_scale = scale_for(chase, cs, c_rate, c_nom, c_span, "chase")
+    o_scale = scale_for(onboard, os_, o_rate, o_nom, o_span, "onboard")
     if c_rate or o_rate:
         print(f"  real rates: chase {c_rate or c_nom:.2f} fps (file {c_nom:.0f}), "
               f"onboard {o_rate or o_nom:.2f} fps (file {o_nom:.0f})")
