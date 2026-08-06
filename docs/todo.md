@@ -1787,9 +1787,33 @@ measured account of the working `drone-sim` renderer — 58 libraries against 48
 extra were all `libGLX*`/`libEGL*`. Full account:
 `docs/worklog/2026-08-06-gpu-in-a-container.md`.
 
-- **Next:** rebuild the `sim` image with the block above and run Town10HD in it, checking VRAM
-  and `DeviceName` rather than "it started" — the operator's document gives the verification
-  commands, and this project's own rule 3 says the same thing.
+**Done the same day: the simulator runs containerised, end to end.**
+`docker/sim.Dockerfile` + `scripts/run_sim_docker.sh`, verified rather than assumed:
+
+| check | result |
+|---|---|
+| ports serving | CARLA :2000 and AirSim :41451, ready in 40 s |
+| VRAM on the requested card | **3339 MiB on GPU 1**, against ~3.3 GB native |
+| the process holding it | `CarlaUE4-Linux-Shipping` at 3324 MiB — the containerised one |
+| sustained load | GPU 1 at 42-43%, GPU 0 flat at 0% |
+| software fallback | **0** mentions of llvmpipe/lavapipe/swiftshader |
+| the existing stack against it | `bringup.sh --no-sim` bridged normally; odometry 16.2 Hz, camera 5.9 Hz |
+| **a scored episode** | `cross_the_plaza` seed 1, **SUCCESS 18.0 m in 13 steps**, reset error 1.1 m, chase 301 frames 0 dropped |
+
+18.0 m / 13 steps is the documented baseline exactly, so the containerised simulator is not
+merely running — it produces the same result.
+
+- **The release is mounted, never baked.** It is a licensed 18 GB binary drop that changes
+  independently of this repository.
+- **`--network host`**, so the sidecar and ROS graph outside the container reach :2000 and
+  :41451 exactly as they do today. Containerising those two is the next step and neither is
+  blocked — both images already built and ran.
+- **`stop.sh --all` and `status.sh` now know about the container.** Without that, rule 1 had a
+  hole: `stop.sh` would report success while the container held 3.3 GB of VRAM.
+- **Not yet measured:** whether the container costs throughput. Odometry read 16.2 Hz against
+  19.5 native and the camera 5.9 against 8.1, but each is a single sample taken while three
+  `ros2 topic hz` calls competed, so it is not a comparison. Worth a proper A/B before anyone
+  quotes a container overhead.
 - Unchanged and still true: `sim-bridge` and the `ros:jazzy-ros-base` images already built and
   ran. The simulator was the only one blocked.
 

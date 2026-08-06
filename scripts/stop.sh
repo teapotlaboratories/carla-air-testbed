@@ -118,5 +118,19 @@ if [ "$left" -gt 0 ]; then
     rc=1
 fi
 
+# The containerised simulator (P-01) is not a process under $PROJ, so the path-scoped
+# matching above cannot see it — `stop.sh --all` would report success with 3.3 GB of VRAM
+# still held. Matched by CONTAINER NAME, which is this project's own and cannot collide with
+# the sibling project's `sim-unreal`.
+if [ "${ALL:-0}" -eq 1 ] || [ "${1:-}" = "--all" ]; then
+    if command -v docker >/dev/null 2>&1; then
+        for c in ${TESTBED_SIM_CONTAINER:-carla-air-sim}; do
+            if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+                docker rm -f "$c" >/dev/null 2>&1 && echo "stopped container $c"
+            fi
+        done
+    fi
+fi
+
 echo "stopped: graph and sidecar, ${sim_note} (${left} stragglers)"
 exit $rc

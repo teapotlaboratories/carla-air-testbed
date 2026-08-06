@@ -49,6 +49,12 @@ done
 printf "  %-18s %s\n" "web console" "$(count "webui/server.py")"
 printf "  %-18s %s\n" "nav example"  "$(count "navigation/nav.launch.py")"
 printf "  %-18s %s\n" "trace recorder" "$(count "bag record")"
+# The containerised simulator holds VRAM exactly like the native one and is invisible to the
+# path-scoped process matching above.
+if command -v docker >/dev/null 2>&1; then
+    printf "  %-18s %s\n" "sim container" \
+        "$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "${TESTBED_SIM_CONTAINER:-carla-air-sim}")"
+fi
 printf "  %-18s %s\n" "vlm example"  "$(count "vlm_navigation/vlm.launch.py")"
 printf "  %-18s %s\n" "episode/sweep" \
     "$(( $(count "$PROJ/scripts/run_episode.py") + $(count "$PROJ/scripts/run_sweep.sh") ))"
