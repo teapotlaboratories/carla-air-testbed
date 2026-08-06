@@ -61,6 +61,26 @@ CMD="$1"; shift
 
 # TESTBED_SOCKET so anything that talks to the sidecar finds it on the shared volume rather
 # than at the /tmp default, which is per-container and would be empty here.
+# DISCOVERY_SERVER=<host>:<port> makes every participant in the stack a discovery CLIENT of
+# that server instead of relying on multicast, so a client off this machine can reach the
+# graph. See scripts/discovery_server.sh. Unset means multicast, the default.
+#
+# ROS_SUPER_CLIENT is NOT optional, and leaving it out is what makes this look impossible: a
+# plain discovery client is only told about participants it has already matched on a topic it
+# subscribes to, and `ros2 topic echo` introspects the graph BEFORE it can subscribe, to
+# resolve the message type. Without it you get "Could not determine the type for the passed
+# topic" while the publisher is right there.
+DS_ENV=()
+if [ -n "${DISCOVERY_SERVER:-}" ]; then
+    case "$DISCOVERY_SERVER" in
+        *:*[!0-9]*|:*|*:) echo "ERROR: DISCOVERY_SERVER must be <host>:<port>, e.g. 10.0.0.5:11811 (got '$DISCOVERY_SERVER')" >&2; exit 2 ;;
+        *:*) ;;
+        *) echo "ERROR: DISCOVERY_SERVER must be <host>:<port>, e.g. 10.0.0.5:11811 (got '$DISCOVERY_SERVER')" >&2; exit 2 ;;
+    esac
+    DS_ENV=(-e "ROS_DISCOVERY_SERVER=$DISCOVERY_SERVER" -e "ROS_SUPER_CLIENT=true")
+    echo "discovery server: $DISCOVERY_SERVER"
+fi
+
 DOCKER_ARGS=(
     --rm --name "$NAME"
     --network "container:$SIM"
@@ -71,6 +91,7 @@ DOCKER_ARGS=(
     -v "$SOCKVOL:/run/carla-air"
     -w "$PROJ"
 )
+DOCKER_ARGS+=(${DS_ENV[@]+"${DS_ENV[@]}"})
 [ "$DETACH" -eq 1 ] && DOCKER_ARGS+=(-d) || DOCKER_ARGS+=(-i)
 
 # Source ROS and the workspace before running. The .sh examples do it themselves, but a

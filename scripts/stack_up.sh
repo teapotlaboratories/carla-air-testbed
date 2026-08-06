@@ -124,6 +124,26 @@ print(d)" "$1" 2>/dev/null; }
 
 GPU="${GPU_ARG:-$(cfg simulator.gpu)}"; GPU="${GPU:-0}"
 
+# DISCOVERY_SERVER=<host>:<port> makes every participant in the stack a discovery CLIENT of
+# that server instead of relying on multicast, so a client off this machine can reach the
+# graph. See scripts/discovery_server.sh. Unset means multicast, the default.
+#
+# ROS_SUPER_CLIENT is NOT optional, and leaving it out is what makes this look impossible: a
+# plain discovery client is only told about participants it has already matched on a topic it
+# subscribes to, and `ros2 topic echo` introspects the graph BEFORE it can subscribe, to
+# resolve the message type. Without it you get "Could not determine the type for the passed
+# topic" while the publisher is right there.
+DS_ENV=()
+if [ -n "${DISCOVERY_SERVER:-}" ]; then
+    case "$DISCOVERY_SERVER" in
+        *:*[!0-9]*|:*|*:) echo "ERROR: DISCOVERY_SERVER must be <host>:<port>, e.g. 10.0.0.5:11811 (got '$DISCOVERY_SERVER')" >&2; exit 2 ;;
+        *:*) ;;
+        *) echo "ERROR: DISCOVERY_SERVER must be <host>:<port>, e.g. 10.0.0.5:11811 (got '$DISCOVERY_SERVER')" >&2; exit 2 ;;
+    esac
+    DS_ENV=(-e "ROS_DISCOVERY_SERVER=$DISCOVERY_SERVER" -e "ROS_SUPER_CLIENT=true")
+    echo "discovery server: $DISCOVERY_SERVER"
+fi
+
 echo "=== 1/3  simulator ==="
 "$PROJ/scripts/run_sim_docker.sh" --config "$CONFIG" ${GPU_ARG:+--gpu "$GPU_ARG"} || {
     echo "the simulator did not come up — not starting the rest" >&2; exit 1; }
@@ -156,6 +176,7 @@ echo "=== 3/3  ROS 2 graph (python 3.12) ==="
 docker run -d --name "$ROS" \
     --network "container:$SIM" \
     --ipc "container:$SIM" \
+    ${DS_ENV[@]+"${DS_ENV[@]}"} \
     -v "$PROJ:$PROJ" \
     -v "$SOCKVOL:/run/carla-air" \
     carla-air/ros:1 \
