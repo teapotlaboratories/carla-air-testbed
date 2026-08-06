@@ -24,7 +24,12 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
 
 # Paths that count as code. docker/, examples/ and tests/ are here because the original rule
 # omitted them and the omission was used.
-staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+#
+# NO --diff-filter. It read ACMR until review, which omits D — so `git rm scripts/foo.sh` on
+# the default branch went straight through, and removing a script is a code change like any
+# other. It is also the shape most likely to be done "quickly on main". Verified in a
+# throwaway repo before and after.
+staged="$(git diff --cached --name-only)"
 code="$(printf '%s\n' "$staged" | grep -E '^(sim_bridge|ros2_ws|scripts|configs|docker|examples|tests|webui)/' || true)"
 [ -n "$code" ] || exit 0
 

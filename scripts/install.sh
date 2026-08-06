@@ -82,6 +82,16 @@ fi
 step "pinned upstreams (px4_msgs, anthropic SDK)" bash "$PROJ/scripts/fetch_vendor.sh"
 step "ROS 2 workspace"                            bash "$PROJ/scripts/build_ros.sh"
 
+# The git hooks, so a fresh clone actually has them. Without this line the guard installs only
+# for someone who already knows it exists, which is the failure it was written to prevent —
+# .git/hooks is not cloned, so every new checkout silently has none.
+#
+# Skipped rather than failed outside a git checkout: a release tarball is a legitimate way to
+# have this tree, and it must not stop an install.
+if git -C "$PROJ" rev-parse --git-dir >/dev/null 2>&1; then
+    step "git hooks" bash "$PROJ/scripts/install_hooks.sh"
+fi
+
 RELEASE="$("$PROJ/scripts/release_path.sh")"
 echo
 echo "=============================================================="
