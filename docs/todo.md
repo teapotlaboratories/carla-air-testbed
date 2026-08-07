@@ -271,7 +271,35 @@ documented baseline of 18.6 m / 14 steps.
   times** — see E-06 below. One seed reproducing the baseline exactly remains good evidence
   and not proof.
 
-### Q-01 · Two PRs shipped logic with no test — **open** *(2026-08-06)*
+### Q-01 · Two PRs shipped logic with no test — **done** *(2026-08-06)*
+
+Both covered, 17 tests, no simulator:
+
+- `tests/test_reset_convergence.py` (6) — a fake AirSim client returning a scripted sequence
+  of positions, so the convergence loop's three outcomes are checked in milliseconds instead
+  of against a live aircraft.
+- `tests/test_precommit_hook.py` (11) — a temporary repository per test, so it touches neither
+  this checkout nor its git config.
+
+**Verified by mutation, because a passing test proves nothing until it fails against the bug:**
+
+| reverted | tests failing |
+|---|---|
+| the stall guard removed (the D-05 fix) | 1 |
+| stall guard too eager, 0.3 → 5.0 | 1 |
+| tolerance back to 6.0 (pre-D-05) | 3 |
+| no retry at all (pre-D-03) | 4 |
+| hook's `--diff-filter=ACMR` restored (the deletion gap) | 1 |
+
+**And the mutation testing itself was wrong the first time**, which is worth more than the
+tests. Both mutations replaced a constant with one of the *same byte length* — `0.3`→`5.0`,
+`1.5`→`6.0` — and the writes landed in the same second, so Python's `(mtime, size)` bytecode
+check saw the cached `.pyc` as valid and kept running the old module. Two mutation results and
+the "restored" run were all measuring stale bytecode. Caught only because the restored tree
+still failed a test it had just passed. **Clear `__pycache__` between mutations**; a
+same-length edit defeats the cache check.
+
+
 
 Raised by `/review` on PR #2 and again on PR #3. Both landed branches whose whole substance is
 a piece of pure logic, and neither has a test, in a repository with eleven test files and a
