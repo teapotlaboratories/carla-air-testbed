@@ -1854,7 +1854,13 @@ instruction.
 
 ## VLM
 
-### V-01 · First real backend — **built, awaiting a flight test** *(2026-08-02)*
+### V-01 · First real backend — **out of scope** *(2026-08-02; closed 2026-08-07)*
+
+> **Closed by the 2026-08-04 scope decision, recorded 2026-08-07.** This said *"built,
+> awaiting a flight test"* for three days after model choice went out of scope, so it was
+> promising a flight test nobody intends to run. The backend still exists and still works
+> — it is an `examples/` concern now, not a backlog item. Kept below for the design
+> decisions, which are about the *contract* a backend must satisfy and are still true.
 
 Decision made: **Claude API**, not local vLLM. `ros2_ws/src/vlm_client/vlm_client/backends/claude.py`
 implements the same narrow contract as the baselines — one BGR frame and one instruction in,
