@@ -41,6 +41,10 @@ def repo(tmp_path):
     subprocess.run(["git", "init", "-q", r], check=True)
     _git(r, "config", "user.email", "t@t.t")
     _git(r, "config", "user.name", "t")
+    # Not cosmetic. `git commit` reads the developer's GLOBAL config too, and on a machine with
+    # commit.gpgsign=true every commit below fails with "gpg failed to sign the data" — eleven
+    # red tests saying nothing about the hook. Verified: the failure is real without this line.
+    _git(r, "config", "commit.gpgsign", "false")
     shutil.copy(HOOK, os.path.join(r, ".githooks", "pre-commit"))
     os.chmod(os.path.join(r, ".githooks", "pre-commit"), 0o755)
     _git(r, "config", "core.hooksPath", ".githooks")   # relative, as the installer sets it
@@ -110,7 +114,7 @@ def test_merging_a_feature_branch_into_the_default_branch_is_allowed(repo):
     assert _git(repo, "merge", "feat/x", "-m", "merge").returncode == 0
 
 
-def test_the_default_branch_name_is_overridable(repo, monkeypatch):
+def test_the_default_branch_name_is_overridable(repo):
     """TESTBED_DEFAULT_BRANCH, for a repository whose default is not `main`."""
     open(os.path.join(repo, "scripts", "new.sh"), "w").write("x\n")
     _git(repo, "add", "scripts/new.sh")
