@@ -365,16 +365,23 @@
         <code>/camera/rgb/image_raw</code> while a browser streams:
       </p>
       <p style="font-family:var(--mono);font-size:.82rem">
-        console closed &nbsp; 6.39&ndash;6.66 Hz<br>
+        console idle &nbsp;&nbsp; 6.39&ndash;6.66 Hz<br>
         socket stream &nbsp;&nbsp; 5.060 Hz &nbsp; <strong style="color:var(--stop)">&minus;24.0%</strong><br>
         ROS stream &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 5.968 Hz &nbsp; <strong style="color:var(--ok)">&minus;6.6%</strong>
       </p>
       <p>
-        Re-encoding to JPEG is not free. The honest claim is <strong>3.6&times; cheaper</strong>,
-        not free &mdash; still the difference between a console you must close before a scored
-        run and one you can leave open. A first attempt measured a 10% drop that was
-        <em>inside the baseline's own drift</em>; alternating the conditions is what made the
-        number mean anything.
+        Re-encoding to JPEG is not free. The honest claim is <strong>cheaper, not free</strong>
+        &mdash; still the difference between a console you must close before a scored run and one
+        you can leave open. A first attempt measured a 10% drop that was <em>inside the
+        baseline's own drift</em>; alternating the conditions is what made the number mean
+        anything.
+      </p>
+      <p>
+        <strong>And the baseline is the console idle, not absent</strong> &mdash; a distinction
+        the first version of this box got wrong. An idle ROS console still converts every frame,
+        so that cost is <em>inside</em> the baseline; an idle socket console makes no calls at
+        all. The comparison is biased toward ROS, and &minus;6.6% is a <em>floor</em> on its
+        total cost. A true no-console baseline is unmeasured.
       </p>
     </div>
   </section>

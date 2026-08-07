@@ -119,6 +119,38 @@ Two reports written: `docs/webui-architecture.html` (what it is now) and
 `docs/webui-ros2-plan.html` (what to do), committed as `ab01f12`. Neither has been rendered —
 there is no browser on this box — and both say so.
 
+## Step 1 landed the same day, and the measurement corrected the plan
+
+`webui/ros_source.py` + `scripts/webui.sh`: onboard video and telemetry off the socket and onto
+the topics. Measured against a live graph, three drift-controlled A/B pairs each way:
+
+| console | camera rate | cost |
+|---|---|---|
+| running, not streaming | 6.39 – 6.66 Hz | baseline |
+| streaming, socket | 5.060 Hz | −24.0% |
+| streaming, ROS | 5.968 Hz | −6.6% |
+
+**Two things I got wrong, in order.**
+
+1. **The plan predicted the rate would be *unchanged*** on ROS — one capture fanned out by DDS,
+   costing nothing. It is not: re-encoding to JPEG costs ~6.6% on the machine that is also
+   rendering. Corrected in `todo.md` with the old criterion struck through.
+2. **Then the review caught the baseline label.** I wrote "console closed". The console process
+   was running through *both* conditions; only the HTTP stream opened and closed. On ROS an idle
+   console still converts every frame, so its idle cost sits inside the baseline — while an idle
+   socket console makes no calls at all. **The comparison is biased toward ROS and −6.6% is a
+   floor, not a total.** A true no-console baseline is still unmeasured.
+
+The first attempt at the measurement showed a 10% drop that was **inside the baseline's own
+drift** — 6.36 → 6.03 Hz between two consecutive idle runs. Alternating the conditions is what
+made the number mean anything. Two overclaims in one day, both caught by looking again rather
+than by anything failing.
+
+Also found while measuring: the stream served 12 fps from a 6.4 Hz source, so half the JPEG
+encodes were the same frame twice. And `scripts/stop.sh` ignores unrecognised arguments and runs
+its destructive default anyway — `stop.sh --help` stops the graph instead of printing help. It
+cost a restart mid-measurement; filed, not fixed here.
+
 ## Process
 
 - **The commit window held.** Both of this week's violations came from checking the clock in the

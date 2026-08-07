@@ -125,7 +125,9 @@ def test_the_module_imports_without_rclpy():
     """The point of the split. If `ros_source` ever grows a module-scope `import rclpy`, this
     whole file becomes unrunnable outside a sourced ROS environment — and so does the offline
     suite that R-07 exists to keep working."""
-    assert "rclpy" not in sys.modules or ros_source.RosSource.import_error is None
+    # No runtime check on sys.modules here: rclpy is never importable in the offline suite,
+    # so any such assertion passes without testing anything. Reading the source is the check
+    # that can actually fail.
     src = ros_source.__file__
     with open(src) as fh:
         module_scope = [ln for ln in fh if ln.startswith(("import ", "from "))]
