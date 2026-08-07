@@ -44,8 +44,28 @@ N = 4
 #: The documented station-keeping floor. QUICKSTART calls a ~9 m start-pose error normal.
 TOLERANCE_M = 9.0
 
+#: What `Vehicle.reset()` is asked to converge to, overridable so D-05 can be answered:
+#: does the converge loop CORRECT the street-level error, or exhaust its attempts against a
+#: floor? A flat 6 m is sensible at 82 m AGL and meaningless at 3.5, but tightening it is only
+#: worth doing if retrying actually helps.
+#:
+#:     ./.venv/bin/python tests/conformance/p12_reset_altitude.py --reset-tolerance 1.0
+RESET_TOLERANCE = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--reset-tolerance" and _i + 1 < len(sys.argv):
+        RESET_TOLERANCE = float(sys.argv[_i + 1])
+
 p = common.Probe("p12_reset_altitude")
 v = Vehicle(common.airsim_client())
+_SHIPPED_TOLERANCE = Vehicle.RESET_TOLERANCE_M
+if RESET_TOLERANCE is not None:
+    # Applied to the class, because reset() reads it from there rather than taking it as an
+    # argument — the point is to measure the SHIPPED code path with one constant changed.
+    Vehicle.RESET_TOLERANCE_M = RESET_TOLERANCE
+    p.note("reset tolerance overridden",
+           f"{RESET_TOLERANCE} m (the shipped default is {_SHIPPED_TOLERANCE} m)")
+p.metric("reset_tolerance_m", Vehicle.RESET_TOLERANCE_M)
+p.metric("reset_attempts", Vehicle.RESET_ATTEMPTS)
 
 rows = []
 for speed in SPEEDS:
