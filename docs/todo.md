@@ -271,6 +271,31 @@ documented baseline of 18.6 m / 14 steps.
   times** — see E-06 below. One seed reproducing the baseline exactly remains good evidence
   and not proof.
 
+### Q-01 · Two PRs shipped logic with no test — **open** *(2026-08-06)*
+
+Raised by `/review` on PR #2 and again on PR #3. Both landed branches whose whole substance is
+a piece of pure logic, and neither has a test, in a repository with eleven test files and a
+stated rule that pure logic goes in `tests/`.
+
+| what | why it is testable offline |
+|---|---|
+| `.githooks/pre-commit` path matching | a temp repo, stage a file, assert the exit code. Already done by hand four times; never automated |
+| `Vehicle.reset()` convergence loop | `Vehicle.__init__` takes a client, so a fake returning a scripted sequence of positions covers converges / stalls / exhausts-attempts with no simulator |
+
+The second is the one that matters. `RESET_MIN_IMPROVEMENT_M` decides when to stop retrying,
+and its failure mode is silent — stop too early and a reset that would have converged reports
+a miss instead; too late and street level burns four attempts. Both were verified by hand
+against a live simulator, which is the slow, expensive way to learn something a fake client
+answers in milliseconds.
+
+`tests/test_chase_stop.py` exists because a deadlock survived only-in-flight testing, and it
+was written two days before both of these. The pattern is worth naming rather than repeating.
+
+- **Verify:** each test fails against the code as it was before its fix, the way
+  `test_control_limits.py` and `test_h264_timing.py` were checked before being trusted.
+- **Not urgent.** Both behaviours are verified and recorded; this is about them staying
+  verified.
+
 ### R-03 · The web console talks ROS 2 only — **deferred** *(2026-08-03)*
 
 `webui/server.py` currently dispatches *arbitrary* sidecar RPC methods over the Unix socket
