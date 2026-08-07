@@ -30,8 +30,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-STEPS=4
-[ "$SKIP_RELEASE" -eq 1 ] && STEPS=3
+# One per step() call below. The hooks step is skipped outside a git checkout, so a release
+# tarball reads [4/5] rather than [4/4] — under-counting is the right way round, and computing
+# this from the same condition would put the git check in two places.
+STEPS=5
+[ "$SKIP_RELEASE" -eq 1 ] && STEPS=4
 STARTED="$(date +%s)"
 step_no=0
 
