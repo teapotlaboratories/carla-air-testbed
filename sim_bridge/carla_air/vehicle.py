@@ -24,11 +24,26 @@ from . import frames
 
 
 class Vehicle:
-    #: How close the aircraft must end up to the pose `reset()` was given, in metres. The
-    #: documented station-keeping floor is ~4 m, so this is that plus room for the settle.
-    RESET_TOLERANCE_M = 6.0
+    #: How close the aircraft must end up to the pose `reset()` was given, in metres.
+    #:
+    #: 1.5, not the 6.0 this shipped with. Measured over 32 resets: at 6 m the loop stopped as
+    #: soon as it was inside tolerance and left 1.3-1.7 m on the table; asked for 1 m it
+    #: reaches 0.5-0.9 m at every altitude with air beneath it. The looser value was not
+    #: buying anything except an earlier exit.
+    RESET_TOLERANCE_M = 1.5
     #: How many times `reset()` will re-command the hold before giving up and saying so.
     RESET_ATTEMPTS = 4
+    #: Stop retrying once an attempt stops HELPING, rather than burning every attempt against
+    #: something unreachable.
+    #:
+    #: This exists because of a floor, not a miss. Commanded to 3.5 m AGL the aircraft settles
+    #: at 0.2 m — on the ground — and it does so identically across 8 resets at both speeds.
+    #: Retrying cannot fix that, so a tolerance tight enough to be useful in the air would make
+    #: every street-level reset burn four attempts and then report failure. An attempt that
+    #: improves the miss by less than this is treated as converged-as-far-as-it-goes: the
+    #: caller still gets the real position and the stage log still says how far out it is.
+    #: See todo.md D-05 and tests/conformance/p12_reset_altitude.py.
+    RESET_MIN_IMPROVEMENT_M = 0.3
 
     #: How long a ground-truth environment read stays good. Temperature, pressure and density
     #: do not meaningfully move over a flight, and re-reading them every tick is 20% of the
@@ -129,6 +144,7 @@ class Vehicle:
         # reset that cannot converge must fail loudly rather than spin — and `hard=True`
         # exists for a simulator that is genuinely wedged.
         # See tests/conformance/p12_reset_altitude.py and todo.md D-03.
+        previous_miss = None
         for attempt in range(self.RESET_ATTEMPTS):
             self._c.moveToPositionAsync(
                 n, e, d, speed,
@@ -141,6 +157,13 @@ class Vehicle:
                 if attempt:
                     say(f"converged after {attempt + 1}")
                 break
+            if (previous_miss is not None
+                    and previous_miss - miss < self.RESET_MIN_IMPROVEMENT_M):
+                # Not converging. Say what it settled at rather than pretending the remaining
+                # attempts might help — they demonstrably do not against a floor.
+                say(f"stalled at {miss:.1f} m out; further attempts are not improving it")
+                break
+            previous_miss = miss
             say(f"re-holding ({miss:.1f} m out)")
         else:
             # Reported, not raised: a start pose that is metres out still flies, and failing

@@ -1549,7 +1549,53 @@ spent a day on hypotheses that did not survive measurement.
 - **Note:** `reset()` was changed the same day (D-02's yaw hold). Whether that is related is
   unknown; there is no before-measurement at this altitude to compare against.
 
-### D-05 · A fixed reset tolerance is wrong at street level — **open** *(2026-08-05)*
+### D-05 · A fixed reset tolerance is wrong at street level — **done** *(2026-08-06)*
+
+**Answered: it is a FLOOR, not a miss**, which is why this was filed rather than fixed on the
+spot. `p12` gained `--reset-tolerance` so the question could be settled rather than argued.
+
+Asked to converge to **1 m** instead of the shipped 6:
+
+| commanded | AGL | at 6 m tolerance | at 1 m tolerance |
+|---|---|---|---|
+| z = -55.0 | 82.5 m | 1.5 m mean | **0.60 m** |
+| z = -30.0 | 57.5 m | 1.4 m mean | **0.57 m** |
+| z = -8.0 | 35.5 m | 1.3 m mean | **0.59 m** |
+| z = +23.95 | **3.5 m** | 3.29 m | **3.29 m — unmoved** |
+
+Two things fall out, and they pull in opposite directions:
+
+- **The loop was stopping early for no reason.** Every altitude with air beneath it reaches
+  sub-metre when asked to. 6 m was not buying anything except an earlier exit.
+- **Street level cannot be reached at all.** 3.3 m, identical across 8 resets at both speeds,
+  unmoved by retrying. And the number says what is happening: commanded to **3.5 m AGL** the
+  aircraft settles at **0.2 m AGL** — it is on the ground. The 3.5 m is never held.
+
+So tightening alone would have been wrong exactly as suspected: it would make every
+street-level reset burn four attempts and then report failure.
+
+**Fixed with both halves.** `RESET_TOLERANCE_M` 6.0 → **1.5**, and a new
+`RESET_MIN_IMPROVEMENT_M` (0.3 m): an attempt that does not improve the miss by at least that
+much is treated as converged-as-far-as-it-goes. Retry while it helps, stop when it does not.
+No altitude special-casing — the loop measures whether it is making progress rather than being
+told where progress is possible.
+
+Verified in the real path, not inferred:
+
+    street level   holding -> re-holding (3.3 m out) -> stalled at 3.3 m out;
+                   further attempts are not improving it        4.8 s
+    35 m AGL       holding -> re-holding (15.5 m out) -> converged after 2   9.1 s
+
+Shipped defaults re-measured across 32 resets: 1.0-1.2 m mean at altitude, worst 1.3 m, and
+street level exits early instead of burning attempts.
+
+**Consequence for `street_level`, and it is not a reset bug.** That demonstration asks to fly
+at 3.5 m AGL and the aircraft cannot be *placed* there — it rests on the ground and climbs
+from there once the controller takes over. Whether SimpleFlight refuses to hover that low, or
+a collision volume stops it, is unmeasured. The scenario is a demonstration and is not scored,
+so nothing measured depends on it, but its premise is weaker than it reads.
+
+### D-05 (original entry, kept for the reasoning) *(2026-08-05)*
 
 `RESET_TOLERANCE_M` is a flat 6 m, which is sensible at 82 m AGL and meaningless at 3.5 m.
 `examples/ros2_street_level.py` asks for z = 23.95 (3.5 m AGL) and was placed at 27.0 — **0.5 m
