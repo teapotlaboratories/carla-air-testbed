@@ -219,6 +219,7 @@
       <div class="stat"><span class="k">Already on ROS</span><span class="v">13</span></div>
       <div class="stat"><span class="k">Real gaps</span><span class="v">1</span></div>
       <div class="stat"><span class="k">Steps</span><span class="v">4</span></div>
+      <div class="stat"><span class="k">Step 1</span><span class="v">landed</span></div>
       <div class="stat"><span class="k">Blockers removed</span><span class="v">2</span></div>
     </div>
     <p style="font-size:.87rem;color:var(--ink-soft)">
@@ -356,11 +357,24 @@
 
   <section class="prose">
     <div class="note">
-      <p class="t">The one measurement that proves it worked</p>
+      <p class="t">Measured 2026-08-07 &mdash; and it corrected this page</p>
       <p>
-        Run a scored episode with the console open and compare the camera rate the agent sees
-        against the same episode with the console closed. Today that number drops. If the port
-        is right it does not move &mdash; because there is only one capture, fanned out by DDS.
+        This box used to predict the camera rate would be <em>unchanged</em> with the console
+        open, on the reasoning that one capture fanned out by DDS costs nothing. <strong>That
+        was wrong.</strong> Three drift-controlled A/B pairs each way, watching
+        <code>/camera/rgb/image_raw</code> while a browser streams:
+      </p>
+      <p style="font-family:var(--mono);font-size:.82rem">
+        console closed &nbsp; 6.39&ndash;6.66 Hz<br>
+        socket stream &nbsp;&nbsp; 5.060 Hz &nbsp; <strong style="color:var(--stop)">&minus;24.0%</strong><br>
+        ROS stream &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 5.968 Hz &nbsp; <strong style="color:var(--ok)">&minus;6.6%</strong>
+      </p>
+      <p>
+        Re-encoding to JPEG is not free. The honest claim is <strong>3.6&times; cheaper</strong>,
+        not free &mdash; still the difference between a console you must close before a scored
+        run and one you can leave open. A first attempt measured a 10% drop that was
+        <em>inside the baseline's own drift</em>; alternating the conditions is what made the
+        number mean anything.
       </p>
     </div>
   </section>
@@ -427,7 +441,7 @@
         <text x="40" y="110" font-size="10.5" fill="currentColor" opacity=".75">video + telemetry</text>
         <text x="40" y="126" font-size="10.5" fill="currentColor" opacity=".75">from topics</text>
         <text x="40" y="152" font-size="10" fill="#3F7A34">closes the container gap</text>
-        <text x="40" y="168" font-size="10" fill="#3F7A34">kills the contention</text>
+        <text x="40" y="168" font-size="10" fill="#3F7A34">24% contention &#8594; 6.6%</text>
 
         <rect x="232" y="40" width="184" height="150" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.6"/>
         <text x="248" y="66" font-size="11" font-weight="700" fill="#3F7A34">STEP 2</text>

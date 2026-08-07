@@ -391,11 +391,33 @@ not"** — not "the only interface is ROS 2", which will never be true of this c
    `image_transport` pipeline nobody else consumes). Ship one pane first and answer it with
    the console in hand.
 
+**Step 1 landed 2026-08-07, and the measurement corrected the plan.** `webui/ros_source.py`
+subscribes to `/camera/rgb/image_raw`, `/fmu/out/vehicle_odometry`, `/fmu/out/vehicle_status`
+and `/sim/collision`; `scripts/webui.sh` starts it with the environment set up. Measured
+against a live graph, watching the camera topic while a browser streams — three
+drift-controlled A/B pairs each way, because a first attempt showed a 10% drop that turned out
+to be **within the baseline's own drift** and proved nothing:
+
+| console | camera rate | cost |
+|---|---|---|
+| closed | 6.39 – 6.66 Hz | — |
+| streaming, **socket** | 5.060 Hz | **−24.0%** |
+| streaming, **ROS** | 5.968 Hz | **−6.6%** |
+
+- **The verify criterion below was wrong and is corrected.** It said the rate would be
+  *unchanged*, on the reasoning that one capture fanned out by DDS costs nothing. It is not
+  unchanged: **re-encoding to JPEG costs ~6.6%**, on the machine that is also rendering. The
+  right claim is **3.6× cheaper, not free** — the difference between a console you must close
+  before a scored run and one you can leave open. Every user-facing string now states the
+  number instead of the word "safe".
+- Found while measuring: the stream served 12 fps from a 6.4 Hz source, so **half the JPEG
+  encodes were the same frame again**. Now encoded at most once, keyed on arrival stamp.
+
 - **Verify:** after step 2, `grep -c 'socket' webui/server.py` reaches zero for the control and
   video paths, and every control still works over NetBird. Onboard video comes from a ROS
-  topic. A scored episode runs with the console open and the camera rate the agent sees is
-  unchanged — which is the measurement that proves the contention is gone, and the reason to
-  do this at all.
+  topic. ~~The camera rate the agent sees is unchanged with the console open~~ — **superseded
+  2026-08-07**: the rate is *materially reduced but not eliminated*, and what the step must
+  produce is the measured pair above, not a null result.
 
 > **Superseded in part.** The 2026-08-03 deferral is kept below because its *reasoning* about
 > the chase camera still holds — but its conclusion ("nothing depends on the console, so this
