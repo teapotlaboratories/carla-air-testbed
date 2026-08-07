@@ -9,12 +9,19 @@ more than it looks:
   ROS graph is already on it. **Measured 2026-08-07**, three drift-controlled pairs each way,
   watching `/camera/rgb/image_raw` while a browser streams:
 
-      socket path   6.658 -> 5.060 Hz   -24.0%
-      ROS path      6.387 -> 5.968 Hz    -6.6%
+      console running, not streaming   6.39 - 6.66 Hz   baseline
+      streaming on the socket          5.060 Hz         -24.0%
+      streaming on ROS                 5.968 Hz          -6.6%
 
   So subscribing does **not** make the console free — re-encoding to JPEG still costs the
-  machine that is also rendering — but it costs **3.6x less**, which is the difference between
-  a console you must close before a scored run and one you can leave open.
+  machine that is also rendering — but it costs far less, which is the difference between a
+  console you must close before a scored run and one you can leave open.
+
+  **Read that baseline carefully.** It is the console *running and idle*, not absent. An idle
+  ROS console still converts every frame in `_on_image`, so its idle cost is INSIDE the
+  baseline, while an idle socket console makes no calls at all and costs ~0. The comparison is
+  therefore biased toward ROS: -6.6% is a floor on this console's total cost, not the total. A
+  true no-console baseline has not been measured.
 * **It needs the socket, and the socket is unreachable from outside the containers.** The
   stack serves it on a Docker volume whose host mountpoint is `Permission denied` under the
   rootless daemon. A node on the DDS graph needs no socket at all, which is why this step is
@@ -117,8 +124,12 @@ class RosSource:
     """Subscribes to the camera, odometry, status and collision topics on a background thread.
 
     Frames are cached **raw** and encoded to JPEG on demand rather than in the subscription
-    callback. With no browser attached that costs nothing, and the whole point of this change
-    is to stop the console adding load the simulator did not already have.
+    callback, so with no browser attached the *encode* does not happen.
+
+    That is not the same as costing nothing when idle: `_on_image` still converts every frame,
+    and the subscription itself makes the publisher serialise to one more reader. Whatever that
+    comes to has never been measured separately — it is folded into the baseline of the numbers
+    above rather than isolated.
     """
 
     #: Set once `import rclpy` has been attempted, so the reason for a refusal can be reported

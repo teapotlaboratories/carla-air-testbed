@@ -400,9 +400,17 @@ to be **within the baseline's own drift** and proved nothing:
 
 | console | camera rate | cost |
 |---|---|---|
-| closed | 6.39 – 6.66 Hz | — |
+| running, **not streaming** | 6.39 – 6.66 Hz | baseline |
 | streaming, **socket** | 5.060 Hz | **−24.0%** |
 | streaming, **ROS** | 5.968 Hz | **−6.6%** |
+
+**The baseline is the console *running but not streaming*, not absent.** On ROS an idle console
+still subscribes and runs `imgmsg_to_cv2` on every frame, so that cost sits **inside** the
+baseline; on the socket an idle console issues no RPCs at all, so its idle cost is ~0. The
+comparison is therefore biased in ROS's favour: **−6.6% is a floor on the ROS console's total
+cost, not the total.** The direction survives — 24% is large — but a true no-console baseline
+is **unmeasured**.
+
 
 - **The verify criterion below was wrong and is corrected.** It said the rate would be
   *unchanged*, on the reasoning that one capture fanned out by DDS costs nothing. It is not

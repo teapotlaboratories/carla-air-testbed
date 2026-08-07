@@ -25,10 +25,12 @@ Four decisions worth knowing:
   sidecar. Sharing one would interleave a control write with a 40 kB frame read, which is
   the failure this project has already paid for once.
 * **On ROS it contends far less — not zero.** The onboard view used to be a *second* AirSim
-  capture on the image path this project is bottlenecked by. Measured 2026-08-07 with a
-  browser streaming, three drift-controlled pairs each way: the socket path costs **24.0%** of
-  `/camera/rgb/image_raw`, the ROS path **6.6%**. Re-encoding to JPEG is not free, so the
-  honest claim is 3.6x cheaper rather than free — and the page says the number rather than
+  capture on the image path this project is bottlenecked by. Measured 2026-08-07, three
+  drift-controlled pairs each way, against a baseline of **the console running but not
+  streaming**: the socket path costs **24.0%** of `/camera/rgb/image_raw`, the ROS path
+  **6.6%**. Two caveats that belong with those numbers: re-encoding to JPEG is not free, and an
+  idle ROS console still converts every frame, so its idle cost is inside the baseline and
+  6.6% is a floor rather than a total. The page states the number rather than the word
   "safe".
 """
 from __future__ import annotations
