@@ -1,0 +1,617 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>carla-air testbed - R-03, putting the web console on ROS 2</title>
+<style>
+  :root{
+    --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
+    --ink:#161A18; --ink-soft:#4A524C; --ink-faint:#6B736C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --air-wash:#DCEAF2;
+    --ground:#C8892B; --ground-wash:#F2E8D6;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+    --display:ui-sans-serif,"Helvetica Neue",Arial,sans-serif;
+    --body:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#111512; --panel:#171C19; --sunk:#0D110F;
+      --ink:#E4E7E0; --ink-soft:#9BA49C; --ink-faint:#7C857D;
+      --rule:#2C332E; --rule-soft:#232925;
+      --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+      --air:#3BA5D4; --air-wash:#132A36;
+      --ground:#E0A643; --ground-wash:#2A2416;
+      --ok:#5FA351; --stop:#D25638;
+      --thead:#0B0E0C; --thead-ink:#D8DCD4;
+      --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
+    --ink:#161A18; --ink-soft:#4A524C; --ink-faint:#6B736C;
+    --rule:#C4C6BC; --rule-soft:#D6D8CF;
+    --chrome:#178C97; --chrome-ink:#0E5C64;
+    --air:#1584B5; --air-wash:#DCEAF2;
+    --ground:#C8892B; --ground-wash:#F2E8D6;
+    --ok:#3F7A34; --stop:#A3341F;
+    --thead:#1B211E; --thead-ink:#E6E7E1;
+    --code-bg:#1B211E; --code-ink:#D8DCD4; --code-dim:#8A948B;
+  }
+  :root[data-theme="dark"]{
+    --paper:#111512; --panel:#171C19; --sunk:#0D110F;
+    --ink:#E4E7E0; --ink-soft:#9BA49C; --ink-faint:#7C857D;
+    --rule:#2C332E; --rule-soft:#232925;
+    --chrome:#2FB3BE; --chrome-ink:#7FD8DF;
+    --air:#3BA5D4; --air-wash:#132A36;
+    --ground:#E0A643; --ground-wash:#2A2416;
+    --ok:#5FA351; --stop:#D25638;
+    --thead:#0B0E0C; --thead-ink:#D8DCD4;
+    --code-bg:#0B0E0C; --code-ink:#D8DCD4; --code-dim:#6F786F;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:var(--body);font-size:16px;line-height:1.62}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:2.5rem clamp(1rem,4vw,2.5rem) 6rem;
+        display:flex;flex-direction:column;gap:2.75rem}
+  .prose{max-width:66ch;display:flex;flex-direction:column;gap:1rem}
+  .prose > *{margin:0}
+
+  .eyebrow{font-family:var(--display);font-size:.68rem;font-weight:700;letter-spacing:.16em;
+           text-transform:uppercase;color:var(--ground)}
+  h1{font-family:var(--display);font-size:clamp(1.9rem,4.6vw,2.6rem);font-weight:800;
+     letter-spacing:-.018em;line-height:1.06;margin:.3rem 0 0;text-wrap:balance}
+  .lede{font-size:1.06rem;color:var(--ink-soft);max-width:62ch;text-wrap:pretty;margin:.6rem 0 0}
+  h2{font-family:var(--display);font-size:1.2rem;font-weight:800;letter-spacing:.015em;
+     margin:0 0 .2rem;padding-bottom:.4rem;border-bottom:2px solid var(--chrome);
+     text-wrap:balance;display:flex;align-items:baseline;gap:.6rem}
+  h2 .n{font-family:var(--mono);font-size:.75rem;font-weight:700;color:var(--chrome-ink);
+        border:1px solid var(--chrome);border-radius:2px;padding:.05rem .35rem;flex:none}
+  h3{font-family:var(--display);font-size:.95rem;font-weight:700;letter-spacing:.02em;margin:0}
+  p{text-wrap:pretty}
+  a{color:var(--chrome-ink)}
+  strong{font-weight:700}
+  code{font-family:var(--mono);font-size:.86em;background:var(--sunk);
+       border:1px solid var(--rule-soft);border-radius:2px;padding:.05em .32em}
+
+  section{display:flex;flex-direction:column;gap:1.1rem}
+
+
+  /* ---- diagrams: inline SVG, themed through the same tokens as everything else.
+     Hand-built rather than a diagram library so they render identically in the artifact
+     viewer, an inline preview, and a plain browser opening the saved file. ---- */
+  svg.dg{display:block;width:100%;height:auto}
+  svg.dg text{font-family:var(--display);fill:var(--ink)}
+  svg.dg .t-node{font-size:13px;font-weight:700}
+  svg.dg .t-sub{font-size:10.5px;font-family:var(--mono);fill:var(--ink-soft)}
+  svg.dg .t-grp{font-size:9.5px;font-weight:700;letter-spacing:.13em;fill:var(--ink-faint)}
+  svg.dg .t-wire{font-size:10.5px;font-family:var(--mono);fill:var(--chrome-ink)}
+  svg.dg .t-note{font-size:10px;font-family:var(--mono);fill:var(--ink-faint)}
+  svg.dg .box{fill:var(--panel);stroke:var(--rule);stroke-width:1.4}
+  svg.dg .box.g{fill:var(--ground-wash);stroke:var(--ground)}
+  svg.dg .box.a{fill:var(--air-wash);stroke:var(--air)}
+  svg.dg .grp{fill:none;stroke:var(--rule);stroke-width:1.2;stroke-dasharray:5 4}
+  svg.dg .wire{stroke:var(--chrome);stroke-width:1.5;fill:none}
+  svg.dg .wire.dash{stroke-dasharray:4 3}
+  svg.dg .life{stroke:var(--rule);stroke-width:1.2;stroke-dasharray:3 4}
+  svg.dg .loopbox{fill:none;stroke:var(--ground);stroke-width:1.2;stroke-dasharray:4 3}
+
+  /* ---- figures ---- */
+  .figure{border:1px solid var(--rule);border-radius:4px;background:var(--panel);overflow:hidden}
+  .figure figcaption{font-family:var(--display);font-size:.66rem;letter-spacing:.11em;
+       text-transform:uppercase;color:var(--ink-soft);padding:.5rem .8rem;
+       border-bottom:1px solid var(--rule)}
+  .figure .scroll{overflow-x:auto;padding:1.1rem}
+
+  /* ---- the two interpreter halves ---- */
+  .halves{display:grid;gap:1rem;grid-template-columns:1fr}
+  @media(min-width:820px){.halves{grid-template-columns:1fr auto 1fr;align-items:stretch}}
+  .half{border:1px solid var(--rule);border-radius:4px;padding:.9rem 1rem;
+        display:flex;flex-direction:column;gap:.5rem}
+  .half.g{background:var(--ground-wash);border-color:var(--ground)}
+  .half.a{background:var(--air-wash);border-color:var(--air)}
+  .half .tag{font-family:var(--display);font-size:.63rem;letter-spacing:.12em;
+             text-transform:uppercase;font-weight:700}
+  .half.g .tag{color:var(--ground)} .half.a .tag{color:var(--air)}
+  .half ul{margin:0;padding-left:1.05rem;font-size:.88rem;color:var(--ink-soft)}
+  .half li{margin:.18rem 0}
+  .seam{display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:.35rem;padding:.5rem;min-width:9rem}
+  .seam .bar{width:2px;flex:1;min-height:1.6rem;background:var(--chrome)}
+  .seam .lbl{font-family:var(--mono);font-size:.68rem;color:var(--chrome-ink);
+             text-align:center;line-height:1.35}
+
+  /* ---- tables ---- */
+  .tw{overflow-x:auto;border:1px solid var(--rule);border-radius:4px}
+  table{border-collapse:collapse;width:100%;font-size:.85rem;
+        font-variant-numeric:tabular-nums}
+  thead th{background:var(--thead);color:var(--thead-ink);text-align:left;
+           font-family:var(--display);font-size:.64rem;letter-spacing:.11em;
+           text-transform:uppercase;padding:.5rem .75rem;font-weight:700;white-space:nowrap}
+  td,tbody th{padding:.45rem .75rem;border-top:1px solid var(--rule-soft);
+              text-align:left;vertical-align:top}
+  tbody th{font-weight:600;white-space:nowrap;font-family:var(--mono);font-size:.82rem}
+  tbody tr:nth-child(even){background:var(--panel)}
+  td code,tbody th code{background:transparent;border:0;padding:0}
+  .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+
+  .pill{display:inline-block;font-family:var(--display);font-size:.6rem;font-weight:700;
+        letter-spacing:.08em;text-transform:uppercase;padding:.12rem .4rem;border-radius:2px;
+        color:#fff;white-space:nowrap}
+  .pill.air{background:var(--air)} .pill.ground{background:var(--ground)}
+  .pill.net{background:var(--chrome)} .pill.stop{background:var(--stop)}
+
+  /* ---- callouts ---- */
+  .note{border-left:3px solid var(--chrome);background:var(--panel);
+        padding:.8rem 1rem;border-radius:0 3px 3px 0;font-size:.93rem;
+        display:flex;flex-direction:column;gap:.5rem}
+  .note.trap{border-left-color:var(--stop)}
+  .note.why{border-left-color:var(--ground)}
+  .note > *{margin:0}
+  .note .t{font-family:var(--display);font-size:.64rem;font-weight:700;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--ink-soft)}
+
+  pre{background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);
+      font-size:.78rem;line-height:1.6;margin:0;padding:.9rem 1rem;border-radius:3px;
+      overflow-x:auto}
+  pre .c{color:var(--code-dim)}
+  /* This page's snippets also mark shell keywords, literals and strings. Same palette as
+     docs/guide.html so the code blocks read as one family across the doc set. */
+  pre .k{color:#7FD8A0}
+  pre .n{color:#E0A643}
+  pre .s{color:#8FC7E8}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:1px;
+         background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+  .stat{background:var(--panel);padding:.7rem .85rem;display:flex;flex-direction:column;gap:.15rem}
+  .stat .k{font-family:var(--display);font-size:.6rem;letter-spacing:.1em;
+           text-transform:uppercase;color:var(--ink-faint)}
+  .stat .v{font-family:var(--mono);font-size:1.15rem;font-weight:600;
+           font-variant-numeric:tabular-nums}
+
+  /* ---- theme switcher ---- */
+  /* Escapes the 66ch prose column so the switcher lines up with the stats strip
+     below it rather than floating in the middle of the page. */
+  .topbar{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;max-width:none}
+  .topbar .eyebrow{margin:0}
+  .themer{margin-left:auto;display:inline-flex;border:1px solid var(--rule);
+          border-radius:3px;overflow:hidden;background:var(--panel)}
+  .themer button{font-family:var(--display);font-size:.62rem;font-weight:700;
+          letter-spacing:.1em;text-transform:uppercase;padding:.32rem .6rem;
+          border:0;border-right:1px solid var(--rule);background:transparent;
+          color:var(--ink-soft);cursor:pointer;line-height:1.6}
+  .themer button:last-child{border-right:0}
+  .themer button:hover{color:var(--ink)}
+  .themer button[aria-pressed="true"]{background:var(--chrome);color:#fff}
+  .themer button:focus-visible{outline:2px solid var(--chrome);outline-offset:-2px}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <header class="prose">
+    <div class="topbar">
+      <div class="eyebrow">carla-air testbed &middot; R-03 &middot; plan</div>
+      <div class="themer" role="group" aria-label="Colour theme">
+        <button type="button" data-theme-set="auto"  aria-pressed="true">Auto</button>
+        <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+        <button type="button" data-theme-set="dark"  aria-pressed="false">Dark</button>
+      </div>
+    </div>
+    <h1>Put the web console on ROS 2</h1>
+    <p class="lede">
+      Deferred on 2026-08-03 as tidiness with nothing depending on it. Re-planned
+      <strong>2026-08-07</strong>, because the containers arrived and turned the current design
+      from untidy into a dead end &mdash; and because the job turns out to be a quarter of the
+      size the backlog entry implied.
+    </p>
+  </header>
+
+  <section class="prose">
+    <div class="stats">
+      <div class="stat"><span class="k">Methods used</span><span class="v">14</span></div>
+      <div class="stat"><span class="k">Already on ROS</span><span class="v">13</span></div>
+      <div class="stat"><span class="k">Real gaps</span><span class="v">1</span></div>
+      <div class="stat"><span class="k">Steps</span><span class="v">4</span></div>
+      <div class="stat"><span class="k">Blockers removed</span><span class="v">2</span></div>
+    </div>
+    <p style="font-size:.87rem;color:var(--ink-soft)">
+      The two blockers are the ones ranked <em>real work</em> in the
+      <a href="webui-architecture.html">architecture report</a>: the socket-path mismatch and the
+      permission-denied volume. An <code>rclpy</code> node needs no socket, so both stop existing
+      rather than getting fixed.
+    </p>
+  </section>
+
+  <!-- ============================ WHY NOW ============================ -->
+  <section class="prose">
+    <h2><span class="n">1</span> Why the answer changed</h2>
+    <p>
+      Nothing about the console changed. Three things around it did.
+    </p>
+  </section>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>What changed</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr>
+          <th>The containers landed <span style="font-weight:400;color:var(--ink-faint)">2026-08-06</span></th>
+          <td>The console is in no image and reaches the containerised sidecar by no route at
+              all. Porting to <code>rclpy</code> is now the <strong>cheapest</strong> way to a
+              containerised console &mdash; cheaper than joining namespaces with the 3.10
+              process, because the socket stops being needed</td>
+        </tr>
+        <tr>
+          <th>The contention got a name</th>
+          <td>The console opens a <em>second</em> AirSim capture, which is why it carries a
+              do-not-run-during-a-scored-episode warning. On a ROS topic, one capture serves the
+              agent and the console both &mdash; a scored run becomes watchable live</td>
+        </tr>
+        <tr>
+          <th>The surface was measured, not guessed</th>
+          <td>The console uses <strong>14</strong> of the 30 allowlisted methods, and
+              <strong>13</strong> already exist on ROS 2. This is not &ldquo;grow the surface to
+              match the console&rdquo;; it is &ldquo;make the console use what works&rdquo;</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure class="figure">
+    <figcaption>Figure 1 &middot; the difference the port makes &mdash; where it sits, and what it speaks</figcaption>
+    <div class="scroll">
+      <svg role="img" viewBox="0 0 880 470" style="max-width:100%;height:auto"
+           aria-label="Today the console runs on the host, speaks the Unix socket, has no route into the containerised stack, and opens a second camera capture. After the port it runs inside the carla-air-ros container as an rclpy node, subscribing to the same camera topic the agent reads, so one capture serves both and the socket is gone.">
+        <defs>
+          <marker id="p1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1584B5"/>
+          </marker>
+          <marker id="p2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3F7A34"/>
+          </marker>
+        </defs>
+
+        <!-- ========== LEFT: today ========== -->
+        <text x="24" y="30" font-size="12.5" font-weight="700" fill="#A3341F">TODAY</text>
+        <text x="88" y="30" font-size="11" fill="currentColor" opacity=".7">stranded, and a second capture</text>
+
+        <rect x="24" y="46" width="384" height="400" rx="6" fill="none"
+              stroke="currentColor" stroke-opacity=".22" stroke-dasharray="5 4"/>
+
+        <rect x="44" y="72" width="344" height="150" rx="5" fill="none"
+              stroke="currentColor" stroke-opacity=".4" stroke-dasharray="4 3"/>
+        <text x="56" y="94" font-size="10.5" fill="currentColor" opacity=".65">containers</text>
+
+        <rect x="60" y="106" width="150" height="54" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="72" y="129" font-size="12" font-weight="700" fill="currentColor">carla-air-bridge</text>
+        <text x="72" y="147" font-size="10" fill="currentColor" opacity=".65">sidecar</text>
+
+        <rect x="232" y="106" width="140" height="54" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="244" y="129" font-size="12" font-weight="700" fill="currentColor">carla-air-ros</text>
+        <text x="244" y="147" font-size="10" fill="currentColor" opacity=".65">the graph</text>
+
+        <line x1="210" y1="133" x2="228" y2="133" stroke="#1584B5" stroke-width="1.5" marker-end="url(#p1)"/>
+        <text x="150" y="180" font-size="10" fill="#1584B5">UDS on a volume the host cannot read</text>
+
+        <rect x="60" y="322" width="220" height="58" rx="4" fill="none" stroke="#C8892B" stroke-width="1.5"/>
+        <text x="72" y="346" font-size="12" font-weight="700" fill="currentColor">webui/server.py</text>
+        <text x="72" y="366" font-size="10" fill="#C8892B">host &middot; python 3.10 &middot; UDS</text>
+
+        <line x1="150" y1="318" x2="132" y2="228" stroke="#A3341F" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <line x1="131" y1="263" x2="151" y2="283" stroke="#A3341F" stroke-width="2.2"/>
+        <line x1="151" y1="263" x2="131" y2="283" stroke="#A3341F" stroke-width="2.2"/>
+        <text x="166" y="272" font-size="11" font-weight="700" fill="#A3341F">no route</text>
+
+        <text x="60" y="404" font-size="10.5" fill="#A3341F">2nd AirSim capture &mdash; halves the rate</text>
+        <text x="60" y="420" font-size="10.5" fill="#A3341F">the agent sees during an episode</text>
+
+        <!-- ========== RIGHT: after ========== -->
+        <text x="472" y="30" font-size="12.5" font-weight="700" fill="#3F7A34">AFTER STEP 2</text>
+        <text x="576" y="30" font-size="11" fill="currentColor" opacity=".7">inside, on the same topics</text>
+
+        <rect x="472" y="46" width="384" height="400" rx="6" fill="none"
+              stroke="currentColor" stroke-opacity=".22" stroke-dasharray="5 4"/>
+
+        <rect x="492" y="72" width="344" height="270" rx="5" fill="none"
+              stroke="currentColor" stroke-opacity=".4" stroke-dasharray="4 3"/>
+        <text x="504" y="94" font-size="10.5" fill="currentColor" opacity=".65">containers</text>
+
+        <rect x="508" y="106" width="150" height="54" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="520" y="129" font-size="12" font-weight="700" fill="currentColor">carla-air-bridge</text>
+        <text x="520" y="147" font-size="10" fill="currentColor" opacity=".65">sidecar, unchanged</text>
+
+        <rect x="508" y="190" width="316" height="136" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.6"/>
+        <text x="520" y="212" font-size="12" font-weight="700" fill="currentColor">carla-air-ros</text>
+
+        <rect x="522" y="224" width="136" height="46" rx="3" fill="none" stroke="currentColor" stroke-width="1.3"/>
+        <text x="534" y="244" font-size="11" font-weight="700" fill="currentColor">bridge node</text>
+        <text x="534" y="260" font-size="9.5" fill="currentColor" opacity=".65">publishes</text>
+
+        <rect x="676" y="224" width="136" height="46" rx="3" fill="none" stroke="#3F7A34" stroke-width="1.5"/>
+        <text x="688" y="244" font-size="11" font-weight="700" fill="currentColor">webui (rclpy)</text>
+        <text x="688" y="260" font-size="9.5" fill="#3F7A34">subscribes</text>
+
+        <line x1="658" y1="247" x2="672" y2="247" stroke="#3F7A34" stroke-width="1.5" marker-end="url(#p2)"/>
+        <text x="522" y="296" font-size="10" fill="currentColor" opacity=".7">one DDS graph &middot; ROS_DOMAIN_ID 42</text>
+        <text x="522" y="312" font-size="10" fill="#3F7A34">no Unix socket anywhere on this path</text>
+
+        <line x1="583" y1="160" x2="583" y2="186" stroke="#1584B5" stroke-width="1.5" marker-end="url(#p1)"/>
+
+        <rect x="588" y="380" width="180" height="50" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="600" y="402" font-size="11.5" font-weight="700" fill="currentColor">your agent</text>
+        <text x="600" y="419" font-size="9.5" fill="currentColor" opacity=".65">anywhere on the network</text>
+
+        <line x1="678" y1="376" x2="678" y2="330" stroke="#3F7A34" stroke-width="1.5" marker-end="url(#p2)"/>
+        <text x="688" y="356" font-size="10" fill="#3F7A34">the same topics</text>
+      </svg>
+    </div>
+  </figure>
+
+  <section class="prose">
+    <div class="note">
+      <p class="t">The one measurement that proves it worked</p>
+      <p>
+        Run a scored episode with the console open and compare the camera rate the agent sees
+        against the same episode with the console closed. Today that number drops. If the port
+        is right it does not move &mdash; because there is only one capture, fanned out by DDS.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================ THE MAPPING ============================ -->
+  <section class="prose">
+    <h2><span class="n">2</span> Fourteen methods, thirteen already there</h2>
+    <p>
+      The allowlist exposes all 30 sidecar methods to the browser, but the console only calls
+      fourteen &mdash; nine from the page, five from the server. This is the whole requirement:
+    </p>
+  </section>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Console calls</th><th>On ROS 2 today</th><th>Kind</th></tr></thead>
+      <tbody>
+        <tr><th><code>state</code></th><td><code>/fmu/out/vehicle_odometry</code></td><td><span class="pill air">topic</span></td></tr>
+        <tr><th><code>collision</code></th><td><code>/sim/collision</code></td><td><span class="pill air">topic</span></td></tr>
+        <tr><th><code>view_jpeg</code></th><td><code>/camera/rgb/image_raw</code></td><td><span class="pill air">topic</span></td></tr>
+        <tr><th><code>velocity</code>, <code>yaw</code></th><td><code>/fmu/in/trajectory_setpoint</code></td><td><span class="pill air">topic</span></td></tr>
+        <tr><th><code>takeoff</code>, <code>land</code>, <code>hold</code></th><td><code>TrajectorySetpoint</code> + <code>VehicleCommand</code></td><td><span class="pill air">topic</span></td></tr>
+        <tr><th><code>reset</code></th><td><code>/sim/reset_vehicle</code></td><td><span class="pill net">service</span></td></tr>
+        <tr><th><code>spawn_traffic</code></th><td><code>/sim/spawn_traffic</code></td><td><span class="pill net">service</span></td></tr>
+        <tr><th><code>set_weather</code></th><td><code>/sim/set_weather</code></td><td><span class="pill net">service</span></td></tr>
+        <tr><th><code>destroy_actors</code></th><td><code>/sim/destroy_actors</code></td><td><span class="pill net">service</span></td></tr>
+        <tr><th><code>chase_view</code></th><td><code>/sim/chase_recording</code></td><td><span class="pill net">service</span></td></tr>
+        <tr><th><code>chase_jpeg</code></th><td><strong>nothing</strong></td><td><span class="pill stop">gap</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="prose">
+    <div class="note why">
+      <p class="t">Row five is proved, not assumed</p>
+      <p>
+        <code>examples/ros2_full_control.py</code> already flies takeoff, land, velocity and yaw
+        over <code>rclpy</code> + <code>px4_msgs</code> while <strong>importing nothing from the
+        testbed</strong>. That restriction is what makes it a proof: if a demo of the command
+        surface needed the 3.10 side, the surface would not be closed.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================ THE SEQUENCE ============================ -->
+  <section class="prose">
+    <h2><span class="n">3</span> Four steps, each shippable alone</h2>
+  </section>
+
+  <figure class="figure">
+    <figcaption>Figure 2 &middot; what moves at each step, and what it buys</figcaption>
+    <div class="scroll">
+      <svg role="img" viewBox="0 0 880 250" style="max-width:100%;height:auto"
+           aria-label="Four sequential steps. Step one makes the console an rclpy node taking video and telemetry from topics, which closes the container gap. Step two moves control to setpoints and services, at which point the socket count reaches zero. Step three repoints start and stop at the container scripts. Step four decides whether the chase pane needs a topic at all.">
+        <defs>
+          <marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <rect x="24" y="40" width="184" height="150" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.6"/>
+        <text x="40" y="66" font-size="11" font-weight="700" fill="#3F7A34">STEP 1</text>
+        <text x="40" y="88" font-size="13" font-weight="700" fill="currentColor">rclpy node</text>
+        <text x="40" y="110" font-size="10.5" fill="currentColor" opacity=".75">video + telemetry</text>
+        <text x="40" y="126" font-size="10.5" fill="currentColor" opacity=".75">from topics</text>
+        <text x="40" y="152" font-size="10" fill="#3F7A34">closes the container gap</text>
+        <text x="40" y="168" font-size="10" fill="#3F7A34">kills the contention</text>
+
+        <rect x="232" y="40" width="184" height="150" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.6"/>
+        <text x="248" y="66" font-size="11" font-weight="700" fill="#3F7A34">STEP 2</text>
+        <text x="248" y="88" font-size="13" font-weight="700" fill="currentColor">control</text>
+        <text x="248" y="110" font-size="10.5" fill="currentColor" opacity=".75">setpoints + the four</text>
+        <text x="248" y="126" font-size="10.5" fill="currentColor" opacity=".75">existing services</text>
+        <text x="248" y="152" font-size="10" fill="#3F7A34">grep -c socket &rarr; 0</text>
+        <text x="248" y="168" font-size="10" fill="#3F7A34">R-03 is met here</text>
+
+        <rect x="440" y="40" width="184" height="150" rx="4" fill="none" stroke="#C8892B" stroke-width="1.6"/>
+        <text x="456" y="66" font-size="11" font-weight="700" fill="#C8892B">STEP 3</text>
+        <text x="456" y="88" font-size="13" font-weight="700" fill="currentColor">lifecycle</text>
+        <text x="456" y="110" font-size="10.5" fill="currentColor" opacity=".75">stack_up.sh and</text>
+        <text x="456" y="126" font-size="10.5" fill="currentColor" opacity=".75">docker stop</text>
+        <text x="456" y="152" font-size="10" fill="#C8892B">stays process management</text>
+        <text x="456" y="168" font-size="10" fill="#C8892B">this is the carve-out</text>
+
+        <rect x="648" y="40" width="184" height="150" rx="4" fill="none"
+              stroke="currentColor" stroke-opacity=".45" stroke-dasharray="4 3"/>
+        <text x="664" y="66" font-size="11" font-weight="700" fill="currentColor" opacity=".7">STEP 4</text>
+        <text x="664" y="88" font-size="13" font-weight="700" fill="currentColor">chase pane</text>
+        <text x="664" y="110" font-size="10.5" fill="currentColor" opacity=".75">the only new</text>
+        <text x="664" y="126" font-size="10.5" fill="currentColor" opacity=".75">plumbing needed</text>
+        <text x="664" y="152" font-size="10" fill="currentColor" opacity=".6">decide with it in hand</text>
+        <text x="664" y="168" font-size="10" fill="currentColor" opacity=".6">may never be worth it</text>
+
+        <line x1="208" y1="115" x2="228" y2="115" stroke="currentColor" stroke-width="1.4" marker-end="url(#s1)"/>
+        <line x1="416" y1="115" x2="436" y2="115" stroke="currentColor" stroke-width="1.4" marker-end="url(#s1)"/>
+        <line x1="624" y1="115" x2="644" y2="115" stroke="currentColor" stroke-width="1.4" marker-end="url(#s1)"/>
+
+        <text x="24" y="222" font-size="10.5" fill="currentColor" opacity=".7">Each step leaves the console usable. Stopping after 2 is a coherent place to stop; stopping after 3 is the intended one.</text>
+      </svg>
+    </div>
+  </figure>
+
+  <!-- ============================ CONSTRAINTS ============================ -->
+  <section class="prose">
+    <h2><span class="n">4</span> Two rules the port must not break</h2>
+    <div class="note trap">
+      <p class="t">Do not invent friendly services to make the port easy</p>
+      <p>
+        <code>examples/ros2_full_control.py:17-20</code> refuses a <code>/testbed/takeoff</code>
+        <em>on purpose</em>: moving to hardware must mean deleting <code>carla_air_bridge</code>
+        and starting <code>uxrce_dds_client</code>, not rewriting every client. If porting a
+        button tempts you to add one, the shim is what broke &mdash; send a
+        <code>TrajectorySetpoint</code> like any Pixhawk client instead.
+      </p>
+    </div>
+    <div class="note why">
+      <p class="t">The carve-out is permanent, and the honest claim changes</p>
+      <p>
+        Start and stop can never be ROS calls: there is no graph before the simulator exists,
+        and the stop button&rsquo;s job is to destroy the graph. Afterwards the true statement is
+        <strong>&ldquo;flying is ROS; lifecycle is not&rdquo;</strong> &mdash; not &ldquo;the only
+        interface is ROS 2&rdquo;, which will never hold for this component. Better written down
+        now than discovered during the port.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================ COST ============================ -->
+  <section class="prose">
+    <h2><span class="n">5</span> What it costs, honestly</h2>
+  </section>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Cost or risk</th><th>Size</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr>
+          <th>JPEG encoding moves into the ROS container</th>
+          <td><span class="pill air">small</span></td>
+          <td>New CPU in the container that also runs the graph. Minor at 12 fps, but not free
+              and worth measuring rather than assuming</td>
+        </tr>
+        <tr>
+          <th>The HTTP port must be published from the container</th>
+          <td><span class="pill air">small</span></td>
+          <td>Plus the existing token story carries over unchanged</td>
+        </tr>
+        <tr>
+          <th>Chase pane needs an <code>image_transport</code> pipeline</th>
+          <td><span class="pill ground">deferred</span></td>
+          <td>Nobody else consumes it. This is exactly why it is step 4 and not step 1</td>
+        </tr>
+        <tr>
+          <th>Two remote surfaces become one</th>
+          <td><span class="pill net">benefit</span></td>
+          <td>Today the console and the DDS graph are separate remote paths with separate auth</td>
+        </tr>
+        <tr>
+          <th>Nothing depends on the console</th>
+          <td><span class="pill ground">still true</span></td>
+          <td>The reason it was deferred has not gone away. What changed is the cost of
+              <em>waiting</em>, not the cost of stopping</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================ VERIFY ============================ -->
+  <section class="prose">
+    <h2><span class="n">6</span> How it will be verified</h2>
+    <p>
+      Four checks, and the last one is the one that matters &mdash; the others only prove the
+      code moved.
+    </p>
+  </section>
+
+  <pre><span class="c"># 1. the socket is gone from the control and video paths</span>
+grep -c <span class="s">'socket'</span> webui/server.py      <span class="c"># &rarr; 0 for those paths</span>
+
+<span class="c"># 2. it still works from off the machine</span>
+<span class="c">#    every control exercised over NetBird, as the current console already is</span>
+
+<span class="c"># 3. onboard video arrives from a topic, not a capture</span>
+ros2 topic hz /camera/rgb/image_raw
+
+<span class="c"># 4. THE ONE THAT MATTERS - the contention is actually gone</span>
+<span class="c">#    a scored episode, console open vs closed, comparing the rate the agent sees.</span>
+<span class="c">#    unchanged = one capture fanned out. dropped = still two.</span></pre>
+
+  <section class="prose">
+    <div class="note trap">
+      <p class="t">Measure the thing the fix was meant to fix</p>
+      <p>
+        This project has already had a rate guard added to fix one bug that caused another, and
+        an odometry rate that was two simulators added together. Check 4 is not optional
+        paperwork &mdash; it is the only one that distinguishes &ldquo;the console now speaks
+        ROS&rdquo; from &ldquo;the console now speaks ROS <em>and still opens a second
+        capture</em>&rdquo;.
+      </p>
+    </div>
+  </section>
+
+  <section class="prose">
+    <p style="font-size:.85rem;color:var(--ink-faint)">
+      Recorded as <strong>R-03</strong> in <code>docs/todo.md</code>, revised 2026-08-07 with the
+      2026-08-03 deferral kept and marked superseded in part. Current state of the component:
+      <a href="webui-architecture.html">the web console and the container gap</a>. Companion
+      pages: <a href="containers.html">the stack in containers</a> &middot;
+      <a href="ros2-api.html">the ROS 2 surface</a>.
+    </p>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-theme-set]'));
+  var KEY = 'carla-air-theme';
+
+  // "auto" means: remove the attribute and let prefers-color-scheme decide. The stylesheet
+  // already defines every token three times &mdash; media query, [data-theme=light], [data-theme=dark]
+  // &mdash; so this only has to pick which of those wins.
+  function apply(choice) {
+    if (choice === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', choice);
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === choice));
+    });
+  }
+
+  var stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) { /* private mode: just don't persist */ }
+
+  // Only adopt a stored choice. When the page is opened inside a viewer that stamps
+  // data-theme itself, an unset preference must leave that stamp alone rather than
+  // clearing it and fighting the host.
+  if (stored === 'light' || stored === 'dark' || stored === 'auto') {
+    apply(stored);
+  } else if (root.getAttribute('data-theme')) {
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === root.getAttribute('data-theme')));
+    });
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var choice = b.dataset.themeSet;
+      apply(choice);
+      try { localStorage.setItem(KEY, choice); } catch (e) { /* not fatal */ }
+    });
+  });
+})();
+</script>

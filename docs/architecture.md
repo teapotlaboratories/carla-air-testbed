@@ -9,7 +9,8 @@ deliberate seam between them.
 > `bringup.sh` starts the bridge, the controller, the episode runner and the recorder, and
 > **no node that interprets a camera**. One thing is still on the wrong side of that line:
 > the **web console** commands the aircraft over the sidecar socket instead of ROS 2
-> (R-03, deferred).
+> (R-03, re-planned 2026-08-07 — the containers stranded it, so the port is now also how it
+> reaches the stack at all).
 
 ```
 ┌─ Python 3.10 ────────────────┐          ┌─ Python 3.12 / ROS 2 Jazzy ──────────────────┐

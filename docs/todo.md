@@ -30,7 +30,7 @@ repository is for, and should not be picked up here.
 | `T-02` H.264 recording and cheaper live streams | **in** | capture path, and the chase/onboard sync is still unresolved |
 | `E-03` an MCAP bag per episode | **in** | recording the simulator's own behaviour is fidelity work, not scoring |
 | `P-01` containerise the stack | **in**, blocked | deployment; blocked on non-nested Docker |
-| `R-03` web console talks ROS 2 only | **in**, deferred | proves the interface is sufficient |
+| `R-03` web console talks ROS 2 only | **in**, planned | proves the interface is sufficient — and is now how the console reaches the containers at all |
 | `T-03` pedestrians spawn but do not move | **in**, **and already fixed** | world fidelity; status below is stale, the fix landed 2026-08-03 |
 | `V-01b` local vLLM on GPU 1 | **out** | model choice |
 | `E-02b` the other scenarios have nothing in the way | **out** | scenario design as a policy challenge |
@@ -179,7 +179,7 @@ new service (452 frames, 0 dropped).
   service now reports it: *"NOT clustered: only 0 spawn points within 30 m … fell back to
   map-wide"*.
 
-**Deferred with [R-03](#r-03--the-web-console-talks-ros-2-only--deferred-2026-08-03):** the
+**Deferred with [R-03](#r-03--the-web-console-talks-ros-2-only--planned-revised-2026-08-07):** the
 chase camera still has no video *topic*. Nothing needs one now that recording is a service —
 the web console was the only consumer.
 
@@ -324,23 +324,82 @@ was written two days before both of these. The pattern is worth naming rather th
 - **Not urgent.** Both behaviours are verified and recorded; this is about them staying
   verified.
 
-### R-03 · The web console talks ROS 2 only — **deferred** *(2026-08-03)*
+### R-03 · The web console talks ROS 2 only — **planned** *(revised 2026-08-07)*
 
-`webui/server.py` currently dispatches *arbitrary* sidecar RPC methods over the Unix socket
-(`webui/server.py:316-319`) and imports no ROS at all. Every button — velocity, yaw, hold,
+`webui/server.py` dispatches sidecar RPC methods over the Unix socket
+(`webui/server.py:328-332`) and imports no ROS at all. Every button — velocity, yaw, hold,
 land, takeoff — bypasses the interface this project claims is the interface.
 
-Once R-01 lands, the console has no reason to be on the 3.10 side: nothing it does needs
-`libcarla`. It moves to 3.12 and becomes an `rclpy` node serving HTTP.
+**Revised 2026-08-07, and the revision changes the answer.** This was deferred on 2026-08-03
+as a tidiness item with nothing depending on it. Two things have since made that reading
+wrong, and a third made the estimate wrong:
 
-**One honest carve-out.** *Start the simulator* and *stop everything* cannot be ROS calls —
-there is no graph to call into before the simulator exists, and the stop button's whole job is
-to destroy the graph. Those stay process management, and keep shelling out to `run_sim.sh` /
-`stop.sh` so the Vulkan ICD repair, the GPU pin and the path-scoped process matching are not
-reimplemented. Flying the aircraft is the part that must be ROS.
+1. **The containers arrived (2026-08-06) and stranded the console.** It is in no image, no
+   script starts it, and it cannot reach the containerised sidecar at all: it looks for
+   `/tmp/carla_air_testbed.sock` (`sim_bridge/protocol.py:23`) while the stack serves
+   `/run/carla-air/sim.sock` on volume `carla-air-run` (`scripts/stack_up.sh:40`), whose host
+   mountpoint is `Permission denied` under the rootless daemon *(checked 2026-08-07)*. So the
+   current design is not merely untidy, it is a **dead end** — and porting to `rclpy` is now
+   the *cheapest* route to a containerised console, cheaper than joining namespaces with the
+   3.10 process, because an `rclpy` node needs no socket at all.
+2. **The socket path is why the console contends with the graph.** It opens a *second* AirSim
+   capture, which is the whole reason it carries a do-not-run-during-a-scored-episode warning
+   (`webui/server.py:26-29`). Subscribing to `/camera/rgb/image_raw` means one capture serves
+   the agent and the console both — so a scored run becomes watchable live, which is the use
+   case the console was built for and currently cannot serve.
+3. **The job is much smaller than this entry implied.** The allowlist exposes all 30 sidecar
+   methods, but the console only *uses* **14** — nine from the page, five from the server.
+   Thirteen of those already exist on the ROS surface:
 
-- **Verify:** `grep -c 'socket' webui/server.py` reaches zero for the control and video paths,
-  and every control still works over NetBird. Both video panes come from ROS topics.
+| what the console calls | on ROS 2 today |
+|---|---|
+| `state` | `/fmu/out/vehicle_odometry` |
+| `collision` | `/sim/collision` |
+| `reset` | `/sim/reset_vehicle` |
+| `spawn_traffic`, `set_weather`, `destroy_actors` | the three matching `/sim/*` services |
+| `takeoff`, `land`, `hold`, `velocity`, `yaw` | `/fmu/in/trajectory_setpoint` + `VehicleCommand` |
+| `view_jpeg` | `/camera/rgb/image_raw` |
+| `chase_view` | `/sim/chase_recording` |
+| **`chase_jpeg`** | **nothing — the one genuine gap** |
+
+`examples/ros2_full_control.py` is the existence proof for row five, and a hard one: it flies
+takeoff, land, velocity and yaw over `rclpy` + `px4_msgs` while **importing nothing from the
+testbed**. So this item is not "grow the ROS surface to match the console". It is "make the
+console use what already works".
+
+**Do not invent friendly services to make the port easy.** `examples/ros2_full_control.py:17-20`
+refuses `/testbed/takeoff` on purpose: moving to hardware must mean deleting `carla_air_bridge`
+and starting `uxrce_dds_client`, not rewriting clients. If porting a button tempts you to add
+one, the shim is what broke.
+
+**One honest carve-out, and it is permanent.** *Start the simulator* and *stop everything*
+cannot be ROS calls — there is no graph to call into before the simulator exists, and the stop
+button's whole job is to destroy the graph. Those stay process management, and keep shelling
+out to the project's own scripts so the Vulkan ICD repair, the GPU pin and the path-scoped
+process matching are not reimplemented. The claim afterwards is **"flying is ROS; lifecycle is
+not"** — not "the only interface is ROS 2", which will never be true of this component.
+
+**Sequence.** Each step is independently shippable and leaves the console usable:
+
+1. **Console becomes an `rclpy` node** in the ROS container. Onboard pane from
+   `/camera/rgb/image_raw`, telemetry from `/fmu/out/vehicle_odometry` and `/sim/collision`.
+   Control stays on the socket. *This is the step that closes the container gap.*
+2. **Control moves to ROS** — `TrajectorySetpoint` / `VehicleCommand` for flight, the four
+   existing `/sim/*` services for the world.
+3. **Start/stop repoint** at `stack_up.sh` / `docker stop`.
+4. **Chase pane: decide, do not assume.** It is the only thing needing new plumbing (an
+   `image_transport` pipeline nobody else consumes). Ship one pane first and answer it with
+   the console in hand.
+
+- **Verify:** after step 2, `grep -c 'socket' webui/server.py` reaches zero for the control and
+  video paths, and every control still works over NetBird. Onboard video comes from a ROS
+  topic. A scored episode runs with the console open and the camera rate the agent sees is
+  unchanged — which is the measurement that proves the contention is gone, and the reason to
+  do this at all.
+
+> **Superseded in part.** The 2026-08-03 deferral is kept below because its *reasoning* about
+> the chase camera still holds — but its conclusion ("nothing depends on the console, so this
+> can wait indefinitely") no longer does. The containers changed the cost of waiting.
 
 > **Deferred at the operator's request, 2026-08-03.** The console is a convenience for
 > looking at the simulator by hand; nothing depends on it. Two consequences worth stating
@@ -350,9 +409,11 @@ reimplemented. Flying the aircraft is the part that must be ROS.
 >   this item needed a second video pane. Chase recording writes its own mp4 inside the
 >   sidecar via `chase_start`/`chase_stop` and never streams frames to ROS, so R-01 can be
 >   finished with two more services instead of an `image_transport` pipeline nobody is
->   consuming. The topic comes back when this item does.
+>   consuming. The topic comes back when this item does. *(Still true, and step 4 above is
+>   where it gets answered.)*
 > - **The console keeps talking to the socket until then**, so "the only interface is ROS 2"
->   has a known, documented exception rather than being quietly untrue.
+>   has a known, documented exception rather than being quietly untrue. *(Still true, and now
+>   also the reason it cannot reach the containerised stack.)*
 
 ### R-04 · One command to install — **done** *(2026-08-03)*
 
@@ -566,7 +627,7 @@ Two options, and this is a decision rather than code:
 
 1. ~~**R-04**~~ — **done 2026-08-03.**
 2. ~~**R-01**~~ — **done 2026-08-03**, `run_episode.py` included.
-3. ~~**R-02**~~ — **done 2026-08-03**. With R-03 deferred, the repositioning is complete.
+3. ~~**R-02**~~ — **done 2026-08-03**. The repositioning is complete apart from R-03, which was re-planned on 2026-08-07 once the containers stranded the console.
 4. **R-07**, **R-05**, **R-06** — small and independent, in whatever order suits.
 4. **R-05** and **R-06** any time — small, independent, and neither blocks anything.
 
