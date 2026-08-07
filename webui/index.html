@@ -129,10 +129,19 @@
   </section>
 
   <aside>
+    <!-- Only when the video is on the SOCKET. On ROS 2 the console re-encodes the frame the
+         agent already received, so there is no second capture and nothing to warn about. -->
     <div class="note" id="graph-warning" hidden>
       <strong>ROS graph is running.</strong> The onboard stream is a real AirSim capture and
       competes with it for the image path — an episode in progress will see a lower frame
       rate while this page is open.
+    </div>
+
+    <div class="note" id="ros-note" hidden>
+      <strong>Video and telemetry are on ROS 2.</strong> This is the frame the agent already
+      receives, re-encoded — not a second capture. Streaming still costs about
+      <strong>6.6%</strong> of the camera rate (the JPEG encode), against ~24% on the socket
+      path — low enough to leave open during a scored run, but not free.
     </div>
 
     <div class="card"><div class="pad">
@@ -146,6 +155,7 @@
           <tr><td>heading</td><td id="t-yaw">—</td></tr>
           <tr><td>ground speed</td><td id="t-spd">—</td></tr>
           <tr><td>collision</td><td id="t-col">—</td></tr>
+          <tr><td>video</td><td id="t-src">—</td></tr>
           <tr><td>armed</td><td id="t-armed">—</td></tr>
         </table>
       </fieldset>
@@ -265,7 +275,22 @@ async function poll() {
     const up = s.socket;
     $('#dot-sim').classList.toggle('on', up);
     $('#lbl-sim').textContent = up ? 'simulator up' : 'simulator down';
-    $('#graph-warning').hidden = !s.graph_up;
+    // Which source is live, and — when it is ROS — whether anything is actually arriving on
+    // it. A blank pane must say why: "nothing yet" and "stale 6.2 s" are different faults.
+    const src = s.source || {source: 'socket'};
+    const onRos = src.source === 'ros';
+    $('#graph-warning').hidden = !(s.graph_up && !onRos);
+    $('#ros-note').hidden = !onRos;
+    if (!onRos) {
+      $('#t-src').textContent = 'sidecar socket';
+    } else if (src.video.fresh) {
+      $('#t-src').textContent = 'ROS topic';
+    } else if (src.video.ever) {
+      $('#t-src').textContent = 'ROS topic — stale ' + src.video.age_s + ' s';
+    } else {
+      $('#t-src').textContent = 'ROS topic — nothing yet';
+    }
+    $('#t-src').style.color = (onRos && !src.video.fresh) ? 'var(--stop)' : '';
     if (up) startStreams(); else stopStreams();
   } catch (e) { /* server restarting; try again next tick */ }
 

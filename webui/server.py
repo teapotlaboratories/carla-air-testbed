@@ -7,9 +7,10 @@ Everything else in this project drives a *scripted* episode. There was no way to
 at the simulator, or to fly somewhere and see what the camera sees — which is what scenario
 design actually needs, and what turned three flight-test failures into log archaeology.
 
-Runs on the **3.10** side and talks to `sim_bridge` over the existing Unix socket, so it
-reuses the same RPC surface `run_episode.py` uses rather than opening a second path to the
-simulator.
+**Onboard video and telemetry come from ROS 2 topics** when this runs somewhere `rclpy` is
+importable — R-03 step 1. Control and the chase pane still go over the Unix socket to
+`sim_bridge`; steps 2 and 4 move those. Which source is in use is printed at startup and
+reported by `/api/status`, because the one thing this must never do is degrade quietly.
 
 Four decisions worth knowing:
 
@@ -23,10 +24,12 @@ Four decisions worth knowing:
 * **One socket per concern.** Streams and control each get their own connection to the
   sidecar. Sharing one would interleave a control write with a 40 kB frame read, which is
   the failure this project has already paid for once.
-* **This CONTENDS with the ROS graph.** The onboard view is a real AirSim capture, and that
-  image path is the bottleneck — streaming at 10 Hz while an episode runs would halve the
-  rate the model sees. The console is for manual flying with the graph down, and it says so
-  on the page rather than silently degrading a scored run.
+* **On ROS it contends far less — not zero.** The onboard view used to be a *second* AirSim
+  capture on the image path this project is bottlenecked by. Measured 2026-08-07 with a
+  browser streaming, three drift-controlled pairs each way: the socket path costs **24.0%** of
+  `/camera/rgb/image_raw`, the ROS path **6.6%**. Re-encoding to JPEG is not free, so the
+  honest claim is 3.6x cheaper rather than free — and the page says the number rather than
+  "safe".
 """
 from __future__ import annotations
 
@@ -43,13 +46,19 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROJ = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(PROJ, "sim_bridge"))
+sys.path.insert(0, HERE)
 
 import protocol  # noqa: E402
+import ros_source  # noqa: E402
 
-HERE = os.path.dirname(os.path.abspath(__file__))
 SOCKET = os.environ.get("TESTBED_SOCKET", protocol.DEFAULT_SOCKET)
+
+#: The live ROS subscriber, or None when video and telemetry are on the socket. Set once in
+#: `main()` and read from the request threads; never reassigned after the server starts.
+ROS = None
 
 #: Set when the server is reachable from anything but this machine. Every /api and /stream
 #: request must then carry `?k=<token>`.
@@ -285,16 +294,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             elif path == "/api/status":
-                self._json(PROCS.status())
+                status = PROCS.status()
+                status["source"] = (ROS.health() if ROS is not None
+                                    else {"source": "socket", "reason": ros_source.RosSource.import_error})
+                self._json(status)
             elif path == "/api/state":
-                self._json({"state": CONTROL.call("state"),
-                            "collision": CONTROL.call("collision")})
+                # On ROS the numbers arrive by subscription, so this is a cache read rather
+                # than two round trips to the sidecar. Falling back per-request would hide a
+                # dead graph behind numbers that look fine, so a live source that has not
+                # received anything yet says exactly that instead.
+                if ROS is not None:
+                    state = ROS.state()
+                    if state is None:
+                        raise RuntimeError(
+                            f"no odometry on {ROS.topics['odom']} yet — is the graph up?")
+                    self._json({"state": state, "collision": ROS.collision()})
+                else:
+                    self._json({"state": CONTROL.call("state"),
+                                "collision": CONTROL.call("collision")})
             # 12 fps onboard, 30 fps chase. The onboard view is an AirSim capture and tops
             # out near 38 fps on that RPC path, which the ROS graph also uses — so it stays
             # modest. The chase view is a CARLA sensor and 30 Hz costs the simulator nothing
             # measurable (59.8 vs 60.0 fps tick rate).
             elif path == "/stream/onboard":
-                self._mjpeg(lambda: ONBOARD.call("view_jpeg", quality=75)["jpeg"], fps=12)
+                # On ROS this is the frame the agent already received, re-encoded — no second
+                # capture, so it costs the simulator nothing and may run during a scored
+                # episode. On the socket it is a capture of its own, and 12 fps is a deliberate
+                # ceiling: that RPC path tops out near 38 fps and the graph shares it.
+                if ROS is not None:
+                    self._mjpeg(lambda: ROS.latest_jpeg(quality=75), fps=12)
+                else:
+                    self._mjpeg(lambda: ONBOARD.call("view_jpeg", quality=75)["jpeg"], fps=12)
             elif path == "/stream/chase":
                 self._mjpeg(lambda: CHASE.call("chase_jpeg", quality=75)["jpeg"], fps=30)
             else:
@@ -336,8 +366,41 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 500)
 
 
+def _open_source(choice):
+    """Pick where video and telemetry come from, and say which — loudly, on stderr or stdout.
+
+    `--source ros` **fails** rather than falling back. Someone who asked for ROS precisely to
+    avoid a second AirSim capture, and silently got one, would be measuring the thing they
+    were trying to eliminate. That is the T-02 lesson: a silent fallback on a measurement path
+    is a bug in the fallback.
+    """
+    if choice == "socket":
+        print("video + telemetry: sidecar socket (asked for)", flush=True)
+        print("  this opens a SECOND camera capture — not during a scored episode", flush=True)
+        return None
+
+    if not ros_source.RosSource.importable():
+        why = ros_source.RosSource.import_error
+        if choice == "ros":
+            sys.exit(f"--source ros, but this interpreter cannot be a ROS node: {why}\n"
+                     f"Run it under the ROS environment (scripts/webui.sh does that), or pass "
+                     f"--source socket to accept the second capture deliberately.")
+        print(f"video + telemetry: sidecar socket — rclpy is not importable here ({why})",
+              flush=True)
+        print("  this opens a SECOND camera capture — not during a scored episode", flush=True)
+        return None
+
+    src = ros_source.RosSource().start()
+    print(f"video + telemetry: ROS 2 topics — {src.topics['image']}, {src.topics['odom']}",
+          flush=True)
+    print("  no second capture: costs ~6.6% of the camera rate while streaming, vs ~24% on\n"
+          "  the socket (measured 2026-08-07) — low enough to leave open during a scored run",
+          flush=True)
+    return src
+
+
 def main():
-    global TOKEN
+    global TOKEN, ROS
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--bind", default=os.environ.get("TESTBED_WEB_BIND", "127.0.0.1"),
@@ -348,6 +411,10 @@ def main():
                     help="require ?k=<token>; generated automatically when not on loopback")
     ap.add_argument("--no-token", action="store_true",
                     help="serve a non-loopback address with NO authentication (don't)")
+    ap.add_argument("--source", choices=("auto", "ros", "socket"),
+                    default=os.environ.get("TESTBED_WEB_SOURCE", "auto"),
+                    help="where onboard video and telemetry come from: ROS 2 topics when "
+                         "rclpy is importable, else the sidecar socket (default: auto)")
     args = ap.parse_args()
 
     bind = args.bind
@@ -364,6 +431,10 @@ def main():
         TOKEN = args.token or secrets.token_urlsafe(18)
     elif args.token:
         TOKEN = args.token
+
+    # Before the socket is bound, so a --source ros that cannot be honoured exits without
+    # first advertising a URL that would then serve no pictures.
+    ROS = _open_source(args.source)
 
     server = ThreadingHTTPServer((bind, args.port), Handler)
     server.daemon_threads = True
@@ -398,6 +469,8 @@ def main():
         pass
     finally:
         server.server_close()
+        if ROS is not None:
+            ROS.stop()
 
 
 if __name__ == "__main__":
