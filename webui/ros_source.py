@@ -49,6 +49,8 @@ import math
 import threading
 import time
 
+import ros_control
+
 #: The origin sits this far above the street on Town10HD. Here only so the console and the
 #: page cannot disagree about it; the conversion functions below never apply it.
 GROUND_NED_Z = 27.45
@@ -150,6 +152,9 @@ class RosSource:
         self._armed = True
         self._node = None
         self._thread = None
+        self._pub_setpoint = None
+        self._pub_command = None
+        self._services = {}
         self._stop = threading.Event()
         self._cv = None
         self._cv2 = None
@@ -197,6 +202,22 @@ class RosSource:
         self._node.create_subscription(VehicleStatus, self.topics["status"], self._on_status, px4_qos)
         self._node.create_subscription(Collision, self.topics["collision"], self._on_collision, 5)
 
+        # R-03 step 2: the command surface. PX4 messages on PX4 topics for flight, the four
+        # existing /sim/* services for the world. Nothing new was added to the ROS surface.
+        from px4_msgs.msg import TrajectorySetpoint, VehicleCommand
+        from interfaces.srv import DestroyActors, ResetVehicle, SetWeather, SpawnTraffic
+
+        self._pub_setpoint = self._node.create_publisher(
+            TrajectorySetpoint, ros_control.SETPOINT_TOPIC, px4_qos)
+        self._pub_command = self._node.create_publisher(
+            VehicleCommand, "/fmu/in/vehicle_command", px4_qos)
+        self._services = {
+            "/sim/reset_vehicle": self._node.create_client(ResetVehicle, "/sim/reset_vehicle"),
+            "/sim/spawn_traffic": self._node.create_client(SpawnTraffic, "/sim/spawn_traffic"),
+            "/sim/set_weather": self._node.create_client(SetWeather, "/sim/set_weather"),
+            "/sim/destroy_actors": self._node.create_client(DestroyActors, "/sim/destroy_actors"),
+        }
+
         def spin():
             while not self._stop.is_set() and rclpy.ok():
                 rclpy.spin_once(self._node, timeout_sec=0.2)
@@ -212,6 +233,14 @@ class RosSource:
         if self._node is not None:
             self._node.destroy_node()
             self._node = None
+        # Leaving the context initialised is harmless at process exit and a nuisance anywhere
+        # else — a second node in the same process would inherit a half-torn-down context.
+        try:
+            import rclpy
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:  # noqa: BLE001 — never let teardown raise
+            pass
 
     # -- callbacks ------------------------------------------------------------------------
 
@@ -285,3 +314,77 @@ class RosSource:
             "state": {"age_s": None if state_age is None else round(state_age, 2),
                       "fresh": state_ok, "ever": state_at is not None},
         }
+
+    # -- the command surface (R-03 step 2) --------------------------------------------------
+
+    def contested(self):
+        """Nodes other than this console publishing setpoints. Zero means we are alone."""
+        if self._node is None:
+            return 0
+        return ros_control.others_publishing(
+            self._node.count_publishers(ros_control.SETPOINT_TOPIC))
+
+    def command(self, method, args=None):
+        """Issue a console command over ROS 2. Raises `KeyError` if it has no ROS equivalent.
+
+        **Refuses to fly while another node is publishing setpoints.** Two publishers on one
+        setpoint topic produce no error at all, just an aircraft that goes somewhere neither
+        asked for — measured in `examples/ros2_full_control.py`, where a takeoff to NED 35 m
+        reached 15.6 m. Seizing control instead would be a large side effect for a button
+        press; the console's job after step 1 is watching a run, so it declines and says who
+        it is declining to.
+        """
+        kind, payload = ros_control.plan(method, args)
+
+        if method in ros_control.FLIGHT_METHODS:
+            others = self.contested()
+            if others:
+                raise ros_control.Contested(
+                    f"{others} other node(s) are publishing {ros_control.SETPOINT_TOPIC} — "
+                    f"flying from here would fight them, with no error to say why. Stop the "
+                    f"controller (examples/navigation) first, or watch rather than fly.")
+
+        if kind == "setpoint":
+            from px4_msgs.msg import TrajectorySetpoint
+            msg = TrajectorySetpoint()
+            msg.timestamp = int(time.time() * 1e6)
+            for field, value in payload.items():
+                setattr(msg, field, value)
+            self._pub_setpoint.publish(msg)
+            return {"sent": "trajectory_setpoint"}
+
+        if kind == "command":
+            from px4_msgs.msg import VehicleCommand
+            name, params = payload
+            msg = VehicleCommand()
+            msg.timestamp = int(time.time() * 1e6)
+            msg.command = getattr(VehicleCommand, name)
+            for i in range(1, 8):
+                setattr(msg, f"param{i}", float(params.get(f"param{i}", 0.0)))
+            # A real PX4 filters on these; the bridge ignores them. Sending the right values
+            # means the same client works against hardware without edits.
+            msg.target_system = msg.target_component = 1
+            msg.source_system = msg.source_component = 1
+            msg.from_external = True
+            self._pub_command.publish(msg)
+            return {"sent": name}
+
+        name, fields = payload
+        client = self._services[name]
+        if not client.wait_for_service(timeout_sec=5.0):
+            raise RuntimeError(f"{name} is not available — is the bridge node up?")
+        request = client.srv_type.Request()
+        for field, value in fields.items():
+            if hasattr(request, field):
+                setattr(request, field, value)
+        future = client.call_async(request)
+        # The executor spins on our own thread, so block on the future rather than spinning
+        # here — spin_until_future_complete from a second thread deadlocks against it.
+        for _ in range(600):
+            if future.done():
+                break
+            time.sleep(0.05)
+        if not future.done():
+            raise RuntimeError(f"{name} did not answer within 30 s")
+        reply = future.result()
+        return {k: getattr(reply, k) for k in reply.get_fields_and_field_types()}
