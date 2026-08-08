@@ -121,11 +121,46 @@ def test_a_method_with_no_ros_equivalent_is_refused_not_guessed():
         ros_control.plan("chase_jpeg", {})
 
 
-def test_the_routing_table_and_the_flight_subset_agree():
+def test_the_routing_tables_agree():
     assert ros_control.FLIGHT_METHODS <= ros_control.ROS_METHODS
-    assert "set_weather" not in ros_control.FLIGHT_METHODS, (
-        "changing the weather mid-episode is rude, not dangerous — refusing it while another "
-        "node flies would block a harmless button for no reason")
+    assert ros_control.GUARDED_METHODS <= ros_control.ROS_METHODS
+
+
+def test_reset_is_guarded_even_though_it_is_not_a_flight_command():
+    """The hole the first version of this PR shipped with.
+
+    `reset` is a `/sim/*` service, so it sorts with world control and the guard skipped it. But
+    `/sim/reset_vehicle` takes a `hold_ned` and FLIES THE AIRCRAFT THERE, then runs the D-03
+    convergence loop for several seconds. Relocating an aircraft out from under a running
+    controller is strictly worse than the velocity nudges the guard does refuse.
+
+    The lesson is that "flight command" and "moves the aircraft" are different sets, and the
+    guard needs the second one.
+    """
+    assert "reset" in ros_control.GUARDED_METHODS, (
+        "reset bypasses the contention guard — it would teleport the aircraft out from under a "
+        "running controller")
+    assert "reset" not in ros_control.FLIGHT_METHODS, (
+        "reset is not a /fmu/in setpoint; keep the two sets honest about what they mean")
+
+
+#: Why each unguarded method is safe to leave unguarded. Written out so that adding a method
+#: without deciding this is a test failure rather than an omission — which is exactly how
+#: `reset` slipped through the first time.
+UNGUARDED_ON_PURPOSE = {
+    "spawn_traffic": "changes the world around the aircraft, never the aircraft",
+    "set_weather": "changes the world around the aircraft, never the aircraft",
+    "destroy_actors": "removes traffic actors, never the aircraft",
+}
+
+
+def test_every_unguarded_method_is_unguarded_on_purpose():
+    """A guard is only as good as the list of things it deliberately lets past."""
+    unguarded = ros_control.ROS_METHODS - ros_control.GUARDED_METHODS
+    undecided = unguarded - set(UNGUARDED_ON_PURPOSE)
+    assert not undecided, (
+        f"{sorted(undecided)} bypass the contention guard and nobody has said why. If they "
+        f"cannot move the aircraft, add them above with a reason; if they can, guard them")
 
 
 # ------------------------------------------------------------------ the contention guard

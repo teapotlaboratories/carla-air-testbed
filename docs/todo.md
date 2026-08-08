@@ -433,6 +433,16 @@ against a live graph:
 | yaw 90 | setpoint, absolute heading | yaw −89 → **+82°** |
 | set_weather | `/sim/set_weather` | `success: true, applied: HardRainSunset` |
 
+**Review of the step-2 PR found the guard had a hole**, and it is worth recording because the
+shape recurs: `reset` is a `/sim/*` service, so it sorted with world control and the guard
+skipped it — but `/sim/reset_vehicle` takes a `hold_ned` and **flies the aircraft there**, then
+runs the D-03 convergence loop for several seconds. Relocating an aircraft out from under a
+running controller is strictly worse than the velocity nudges the guard did refuse. *"Flight
+command"* and *"moves the aircraft"* are different sets and the guard needs the second one.
+The test that should have caught it instead **encoded the omission**: it asserted only that
+`set_weather` was excluded. There is now a table naming why each unguarded method is safe, so
+adding one without deciding is a failure rather than an oversight.
+
 **The contention decision, and it is enforced:** a second publisher on
 `/fmu/in/trajectory_setpoint` makes the console **refuse to fly** — HTTP 409, naming how many
 nodes it is declining to fight — while world commands stay allowed. Measured with a rival
