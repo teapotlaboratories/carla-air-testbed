@@ -96,3 +96,23 @@ def test_in_stack_is_not_inferred_from_a_container_marker():
     for marker in ("/run/.containerenv", "/.dockerenv"):
         assert f'exists("{marker}")' not in src, (
             f"in-stack inferred from {marker}; that is true for every console on this machine")
+
+
+def test_being_inside_the_stack_is_proof_the_stack_is_running():
+    """The bug that only the live `--in-stack` run exposed.
+
+    `stack_running()` shells out to `docker ps`, and **the ROS image ships no docker binary**.
+    So a console inside the stack got `OSError`, concluded there was no stack, took the host
+    path, and offered to start a second simulator. Every unit test passed throughout, because
+    they inject `stack_running` as a parameter instead of computing it — the detection was the
+    one part never covered.
+    """
+    with open(os.path.join(ROOT, "webui", "server.py")) as fh:
+        src = fh.read()
+    body = src[src.index("def stack_running"):src.index("def _guard")]
+    # Anchored on the CALL, not the word "docker" — which now appears in the docstring
+    # explaining this very trap, and matched there on the first attempt at this test.
+    assert "if self.IN_STACK:" in body, "the shortcut is gone"
+    assert body.index("if self.IN_STACK:") < body.index("subprocess.run"), (
+        "stack_running() shells out before checking IN_STACK; inside the stack there is no "
+        "docker binary, so it would answer 'no stack' from inside the stack")

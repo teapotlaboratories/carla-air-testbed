@@ -166,7 +166,17 @@ class Processes:
 
     def stack_running(self):
         """Is the containerised stack up? Asked per press, not cached — the console outlives
-        the stack, and a button aimed at a deployment that is gone is worse than no button."""
+        the stack, and a button aimed at a deployment that is gone is worse than no button.
+
+        **Being inside the stack is proof the stack exists**, and that shortcut is not an
+        optimisation — it is required. The ROS image ships no `docker` binary, so a console
+        started with `--in-stack` gets `OSError` from the probe below, concludes there is no
+        stack, and takes the HOST path: pressing Start then asks for `CARLAAIR_RELEASE` and
+        offers to launch a second simulator. Found by finally running `--in-stack`; every unit
+        test passed because they inject this answer rather than compute it.
+        """
+        if self.IN_STACK:
+            return True
         try:
             names = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
                                    capture_output=True, text=True, timeout=10).stdout.split()
