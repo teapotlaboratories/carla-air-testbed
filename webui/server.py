@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.join(PROJ, "sim_bridge"))
 sys.path.insert(0, HERE)
 
 import protocol  # noqa: E402
+import ros_control  # noqa: E402
 import ros_source  # noqa: E402
 
 SOCKET = os.environ.get("TESTBED_SOCKET", protocol.DEFAULT_SOCKET)
@@ -297,8 +298,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif path == "/api/status":
                 status = PROCS.status()
-                status["source"] = (ROS.health() if ROS is not None
-                                    else {"source": "socket", "reason": ros_source.RosSource.import_error})
+                if ROS is not None:
+                    status["source"] = ROS.health()
+                    status["source"]["contested"] = ROS.contested()
+                else:
+                    # Distinguish "asked for the socket" from "could not have ROS". Both are
+                    # degraded relative to step 2, and only one of them is a problem.
+                    why = ros_source.RosSource.import_error
+                    status["source"] = {
+                        "source": "socket",
+                        "reason": why or "asked for with --source socket",
+                        "rclpy_available": why is None,
+                    }
                 self._json(status)
             elif path == "/api/state":
                 # On ROS the numbers arrive by subscription, so this is a cache read rather
@@ -361,7 +372,19 @@ class Handler(BaseHTTPRequestHandler):
                 method = body.get("method")
                 if method not in protocol.METHODS:
                     raise RuntimeError(f"unknown method {method!r}")
-                self._json({"result": CONTROL.call(method, **body.get("args", {}))})
+                args = body.get("args", {})
+                # R-03 step 2: anything with a ROS equivalent goes over ROS. The rest — the
+                # chase pane, the sidecar diagnostics — stays on the socket until step 4.
+                # `via` is reported so the page can never be wrong about which path ran.
+                if ROS is not None and method in ros_control.ROS_METHODS:
+                    try:
+                        self._json({"result": ROS.command(method, args), "via": "ros"})
+                    except ros_control.Contested as exc:
+                        # 409, not 500: nothing failed. The console declined to fight another
+                        # publisher, which is a state the caller can resolve.
+                        self._json({"error": str(exc), "contested": True}, 409)
+                else:
+                    self._json({"result": CONTROL.call(method, **args), "via": "socket"})
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001

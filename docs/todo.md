@@ -421,11 +421,45 @@ is **unmeasured**.
 - Found while measuring: the stream served 12 fps from a 6.4 Hz source, so **half the JPEG
   encodes were the same frame again**. Now encoded at most once, keyed on arrival stamp.
 
+**Step 2 landed 2026-08-07.** `webui/ros_control.py` maps every console button onto the ROS
+surface that already existed — `TrajectorySetpoint` and `VehicleCommand` for flight, the four
+`/sim/*` services for the world. **Nothing was added to the ROS surface for it.** Verified
+against a live graph:
+
+| button | over ROS | result |
+|---|---|---|
+| takeoff −30 NED | `VEHICLE_CMD_NAV_TAKEOFF` param7 = 30 | NED z 28.91 → **−30.41** |
+| velocity ×4 north | `TrajectorySetpoint.velocity` | north 6.5 → **12.8 m** |
+| yaw 90 | setpoint, absolute heading | yaw −89 → **+82°** |
+| set_weather | `/sim/set_weather` | `success: true, applied: HardRainSunset` |
+
+**The contention decision, and it is enforced:** a second publisher on
+`/fmu/in/trajectory_setpoint` makes the console **refuse to fly** — HTTP 409, naming how many
+nodes it is declining to fight — while world commands stay allowed. Measured with a rival
+publisher: `contested: 0 → 1`, flight `409`, `set_weather` still `200`, then `1 → 0` and flight
+allowed again when the rival exited. The alternative (seizing control, as
+`examples/ros2_full_control.py` does) is a large side effect for a button press; after step 1
+the console's job is watching a run, so it declines instead. Two publishers on one setpoint
+topic produce **no error at all**, just an aircraft that goes somewhere neither asked for —
+that example measured a takeoff to NED 35 m arriving at 15.6 m.
+
+Three semantics preserved rather than improved, because step 2 must move the buttons without
+changing what they do: **`yaw` is absolute** (the sidecar calls `rotateToYawAsync`), `hold` is a
+literal zero-velocity command, and **the velocity lifetime is not ours to set** —
+`TrajectorySetpoint` has no duration field, so the bridge's `setpoint_duration_s` (0.5 s)
+applies and the page's `duration: 0.7` is simply not expressible. Inventing a duration field to
+paper over that is what the no-friendly-services rule forbids.
+
 - **Verify:** after step 2, `grep -c 'socket' webui/server.py` reaches zero for the control and
   video paths, and every control still works over NetBird. Onboard video comes from a ROS
   topic. ~~The camera rate the agent sees is unchanged with the console open~~ — **superseded
   2026-08-07**: the rate is *materially reduced but not eliminated*, and what the step must
   produce is the measured pair above, not a null result.
+  **Met, with one honest qualification:** in ROS mode no control or video goes over the socket.
+  Four `CONTROL.call` sites remain and all four are legitimate — two are the socket-mode
+  *fallback* for state and collision, one is the socket-mode command fallback for methods with
+  no ROS equivalent, and one is `chase_view`, which is step 4. A literal zero is only reachable
+  by deleting the fallback, which would make the console unusable without a graph.
 
 > **Superseded in part.** The 2026-08-03 deferral is kept below because its *reasoning* about
 > the chase camera still holds — but its conclusion ("nothing depends on the console, so this
