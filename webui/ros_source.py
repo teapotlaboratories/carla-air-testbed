@@ -336,12 +336,17 @@ class RosSource:
         """
         kind, payload = ros_control.plan(method, args)
 
-        if method in ros_control.FLIGHT_METHODS:
+        if self._pub_setpoint is None or self._pub_command is None:
+            raise RuntimeError(
+                "the ROS command surface is not up — start() did not finish, so this console "
+                "can subscribe but not command. Check its startup log.")
+
+        if method in ros_control.GUARDED_METHODS:
             others = self.contested()
             if others:
                 raise ros_control.Contested(
                     f"{others} other node(s) are publishing {ros_control.SETPOINT_TOPIC} — "
-                    f"flying from here would fight them, with no error to say why. Stop the "
+                    f"commanding from here would fight them, with no error to say why. Stop the "
                     f"controller (examples/navigation) first, or watch rather than fly.")
 
         if kind == "setpoint":

@@ -47,15 +47,32 @@ ROS_METHODS = frozenset({
     "reset", "spawn_traffic", "set_weather", "destroy_actors",  # world, on /sim/*
 })
 
-#: The subset that moves the aircraft. Only these are refused while another node is publishing
-#: setpoints; changing the weather during someone else's episode is rude but not dangerous.
+#: Commands that fly the aircraft, on `/fmu/in/*`.
 FLIGHT_METHODS = frozenset({"takeoff", "land", "hold", "velocity", "yaw"})
+
+#: What is refused while another node is publishing setpoints — everything that MOVES THE
+#: AIRCRAFT, which is not the same set as "flight commands".
+#:
+#: `reset` is the one that is easy to get wrong, and this originally did. It is a `/sim/*`
+#: service rather than a setpoint, so it looks like world control — but `/sim/reset_vehicle`
+#: takes a `hold_ned` and flies the aircraft there, then runs the D-03 convergence loop for
+#: several seconds. Relocating an aircraft out from under a running controller is strictly
+#: worse than any velocity nudge this refuses.
+#:
+#: `spawn_traffic`, `set_weather` and `destroy_actors` stay allowed deliberately: they change
+#: the world around a running episode, which is rude, but they never touch the aircraft, and a
+#: guard that blocks harmless buttons trains people to work around it.
+GUARDED_METHODS = FLIGHT_METHODS | frozenset({"reset"})
 
 SETPOINT_TOPIC = "/fmu/in/trajectory_setpoint"
 
 
 class Contested(RuntimeError):
-    """Another node is publishing setpoints, so flying from here would fight it.
+    """Another node is publishing setpoints, so commanding from here would fight it.
+
+    **Not an interlock.** The count is read and then the command is sent, so a controller that
+    starts up in between still slips through. DDS discovery is far slower than that window, so
+    closing it with a lock would buy nothing real — but do not mistake this for a guarantee.
 
     Not a failure to command — a refusal to. `examples/ros2_full_control.py` documents what
     happens otherwise: a takeoff commanded to NED 35 m reached 15.6 m while the aircraft flew
