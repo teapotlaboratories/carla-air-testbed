@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stop THIS testbed's processes. Nothing else.
 #
-# Two hazards this script exists to avoid:
+# Three hazards this script exists to avoid:
 #
 # 1. `pkill -f <pattern>` also matches the command line of the shell running it, so typing
 #    these patterns inline SIGTERMs your own session (exit 144). Keeping them in a file
@@ -12,8 +12,56 @@
 #
 #   ./scripts/stop.sh            # ROS graph + sidecar
 #   ./scripts/stop.sh --all      # also the simulator
+#   ./scripts/stop.sh --help     # this, and nothing else
+#
+# 3. **An argument this script does not recognise must not be ignored.** It used to accept
+#    anything and fall through to the default, so `stop.sh --help` DESTROYED THE GRAPH instead
+#    of printing help — observed 2026-08-07, mid-measurement, costing a restart. A teardown
+#    script is exactly where a typo must fail closed: the cost of refusing a bad argument is
+#    one retry, and the cost of guessing is whatever was running.
 set -u
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+    cat <<'__HELP__'
+stop.sh - stop THIS testbed's processes, and nothing else.
+
+SYNOPSIS
+  ./scripts/stop.sh [--all]
+
+OPTIONS
+  --all          also stop the simulator, including the containerised one
+  -h, --help     this text
+
+With no arguments: the ROS graph and the sidecar, leaving the simulator up.
+
+Every pattern is anchored to this repository's install path, so a sibling project's
+control/evaluation/vlm_client nodes are never matched. Exits non-zero if anything
+survived TERM and KILL - it reports what it ACHIEVED, not what it attempted.
+__HELP__
+}
+
+# Parsed BEFORE anything is killed. That ordering is the fix: the old script ran its kill
+# escalation first and only looked at $1 afterwards, so an unrecognised argument had already
+# taken the graph down by the time it was noticed.
+#
+# Seeded from the environment because `ALL=1` was already honoured by the container teardown
+# at the bottom and by nothing else — so `ALL=1 ./scripts/stop.sh` removed the container,
+# left the host simulator running, and then reported "simulator left running". One variable,
+# consistently applied, rather than two half-implemented ones.
+ALL="${ALL:-0}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all)     ALL=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            echo "ERROR: unknown argument: $1" >&2
+            echo "Nothing was stopped. Run --help to see what this accepts." >&2
+            echo >&2
+            usage >&2
+            exit 2 ;;
+    esac
+done
 
 # Everything this project can start.
 #
@@ -92,7 +140,7 @@ rm -f /tmp/carla_air_testbed.sock
 # `pkill -x` matches the process NAME, never a command line: see the header.
 sim_alive() { pgrep -x "CarlaUE4-Linux-" > /dev/null 2>&1; }
 
-if [ "${1:-}" = "--all" ]; then
+if [ "$ALL" -eq 1 ]; then
     for sig in TERM TERM KILL; do
         sim_alive || break
         pkill "-$sig" -x "CarlaUE4-Linux-" 2>/dev/null || true
@@ -103,7 +151,7 @@ fi
 left="$(targets | wc -l)"
 sim_note="simulator left running"
 rc=0
-if [ "${1:-}" = "--all" ]; then
+if [ "$ALL" -eq 1 ]; then
     if sim_alive; then
         sim_note="SIMULATOR STILL RUNNING — it ignored TERM and KILL"
         rc=1
@@ -122,7 +170,7 @@ fi
 # matching above cannot see it — `stop.sh --all` would report success with 3.3 GB of VRAM
 # still held. Matched by CONTAINER NAME, which is this project's own and cannot collide with
 # the sibling project's `sim-unreal`.
-if [ "${ALL:-0}" -eq 1 ] || [ "${1:-}" = "--all" ]; then
+if [ "$ALL" -eq 1 ]; then
     if command -v docker >/dev/null 2>&1; then
         for c in ${TESTBED_SIM_CONTAINER:-carla-air-sim}; do
             if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
