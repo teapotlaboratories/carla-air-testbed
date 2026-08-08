@@ -1298,6 +1298,34 @@ treat as the Atlantic), and `ros_domain_id` never leaks into the ROS parameter f
 
 ## Tooling
 
+### T-05 · `stop.sh` obeyed arguments it did not understand — **fixed** *(2026-08-07)*
+
+`./scripts/stop.sh --help` **tore down the ROS graph** instead of printing help. The script
+tested `"${1:-}" = "--all"` in three separate places and had no other argument handling at all,
+so anything unrecognised — a typo, a guessed flag, `--help` — fell through to the default
+teardown. Hit while measuring R-03 step 1: I guessed at a `--webui` flag to stop only the
+console, and it stopped the graph, costing a bringup and a restart mid-measurement.
+
+Three defects, one shape:
+
+- **The kill escalation ran before the arguments were read.** By the time an unrecognised flag
+  could have been noticed, the graph was already down. Parsing now completes first, so a
+  partially valid command line (`--all --bogus`) stops *nothing*.
+- **`--all` only worked in position 1.** `stop.sh --foo --all` silently did the default.
+- **`ALL=1` was read by the container teardown and by nothing else**, so
+  `ALL=1 ./scripts/stop.sh` removed the container, left the host simulator running, and then
+  reported `simulator left running`. One flag now, read in all three places.
+
+This is the class of bug the script exists to prevent — it is the teardown path, where rule 1
+says the machine is left clean, and it was guessing at input instead of refusing it.
+
+- **Verify:** 12 tests in `tests/test_stop_args.py`, and they were **checked against the
+  original**: all 12 fail on the pre-fix script, all 12 pass after. They are safe to run beside
+  a live simulator by construction — the script is copied to a temp directory so its
+  `PROJ`-anchored patterns match nothing real, and only the paths that exit *during parsing*
+  are executed. `--all` is never passed by a test; it would `pkill` a real `CarlaUE4`, so it is
+  pinned structurally instead.
+
 ### T-02 · H.264 recording, and cheaper live streams — **done** *(2026-08-06)*
 
 **The sync is fixed.** Three previous attempts failed in flight, each costing a recording, and
