@@ -54,6 +54,10 @@ ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --in-stack) IN_STACK=1; shift ;;
+        # Set by the --in-stack branch below on the inner invocation. Not for humans: it
+        # asserts "you are inside the stack", and claiming that falsely disables the stop
+        # button for no reason.
+        --inside-the-stack) export TESTBED_IN_STACK=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) ARGS+=("$1"); shift ;;
     esac
@@ -63,8 +67,15 @@ if [ "$IN_STACK" = "1" ]; then
     docker ps --format '{{.Names}}' | grep -qx "$SIM" || {
         echo "ERROR: the stack is not up — ./scripts/stack_up.sh --config configs/testbed.yaml" >&2
         exit 1; }
+    # The inner invocation is told it is inside the stack EXPLICITLY, via a flag rather than
+    # by detection. /run/.containerenv is present for this whole project on this machine, so a
+    # marker-file check cannot tell "console inside the stack" from "console in the ordinary
+    # development environment" — and would refuse the stop button in the normal case.
+    #
+    # A flag rather than `--env` because stack_run.sh takes only -d and --name; anything else
+    # is treated as the COMMAND, so `--env FOO=1` would have been run as a program.
     exec "$PROJ/scripts/stack_run.sh" --name carla-air-webui \
-        scripts/webui.sh "${ARGS[@]+"${ARGS[@]}"}"
+        scripts/webui.sh --inside-the-stack "${ARGS[@]+"${ARGS[@]}"}"
 fi
 
 set +u

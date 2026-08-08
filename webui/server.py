@@ -53,6 +53,7 @@ PROJ = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(PROJ, "sim_bridge"))
 sys.path.insert(0, HERE)
 
+import lifecycle  # noqa: E402
 import protocol  # noqa: E402
 import ros_control  # noqa: E402
 import ros_source  # noqa: E402
@@ -159,8 +160,34 @@ class Processes:
         return subprocess.run(argv, cwd=PROJ, env=merged, capture_output=True, text=True,
                               timeout=600)
 
+    #: Set by `scripts/webui.sh --in-stack`. NOT inferred from /run/.containerenv, which is
+    #: present for the whole project on this machine and would refuse the stop button always.
+    IN_STACK = os.environ.get("TESTBED_IN_STACK") == "1"
+
+    def stack_running(self):
+        """Is the containerised stack up? Asked per press, not cached — the console outlives
+        the stack, and a button aimed at a deployment that is gone is worse than no button."""
+        try:
+            names = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                                   capture_output=True, text=True, timeout=10).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim") in names
+
+    def _guard(self, action):
+        why = lifecycle.refusal(action, self.IN_STACK)
+        if why:
+            raise lifecycle.Refused(why)
+
     def start(self):
         with self._lock:
+            target = lifecycle.deployment(self.stack_running())
+            if target == lifecycle.CONTAINER:
+                # The stack is already up — starting the HOST simulator here would give a
+                # second CarlaUE4 competing for GPU 1 with the one being watched.
+                return {"simulator": True, "sidecar": True, "deployment": target,
+                        "detail": ["the containerised stack is already running"]}
+
             if not os.environ.get("CARLAAIR_RELEASE"):
                 raise RuntimeError(
                     "CARLAAIR_RELEASE is not set in the environment that launched this "
@@ -180,11 +207,16 @@ class Processes:
                     time.sleep(1.0)
                 if not os.path.exists(SOCKET):
                     raise RuntimeError("the sidecar never created its socket")
-            return {"simulator": True, "sidecar": True, "detail": out.strip().splitlines()[-3:]}
+            return {"simulator": True, "sidecar": True, "deployment": target,
+                    "detail": out.strip().splitlines()[-3:]}
 
     def stop(self):
         """Everything: simulator, sidecar, and any ROS graph under this repo's install path."""
+        self._guard("stop_all")
         with self._lock:
+            # stop.sh --all covers BOTH deployments: it kills the host processes and, since
+            # 2026-08-06, docker rm -f's the simulator container too. So this one button is
+            # already deployment-agnostic and needs no branch.
             r = self._run([os.path.join(PROJ, "scripts", "stop.sh"), "--all"])
             return {"stopped": True, "detail": (r.stdout or "").strip().splitlines()[-3:]}
 
@@ -193,9 +225,17 @@ class Processes:
         typed into a shell — `pkill -f` would also match this server's own command line, and
         `drone-sim`'s nodes. That distinction cost a sibling project's perception stack once
         already."""
+        self._guard("stop_sim")
         with self._lock:
+            if lifecycle.deployment(self.stack_running()) == lifecycle.CONTAINER:
+                # run_sim.sh --kill matches a host process name and would silently do nothing.
+                name = os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim")
+                r = self._run(["docker", "rm", "-f", name])
+                return {"stopped": "simulator", "deployment": lifecycle.CONTAINER,
+                        "detail": [f"removed container {name}"]}
             r = self._run([os.path.join(PROJ, "scripts", "run_sim.sh"), "--kill"])
-            return {"stopped": "simulator", "detail": (r.stdout or "").strip().splitlines()[-2:]}
+            return {"stopped": "simulator", "deployment": lifecycle.HOST,
+                    "detail": (r.stdout or "").strip().splitlines()[-2:]}
 
     def status(self):
         r = self._run([os.path.join(PROJ, "scripts", "status.sh")])
@@ -387,6 +427,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"result": CONTROL.call(method, **args), "via": "socket"})
             else:
                 self._json({"error": "not found"}, 404)
+        except lifecycle.Refused as exc:
+            # 409, not 500: nothing failed. The console declined to destroy itself, and the
+            # message names what to do instead.
+            self._json({"error": str(exc), "refused": True}, 409)
         except Exception as exc:  # noqa: BLE001
             self._json({"error": str(exc)}, 500)
 
