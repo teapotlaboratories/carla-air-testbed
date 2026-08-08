@@ -1314,7 +1314,12 @@ Three defects, one shape:
 - **`--all` only worked in position 1.** `stop.sh --foo --all` silently did the default.
 - **`ALL=1` was read by the container teardown and by nothing else**, so
   `ALL=1 ./scripts/stop.sh` removed the container, left the host simulator running, and then
-  reported `simulator left running`. One flag now, read in all three places.
+  reported `simulator left running`. One flag now, read in all three places — and **not**
+  inherited from the environment. The first draft of this fix "unified" it by seeding from
+  `${ALL:-0}`, which is worse than the bug: `ALL` is about as generic an environment variable
+  name as exists, so an unrelated export in a parent shell would silently escalate a graph
+  teardown into SIGKILLing the simulator. Destructive scope comes from an explicit flag, never
+  from ambient state. Caught reviewing my own diff before the merge.
 
 This is the class of bug the script exists to prevent — it is the teardown path, where rule 1
 says the machine is left clean, and it was guessing at input instead of refusing it.

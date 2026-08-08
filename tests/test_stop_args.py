@@ -127,3 +127,17 @@ def test_all_is_honoured_consistently():
     assert _source().count('[ "$ALL" -eq 1 ]') == 3, (
         "the simulator kill, the status message and the container teardown must all read the "
         "same flag, or they disagree about what --all meant")
+
+
+def test_destructive_scope_never_comes_from_the_environment():
+    """`ALL` is about as generic an environment variable name as exists.
+
+    An earlier draft of this fix "unified" the flag by seeding it with `${ALL:-0}` so the old
+    half-implemented env path kept working. That made things worse, not better: it turned an
+    unrelated `export ALL=1` in some parent shell into "also SIGKILL the simulator". Whether
+    the teardown escalates must come from the command line, never from ambient state.
+    """
+    assert "ALL=0" in _source(), "the flag is no longer initialised to a hard 0"
+    assert "${ALL:-" not in _source(), (
+        "stop.sh inherits ALL from the environment again — an unrelated export would silently "
+        "escalate a graph teardown into stopping the simulator")

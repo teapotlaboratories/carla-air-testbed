@@ -45,11 +45,17 @@ __HELP__
 # escalation first and only looked at $1 afterwards, so an unrecognised argument had already
 # taken the graph down by the time it was noticed.
 #
-# Seeded from the environment because `ALL=1` was already honoured by the container teardown
-# at the bottom and by nothing else — so `ALL=1 ./scripts/stop.sh` removed the container,
-# left the host simulator running, and then reported "simulator left running". One variable,
-# consistently applied, rather than two half-implemented ones.
-ALL="${ALL:-0}"
+# NOT seeded from the environment, and that is deliberate. `ALL=1` used to be read by the
+# container teardown at the bottom and by nothing else, so `ALL=1 ./scripts/stop.sh` removed
+# the container, left the host simulator running, and reported "simulator left running" — one
+# of the three defects this change fixes.
+#
+# The tempting fix is to honour the variable everywhere. That is worse: `ALL` is about as
+# generic an environment variable name as exists, nothing in this repository sets it, and
+# inheriting it would mean an unrelated export in a parent shell silently escalates a teardown
+# into SIGKILLing the simulator. Destructive scope comes from an explicit flag on the command
+# line, never from ambient state.
+ALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --all)     ALL=1; shift ;;
