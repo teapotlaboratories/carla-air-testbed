@@ -15,8 +15,10 @@ No Docker, no simulator, no graph — the decision is pure so it can be tested h
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,29 +36,85 @@ def test_no_stack_means_host():
     assert lifecycle.deployment(stack_running=False) == lifecycle.HOST
 
 
-def test_start_never_runs_the_host_simulator_against_a_running_stack():
-    """The defect this step exists to fix, stated as the thing that must not happen."""
-    scripts = lifecycle.scripts_for(lifecycle.CONTAINER)
-    assert "scripts/run_sim.sh" not in scripts["start"], (
-        "Start would launch a host-native CarlaUE4 beside the containerised one, competing "
-        "for GPU 1 with the simulator the operator is actually watching")
-    assert scripts["start"][0] == "scripts/stack_up.sh"
+class _FakeRun:
+    """Records what `Processes._run` was asked to execute, and answers with a chosen result."""
+
+    def __init__(self, returncode=0):
+        self.calls, self.returncode = [], returncode
+
+    def __call__(self, argv, env=None, background=False):
+        self.calls.append(list(argv))
+        return SimpleNamespace(returncode=self.returncode, stdout="ok", stderr="")
 
 
-def test_stop_simulator_uses_docker_against_a_stack():
-    """`run_sim.sh --kill` matches a host process NAME, so against the stack it silently
-    succeeds while stopping nothing — the worst outcome for a button."""
-    assert lifecycle.scripts_for(lifecycle.CONTAINER)["stop_sim"][0] == "docker"
-    assert lifecycle.scripts_for(lifecycle.HOST)["stop_sim"][0] == "scripts/run_sim.sh"
+@pytest.fixture
+def procs(monkeypatch):
+    """A real `Processes`, with only the subprocess layer replaced.
+
+    These tests drive the SHIPPED methods. An earlier version asserted against a
+    `lifecycle.scripts_for()` lookup table that `server.py` never called — three green tests
+    measuring a parallel structure, which had already drifted from the code it claimed to
+    describe. That table is gone.
+    """
+    # Loaded by PATH, not by name. `sim_bridge/server.py` is also called `server` and is on
+    # sys.path via webui/server.py's own imports, so a plain `import server` picks up the
+    # sidecar instead and fails with "module 'server' has no attribute 'Processes'".
+    #
+    # sys.path is snapshotted and restored: webui/server.py's module body inserts `webui/`
+    # ahead of `sim_bridge/`, and leaving that in place made every OTHER test that imports
+    # `server` pick up the console instead of the sidecar. Six unrelated failures, caused
+    # entirely by this fixture.
+    saved_path, saved_modules = list(sys.path), set(sys.modules)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "webui_server_under_test", os.path.join(ROOT, "webui", "server.py"))
+        webui_server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(webui_server)
+        p = webui_server.Processes()
+        fake = _FakeRun()
+        monkeypatch.setattr(p, "_run", fake)
+        yield p, fake, webui_server
+    finally:
+        sys.path[:] = saved_path
+        for name in set(sys.modules) - saved_modules:
+            del sys.modules[name]
 
 
-def test_stop_everything_is_the_same_script_either_way():
-    """Deliberately not branched. `stop.sh --all` kills the host processes AND `docker rm -f`s
-    the container, so one button already covers both — adding a branch would be a second
-    implementation to drift."""
-    assert (lifecycle.scripts_for(lifecycle.HOST)["stop_all"]
-            == lifecycle.scripts_for(lifecycle.CONTAINER)["stop_all"]
-            == ["scripts/stop.sh", "--all"])
+def test_start_against_a_running_stack_launches_nothing(procs, monkeypatch):
+    """The defect this step exists to fix. `run_sim.sh` would bring up a host-native CarlaUE4
+    beside the containerised one, competing for GPU 1 with the simulator being watched."""
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: True)
+    result = p.start()
+    assert result["deployment"] == "container"
+    assert fake.calls == [], f"Start ran {fake.calls} while the stack was already up"
+
+
+def test_stop_simulator_removes_the_container_when_the_stack_is_up(procs, monkeypatch):
+    """`run_sim.sh --kill` matches a host process NAME, so against the stack it would report
+    success while stopping nothing."""
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: True)
+    assert p.stop_simulator()["deployment"] == "container"
+    assert fake.calls[0][:3] == ["docker", "rm", "-f"], fake.calls
+
+
+def test_stop_simulator_uses_the_host_script_without_a_stack(procs, monkeypatch):
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: False)
+    assert p.stop_simulator()["deployment"] == "host"
+    assert fake.calls[0][-1] == "--kill" and "run_sim.sh" in fake.calls[0][0]
+
+
+def test_a_failed_docker_rm_is_reported_as_a_failure(procs, monkeypatch):
+    """`stop.sh` announced success twice on 2026-08-03 while the simulator held 3.5 GB of
+    VRAM, because nothing checked the result. Reintroducing that one file over would be worse
+    than never having fixed it."""
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: True)
+    fake.returncode = 1
+    with pytest.raises(RuntimeError, match="STILL RUNNING"):
+        p.stop_simulator()
 
 
 class TestRefusingToDestroyItself:

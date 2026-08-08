@@ -31,6 +31,12 @@ So `scripts/webui.sh --in-stack` sets `TESTBED_IN_STACK=1` explicitly when it de
 from __future__ import annotations
 
 #: The two deployments the buttons can drive.
+#:
+#: There was a `scripts_for()` table here mapping each deployment to its commands. It was
+#: deleted 2026-08-08: `server.py` never called it, so three tests asserted on a parallel
+#: structure that drove nothing — and it had already drifted, claiming Start runs
+#: `stack_up.sh` when the real Start reports the stack is up and runs nothing at all. One
+#: test of the shipped path beats three of a shadow of it.
 HOST = "host"
 CONTAINER = "container"
 
@@ -43,25 +49,6 @@ def deployment(stack_running):
     their next button press aimed at the deployment that is gone.
     """
     return CONTAINER if stack_running else HOST
-
-
-def scripts_for(target):
-    """What each button runs, per deployment. Data rather than branches, so it is testable.
-
-    Returns `(start, stop_all, stop_sim)`, each a list of argv fragments relative to the
-    repository root, or None where that deployment has no equivalent.
-    """
-    if target == CONTAINER:
-        return {
-            "start": ["scripts/stack_up.sh", "--config", "configs/testbed.yaml"],
-            "stop_all": ["scripts/stop.sh", "--all"],
-            "stop_sim": ["docker", "stop"],
-        }
-    return {
-        "start": ["scripts/run_sim.sh"],
-        "stop_all": ["scripts/stop.sh", "--all"],
-        "stop_sim": ["scripts/run_sim.sh", "--kill"],
-    }
 
 
 def refusal(action, in_stack):
