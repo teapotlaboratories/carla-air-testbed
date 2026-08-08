@@ -175,6 +175,54 @@ a live simulator by construction — the script is copied to a temp directory so
 `PROJ`-anchored patterns match nothing real, and only the paths that exit *during parsing* run.
 No test passes `--all`; it would `pkill` a real `CarlaUE4`.
 
+## Step 2 — the buttons, and a guard with a hole in it
+
+`webui/ros_control.py`: every console button onto the ROS surface that already existed —
+`TrajectorySetpoint` and `VehicleCommand` for flight, the four `/sim/*` services for the world.
+**Nothing was added to the ROS surface**, which was the constraint that mattered. Flown against
+a live graph: takeoff −30 NED landed at −30.41, four velocity nudges moved it 6.3 m north, yaw
+90 reached +82°, `set_weather` round-tripped.
+
+The design decision was contention. Two publishers on `/fmu/in/trajectory_setpoint` produce
+**no error at all** — `examples/ros2_full_control.py` measured a takeoff to NED 35 m arriving at
+15.6 m while the aircraft flew where the autonomy loop wanted. The console now **refuses** (HTTP
+409, naming how many nodes it declines to fight) rather than seizing control the way that
+example does. After step 1 its job is watching a run. Measured both directions: `contested`
+0 → 1, flight 409, `set_weather` still 200, then 1 → 0 and flight allowed again once the rival
+exited — a guard that never opens is as broken as one that never closes.
+
+### The guard had a hole, and the test documented it as a decision
+
+Review caught that **`reset` bypassed it**. `reset` is a `/sim/*` service, so it sorted with
+world control and the guard — applied to `FLIGHT_METHODS` — skipped it. But
+`/sim/reset_vehicle` takes a `hold_ned` and **flies the aircraft there**, then runs the D-03
+convergence loop for several seconds. Relocating an aircraft out from under a running controller
+is strictly worse than any velocity nudge the guard did refuse.
+
+*"Flight command"* and *"moves the aircraft"* are different sets. That is the whole lesson, and
+it is a classification error rather than an implementation one — both of this PR's findings
+were.
+
+**The test that should have caught it encoded the omission instead.** It asserted only that
+`set_weather` was excluded, which reads as "the exclusions were considered" when exactly one of
+them had been. There is now a table naming why each unguarded method is safe, so adding one
+without deciding fails rather than passing quietly.
+
+### Semantics preserved rather than improved
+
+Moving a button must not change what it does, so: `yaw` stays **absolute** (the sidecar calls
+`rotateToYawAsync`, so ↺/↻ command *heading 30°*, not *turn by 30°* — odd, but a separate
+decision); `hold` stays a literal zero-velocity command; and the velocity lifetime stays the
+bridge's, because `TrajectorySetpoint` has no duration field and inventing one is what the
+no-friendly-services rule forbids.
+
+## Three reviews, three real findings
+
+Worth stating plainly at the end of the day. Every `/review` this week found something that
+mattered, and **twice the defect was in code I had just written to prevent that class of
+defect** — the `${ALL:-0}` seeding that made a teardown escalate, and the guard that let `reset`
+through. Nothing failed to make either visible; both took a second look.
+
 ## Process
 
 - **The commit window held.** Both of this week's violations came from checking the clock in the
