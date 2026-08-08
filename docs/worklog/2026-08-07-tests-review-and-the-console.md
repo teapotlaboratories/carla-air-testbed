@@ -151,6 +151,30 @@ encodes were the same frame twice. And `scripts/stop.sh` ignores unrecognised ar
 its destructive default anyway — `stop.sh --help` stops the graph instead of printing help. It
 cost a restart mid-measurement; filed, not fixed here.
 
+## T-05 — the teardown script obeyed an argument it did not understand
+
+`./scripts/stop.sh --help` **tore down the ROS graph** instead of printing help. Found the hard
+way, mid-measurement: I wanted to stop only the console, guessed at a `--webui` flag, and it
+stopped the graph. The script tested `"${1:-}" = "--all"` in three separate places and had no
+other argument handling, so anything unrecognised fell through to the default teardown.
+
+Three defects, one shape — the kill escalation ran *before* the arguments were read; `--all`
+only worked in position 1; and `ALL=1` was honoured by the container teardown and nothing else,
+so it removed the container, left the simulator running, and reported "simulator left running".
+
+**And my first fix was worse than the bug.** I "unified" the flag by seeding it from
+`${ALL:-0}` so the old environment path kept working everywhere. That turns an unrelated
+`export ALL=1` in some parent shell into "also SIGKILL the simulator", and `ALL` is about as
+generic a variable name as exists. Destructive scope must come from an explicit flag on the
+command line, never from ambient state. Caught by reviewing my own diff before merging — the
+third overclaim-or-hazard in two days found by looking again rather than by anything failing.
+
+13 tests, and they were **mutation-checked**: all fail against the pre-fix script, all pass
+after, and the newest one fails against the `${ALL:-0}` draft specifically. Safe to run beside
+a live simulator by construction — the script is copied to a temp directory so its
+`PROJ`-anchored patterns match nothing real, and only the paths that exit *during parsing* run.
+No test passes `--all`; it would `pkill` a real `CarlaUE4`.
+
 ## Process
 
 - **The commit window held.** Both of this week's violations came from checking the clock in the
