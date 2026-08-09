@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>carla-air testbed - the web console and the container gap</title>
+<title>carla-air testbed - the web console on ROS 2</title>
 <style>
   :root{
     --paper:#E6E7E1; --panel:#EFEFEA; --sunk:#DEDFD8;
@@ -204,202 +204,142 @@
         <button type="button" data-theme-set="dark"  aria-pressed="false">Dark</button>
       </div>
     </div>
-    <h1>The web console, and the gap to the containers</h1>
+    <h1>The web console, on ROS 2</h1>
     <p class="lede">
-      <code>webui/server.py</code> is the only way to look at this simulator by hand rather than
-      through a scripted episode. It works &mdash; against the <em>host</em> bringup. The
-      containerised stack that landed on 2026-08-06 does not know it exists, and this page is
-      what that costs, where the break is, and what it would take to close it.
+      Rewritten <strong>2026-08-08</strong>. The previous version of this page described a
+      console that reached the simulator through a private Unix socket and could not talk to the
+      containerised stack at all. R-03 steps 1&ndash;3 fixed both. What is left on the socket is
+      one video pane, and it is a decision rather than a gap.
     </p>
   </header>
 
   <section class="prose">
     <div class="stats">
-      <div class="stat"><span class="k">Server</span><span class="v">404 lines</span></div>
-      <div class="stat"><span class="k">UDS conns</span><span class="v">3</span></div>
-      <div class="stat"><span class="k">RPC methods</span><span class="v">30</span></div>
-      <div class="stat"><span class="k">ROS calls</span><span class="v">0</span></div>
-      <div class="stat"><span class="k">In the stack</span><span class="v">0</span></div>
+      <div class="stat"><span class="k">Methods used</span><span class="v">14</span></div>
+      <div class="stat"><span class="k">On ROS 2</span><span class="v">13</span></div>
+      <div class="stat"><span class="k">On the socket</span><span class="v">1</span></div>
+      <div class="stat"><span class="k">Image cost</span><span class="v">6.6%</span></div>
+      <div class="stat"><span class="k">Steps done</span><span class="v">3 / 4</span></div>
     </div>
     <p style="font-size:.87rem;color:var(--ink-soft)">
-      Two of those zeros are the whole story. <strong>Zero ROS calls</strong> is
-      <a href="webui-ros2-plan.html">R-03</a>, filed 2026-08-03 and re-planned 2026-08-07: every flight button bypasses the
-      interface this project claims is <em>the</em> interface. <strong>Zero appearances in the
-      stack</strong> is newer and undocumented &mdash; no image builds it, no script starts it,
-      and <code>docs/containers.html</code> does not mention it once.
+      The one remaining socket call is <code>chase_jpeg</code> &mdash; the third-person view, the
+      only thing the console needs that the ROS surface does not publish. Whether it gets a topic
+      is <strong>step 4</strong>, and the plan says to decide it with the console in hand rather
+      than in advance.
     </p>
   </section>
 
   <!-- ============================ WHAT IT IS ============================ -->
   <section class="prose">
-    <h2><span class="n">1</span> What it is</h2>
+    <h2><span class="n">1</span> Three lanes out, and only one is the product</h2>
     <p>
-      A stdlib <code>ThreadingHTTPServer</code> on the <strong>3.10</strong> side, serving one
-      HTML page, two MJPEG streams and a small JSON API. It runs from
-      <code>./.venv/bin/python webui/server.py</code> and reuses the sidecar RPC surface that
-      <code>run_episode.py</code> already uses, rather than opening a second path to the
-      simulator.
-    </p>
-    <p>
-      It holds <strong>three separate Unix-socket connections</strong>, not one shared
-      (<code>webui/server.py:204-207</code>). That is deliberate: sharing one would interleave a
-      control write with a 40&nbsp;kB frame read, which is a failure this repository has already
-      paid for once.
+      The page talks to its own server over <code>/api/&hellip;</code>. That is private plumbing
+      between a browser tab and the process serving it &mdash; no user of this project touches
+      it, and it is not an interface the simulator offers. What matters is what the server does
+      next, and that is now almost entirely <strong>ROS 2</strong>: the same topics and services
+      your own agent would use.
     </p>
   </section>
 
   <figure class="figure">
-    <figcaption>Figure 1 &middot; two paths out of the console, and they are different in kind</figcaption>
+    <figcaption>Figure 1 &middot; where each button actually goes, after steps 1&ndash;3</figcaption>
     <div class="scroll">
-      <svg role="img" viewBox="0 0 880 400" style="max-width:100%;height:auto"
-           aria-label="The browser talks HTTP to webui/server.py on the host. Streams and control leave over three Unix-socket connections to the sidecar, which talks msgpack-RPC to CarlaUE4. Process control instead forks the project's own shell scripts, which start and kill the simulator directly.">
+      <svg role="img" viewBox="0 0 880 430" style="max-width:100%;height:auto"
+           aria-label="The browser talks HTTP to the console server. Video, telemetry, flight and world commands all leave over ROS 2 topics and services. Only the chase pane still uses the Unix socket to the sidecar. Start and stop shell out to the project's own scripts, which is a permanent carve-out.">
         <defs>
-          <marker id="w1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#1584B5"/>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3F7A34"/>
           </marker>
-          <marker id="w2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#C8892B"/>
           </marker>
-          <marker id="w3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
           </marker>
         </defs>
 
-        <!-- browser -->
-        <rect x="20" y="150" width="118" height="68" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <text x="34" y="180" font-size="13" font-weight="700" fill="currentColor">browser</text>
-        <text x="34" y="199" font-size="11" fill="currentColor" opacity=".65">plain &lt;img&gt;</text>
+        <rect x="20" y="176" width="112" height="64" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="34" y="204" font-size="13" font-weight="700" fill="currentColor">browser</text>
+        <text x="34" y="222" font-size="10" fill="currentColor" opacity=".65">plain &lt;img&gt;</text>
+        <line x1="132" y1="208" x2="186" y2="208" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+        <text x="133" y="199" font-size="10" fill="currentColor" opacity=".8">HTTP :8080</text>
 
-        <line x1="138" y1="184" x2="194" y2="184" stroke="currentColor" stroke-width="1.5" marker-end="url(#w3)"/>
-        <text x="139" y="175" font-size="10.5" fill="currentColor" opacity=".8">HTTP :8080</text>
-
-        <!-- console envelope -->
-        <rect x="200" y="44" width="250" height="320" rx="6" fill="none"
+        <rect x="192" y="52" width="222" height="336" rx="6" fill="none"
               stroke="currentColor" stroke-opacity=".33" stroke-dasharray="5 4"/>
-        <text x="200" y="36" font-size="11" fill="currentColor" opacity=".7">host process &middot; python 3.10 &middot; .venv</text>
-        <text x="216" y="72" font-size="13" font-weight="700" fill="currentColor">webui/server.py</text>
-        <text x="216" y="90" font-size="11" fill="currentColor" opacity=".65">ThreadingHTTPServer</text>
+        <text x="192" y="44" font-size="11" fill="currentColor" opacity=".7">webui/server.py &middot; rclpy node, python 3.12</text>
 
-        <rect x="216" y="104" width="218" height="56" rx="4" fill="none" stroke="#1584B5" stroke-width="1.4"/>
-        <text x="230" y="127" font-size="12.5" font-weight="700" fill="currentColor">streams</text>
-        <text x="230" y="146" font-size="10" fill="currentColor" opacity=".7">/stream/onboard &middot; /stream/chase</text>
+        <rect x="208" y="76" width="190" height="52" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.4"/>
+        <text x="220" y="98" font-size="12" font-weight="700" fill="currentColor">video + telemetry</text>
+        <text x="220" y="116" font-size="9.5" fill="#3F7A34">ros_source.py</text>
 
-        <rect x="216" y="180" width="218" height="56" rx="4" fill="none" stroke="#1584B5" stroke-width="1.4"/>
-        <text x="230" y="203" font-size="12.5" font-weight="700" fill="currentColor">control</text>
-        <text x="230" y="222" font-size="10" fill="currentColor" opacity=".7">/api/command &middot; /api/state</text>
+        <rect x="208" y="144" width="190" height="52" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.4"/>
+        <text x="220" y="166" font-size="12" font-weight="700" fill="currentColor">flight + world</text>
+        <text x="220" y="184" font-size="9.5" fill="#3F7A34">ros_control.py</text>
 
-        <rect x="216" y="256" width="218" height="56" rx="4" fill="none" stroke="#C8892B" stroke-width="1.4"/>
-        <text x="230" y="279" font-size="12.5" font-weight="700" fill="currentColor">process control</text>
-        <text x="230" y="298" font-size="10" fill="currentColor" opacity=".7">/api/sim/start &middot; /stop</text>
+        <rect x="208" y="212" width="190" height="52" rx="4" fill="none" stroke="#C8892B" stroke-width="1.4"/>
+        <text x="220" y="234" font-size="12" font-weight="700" fill="currentColor">chase pane</text>
+        <text x="220" y="252" font-size="9.5" fill="#C8892B">the last socket call</text>
 
-        <!-- sidecar -->
-        <rect x="590" y="70" width="210" height="80" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <text x="604" y="96" font-size="13" font-weight="700" fill="currentColor">sim_bridge/server.py</text>
-        <text x="604" y="114" font-size="11" fill="currentColor" opacity=".65">sidecar &middot; python 3.10</text>
-        <text x="604" y="132" font-size="11" fill="#1584B5">30 RPC methods</text>
+        <rect x="208" y="292" width="190" height="60" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="220" y="314" font-size="12" font-weight="700" fill="currentColor">start / stop</text>
+        <text x="220" y="332" font-size="9.5" fill="currentColor" opacity=".7">lifecycle.py &middot; carve-out</text>
 
-        <!-- carla -->
-        <rect x="590" y="200" width="210" height="72" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <text x="604" y="226" font-size="13" font-weight="700" fill="currentColor">CarlaUE4</text>
-        <text x="604" y="244" font-size="11" fill="currentColor" opacity=".65">AirSim RPC :41451</text>
-        <text x="604" y="261" font-size="11" fill="currentColor" opacity=".65">CARLA :2000</text>
+        <rect x="556" y="52" width="300" height="112" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.6"/>
+        <text x="570" y="76" font-size="13" font-weight="700" fill="currentColor">ROS 2 &mdash; the public interface</text>
+        <text x="570" y="96" font-size="10" fill="currentColor" opacity=".75">/camera/rgb/image_raw &middot; /fmu/out/*</text>
+        <text x="570" y="113" font-size="10" fill="currentColor" opacity=".75">/fmu/in/trajectory_setpoint &middot; vehicle_command</text>
+        <text x="570" y="130" font-size="10" fill="currentColor" opacity=".75">/sim/reset_vehicle + 3 more services</text>
+        <text x="570" y="150" font-size="10" fill="#3F7A34">the same surface your agent uses</text>
 
-        <!-- scripts -->
-        <rect x="590" y="304" width="210" height="64" rx="4" fill="none" stroke="#C8892B" stroke-width="1.5"/>
-        <text x="604" y="330" font-size="12.5" font-weight="700" fill="currentColor">run_sim.sh &middot; stop.sh</text>
-        <text x="604" y="349" font-size="11" fill="currentColor" opacity=".65">status.sh &middot; the real ones</text>
+        <rect x="556" y="196" width="300" height="60" rx="4" fill="none" stroke="#C8892B" stroke-width="1.5"/>
+        <text x="570" y="220" font-size="12.5" font-weight="700" fill="currentColor">sim_bridge &mdash; Unix socket</text>
+        <text x="570" y="240" font-size="10" fill="#C8892B">chase_jpeg only &middot; no ROS topic exists</text>
 
-        <!-- wires -->
-        <line x1="434" y1="132" x2="586" y2="100" stroke="#1584B5" stroke-width="1.6" marker-end="url(#w1)"/>
-        <text x="464" y="108" font-size="10.5" fill="#1584B5">2 &times; UDS</text>
+        <rect x="556" y="292" width="300" height="60" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="570" y="316" font-size="12.5" font-weight="700" fill="currentColor">the project's own scripts</text>
+        <text x="570" y="336" font-size="10" fill="currentColor" opacity=".7">stack_up.sh / run_sim.sh / stop.sh</text>
 
-        <line x1="434" y1="208" x2="586" y2="126" stroke="#1584B5" stroke-width="1.6" marker-end="url(#w1)"/>
-        <text x="464" y="186" font-size="10.5" fill="#1584B5">1 &times; UDS</text>
+        <line x1="398" y1="102" x2="552" y2="86" stroke="#3F7A34" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="398" y1="170" x2="552" y2="128" stroke="#3F7A34" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="398" y1="238" x2="552" y2="226" stroke="#C8892B" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="398" y1="322" x2="552" y2="322" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+        <text x="440" y="316" font-size="10" fill="currentColor" opacity=".7">fork / exec</text>
 
-        <line x1="434" y1="284" x2="586" y2="330" stroke="#C8892B" stroke-width="1.6" marker-end="url(#w2)"/>
-        <text x="462" y="302" font-size="10.5" fill="#C8892B">fork / exec</text>
-
-        <line x1="695" y1="150" x2="695" y2="196" stroke="#1584B5" stroke-width="1.6" marker-end="url(#w1)"/>
-        <text x="703" y="178" font-size="10.5" fill="#1584B5">msgpack-rpc</text>
-
-        <line x1="648" y1="302" x2="648" y2="276" stroke="#C8892B" stroke-width="1.6" marker-end="url(#w2)"/>
-        <text x="656" y="294" font-size="10.5" fill="#C8892B">starts / kills</text>
+        <text x="20" y="404" font-size="10.5" fill="currentColor" opacity=".7">Green is the public ROS 2 surface. Amber is what is still private: one video pane, and a lifecycle path that can never be ROS.</text>
       </svg>
     </div>
   </figure>
 
+  <!-- ============================ WHAT CHANGED ============================ -->
   <section class="prose">
-    <div class="note why">
-      <p class="t">Why the process path shells out</p>
-      <p>
-        <code>Processes</code> (<code>webui/server.py:126-201</code>) deliberately runs the
-        project&rsquo;s own scripts instead of reimplementing them. Those carry the Vulkan ICD
-        repair, the GPU&nbsp;1 pin, the VRAM check that catches software rendering, and the
-        <em>path-scoped</em> process matching that keeps <code>drone-sim</code> alive. A second
-        implementation would drift from them silently &mdash; and the stop button is exactly
-        where a stray <code>pkill&nbsp;-f</code> would take out a sibling project&rsquo;s flight gate.
-      </p>
-    </div>
-  </section>
-
-  <section class="prose">
-    <h2><span class="n">2</span> Every route, and what it costs</h2>
+    <h2><span class="n">2</span> What each step changed, and what it cost</h2>
   </section>
 
   <div class="tw">
     <table>
-      <thead>
-        <tr><th>Route</th><th>Goes to</th><th>Rate</th><th>Notes</th></tr>
-      </thead>
+      <thead><tr><th>Step</th><th>Moved</th><th>Measured</th></tr></thead>
       <tbody>
         <tr>
-          <th><code>GET /</code></th>
-          <td>disk</td><td class="num">&mdash;</td>
-          <td><code>webui/index.html</code>, 390 lines, no build step and no dependency</td>
+          <th>1 &middot; video + telemetry</th>
+          <td><code>/camera/rgb/image_raw</code>, <code>/fmu/out/vehicle_odometry</code>,
+              <code>/fmu/out/vehicle_status</code>, <code>/sim/collision</code></td>
+          <td>Streaming cost <strong>24.0% &rarr; 6.6%</strong> of the camera rate</td>
         </tr>
         <tr>
-          <th><code>GET /stream/onboard</code></th>
-          <td><span class="pill air">ONBOARD</span> socket &rarr; <code>view_jpeg</code></td>
-          <td class="num">12 fps</td>
-          <td>An AirSim capture. That RPC path tops out near 38&nbsp;fps <em>and the ROS graph
-              shares it</em>, so it stays modest on purpose</td>
+          <th>2 &middot; flight + world</th>
+          <td><code>TrajectorySetpoint</code>, <code>VehicleCommand</code>, four
+              <code>/sim/*</code> services</td>
+          <td>takeoff &minus;30 NED landed at <strong>&minus;30.41</strong>; yaw 90 reached 82&deg;</td>
         </tr>
         <tr>
-          <th><code>GET /stream/chase</code></th>
-          <td><span class="pill air">CHASE</span> socket &rarr; <code>chase_jpeg</code></td>
-          <td class="num">30 fps</td>
-          <td>A CARLA sensor; costs the simulator nothing measurable (59.8 vs 60.0&nbsp;fps tick)</td>
+          <th>3 &middot; lifecycle</th>
+          <td>Drives the deployment that is running, and refuses to destroy itself</td>
+          <td>Verified <strong>in containers</strong> &mdash; Start declines, both stops 409</td>
         </tr>
         <tr>
-          <th><code>GET /api/state</code></th>
-          <td><span class="pill air">CONTROL</span> socket</td>
-          <td class="num">poll</td>
-          <td>Two calls per request: <code>state</code> then <code>collision</code></td>
-        </tr>
-        <tr>
-          <th><code>GET /api/status</code></th>
-          <td><span class="pill ground">status.sh</span></td>
-          <td class="num">poll</td>
-          <td>Parses the script&rsquo;s stdout for counts and GPU lines</td>
-        </tr>
-        <tr>
-          <th><code>POST /api/command</code></th>
-          <td><span class="pill air">CONTROL</span> socket</td>
-          <td class="num">&mdash;</td>
-          <td><strong>Method name comes from the browser</strong>, checked only against
-              <code>protocol.METHODS</code> &mdash; all 30 of them</td>
-        </tr>
-        <tr>
-          <th><code>POST /api/sim/start</code></th>
-          <td><span class="pill ground">run_sim.sh</span></td>
-          <td class="num">&mdash;</td>
-          <td>Then spawns the sidecar and waits up to 60&nbsp;s for its socket to appear</td>
-        </tr>
-        <tr>
-          <th><code>POST /api/sim/stop</code></th>
-          <td><span class="pill stop">stop.sh --all</span></td>
-          <td class="num">&mdash;</td>
-          <td>Closes all three sockets first, then destroys the graph</td>
+          <th>4 &middot; chase pane</th>
+          <td><em>undecided</em></td>
+          <td>&mdash;</td>
         </tr>
       </tbody>
     </table>
@@ -407,246 +347,158 @@
 
   <section class="prose">
     <div class="note trap">
-      <p class="t">The console contends with the ROS graph</p>
+      <p class="t">The 6.6% is not zero, and the baseline is not "console closed"</p>
       <p>
-        The onboard view is a real AirSim capture and that image path is the bottleneck.
-        Streaming it at 10&ndash;12&nbsp;Hz <em>while an episode runs</em> roughly halves the rate
-        the model sees. The console is for manual flying with the graph down, and the page says
-        so rather than silently degrading a scored run.
+        Subscribing removed the <em>second</em> AirSim capture, but re-encoding to JPEG still
+        costs the machine that is also rendering. And the baseline in that comparison is the
+        console <strong>running and idle</strong>, not absent &mdash; an idle ROS console still
+        converts every frame, so its idle cost sits <em>inside</em> the baseline while an idle
+        socket console costs nothing. The comparison is biased toward ROS; 6.6% is a floor on
+        the total, not the total. A true no-console baseline is unmeasured.
       </p>
     </div>
   </section>
 
-  <!-- ============================ THE GAP ============================ -->
+  <!-- ============================ GUARDS ============================ -->
   <section class="prose">
-    <h2><span class="n">3</span> Where it meets the container stack</h2>
+    <h2><span class="n">3</span> Two things it refuses to do</h2>
     <p>
-      It doesn&rsquo;t. The console was written on 2026-08-02, four days before the stack existed,
-      and nothing in <code>docker/</code> or <code>scripts/stack_*.sh</code> mentions it. The two
-      lanes below both work; there is simply no edge between them.
+      Both return <strong>409</strong>, not 500. Nothing has failed &mdash; the console has
+      declined, and says what to do instead. The shape is deliberate and shared: decline and
+      explain, rather than either acting or greying a button out with no reason.
+    </p>
+  </section>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Refusal</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr>
+          <th>Flying while another node publishes setpoints</th>
+          <td>Two publishers on <code>/fmu/in/trajectory_setpoint</code> produce
+              <strong>no error at all</strong> &mdash; just an aircraft that goes somewhere
+              neither asked for. <code>examples/ros2_full_control.py</code> measured a takeoff to
+              NED 35&nbsp;m arriving at 15.6&nbsp;m. Includes <code>reset</code>, which is a
+              <code>/sim/*</code> service but <em>flies the aircraft</em> &mdash; a hole found in
+              review, because &ldquo;flight command&rdquo; and &ldquo;moves the aircraft&rdquo;
+              are different sets</td>
+        </tr>
+        <tr>
+          <th>Stopping the stack it is running inside</th>
+          <td>With <code>--in-stack</code> the console's container joins the simulator's
+              namespaces, so <code>docker rm -f</code> kills this server <em>mid-request</em> and
+              the browser sees a dropped connection rather than an error. Destructive and silent
+              about it</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================ DEPLOYMENTS ============================ -->
+  <section class="prose">
+    <h2><span class="n">4</span> Both deployments work now</h2>
+    <p>
+      The previous version of this page ended with a red broken arrow: the console could not
+      reach the containerised stack by any route. That is closed. It runs on the host against
+      either deployment, or <em>inside</em> the stack with <code>./scripts/webui.sh --in-stack</code>.
     </p>
   </section>
 
   <figure class="figure">
-    <figcaption>Figure 2 &middot; two working lanes, and the edge that is missing</figcaption>
+    <figcaption>Figure 2 &middot; the same console, two places to run it</figcaption>
     <div class="scroll">
-      <svg role="img" viewBox="0 0 880 450" style="max-width:100%;height:auto"
-           aria-label="The containerised lane runs three containers sharing namespaces, with the sidecar socket on a Docker volume at /run/carla-air/sim.sock. The web console runs on the host and looks for the socket at /tmp/carla_air_testbed.sock, which the stack never creates; the volume's host mountpoint is permission-denied, so the console cannot reach the containerised sidecar at all.">
+      <svg role="img" viewBox="0 0 880 300" style="max-width:100%;height:auto"
+           aria-label="The console can run on the host, reaching the graph over DDS with the udp-only profile, or inside a container joined to the stack's namespaces. Both were verified; the in-stack case additionally refuses to stop the stack it runs in.">
         <defs>
-          <marker id="g1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#1584B5"/>
+          <marker id="d1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3F7A34"/>
           </marker>
         </defs>
+        <rect x="330" y="40" width="220" height="220" rx="6" fill="none"
+              stroke="currentColor" stroke-opacity=".4" stroke-dasharray="4 3"/>
+        <text x="342" y="62" font-size="10.5" fill="currentColor" opacity=".65">the stack</text>
+        <rect x="348" y="76" width="184" height="46" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="360" y="104" font-size="12" font-weight="700" fill="currentColor">carla-air-sim</text>
+        <rect x="348" y="136" width="184" height="46" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="360" y="164" font-size="12" font-weight="700" fill="currentColor">carla-air-bridge</text>
+        <rect x="348" y="196" width="184" height="46" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="360" y="224" font-size="12" font-weight="700" fill="currentColor">carla-air-ros</text>
 
-        <!-- containerised lane -->
-        <rect x="30" y="52" width="820" height="232" rx="6" fill="none"
-              stroke="currentColor" stroke-opacity=".33" stroke-dasharray="5 4"/>
-        <text x="30" y="42" font-size="11" fill="currentColor" opacity=".7">containerised lane &mdash; ./scripts/stack_up.sh</text>
+        <rect x="24" y="110" width="240" height="80" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.5"/>
+        <text x="38" y="136" font-size="12.5" font-weight="700" fill="currentColor">console on the HOST</text>
+        <text x="38" y="155" font-size="10" fill="currentColor" opacity=".7">./scripts/webui.sh</text>
+        <text x="38" y="173" font-size="10" fill="#3F7A34">needs configs/dds/udp-only.xml</text>
+        <line x1="264" y1="150" x2="326" y2="150" stroke="#3F7A34" stroke-width="1.6" marker-end="url(#d1)"/>
 
-        <rect x="58" y="86" width="216" height="78" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <text x="72" y="112" font-size="13" font-weight="700" fill="currentColor">carla-air-sim</text>
-        <text x="72" y="130" font-size="11" fill="currentColor" opacity=".65">CarlaUE4 &middot; GPU 1</text>
-        <text x="72" y="148" font-size="11" fill="currentColor" opacity=".65">owns net + IPC ns</text>
+        <rect x="616" y="110" width="240" height="80" rx="4" fill="none" stroke="#3F7A34" stroke-width="1.5"/>
+        <text x="630" y="136" font-size="12.5" font-weight="700" fill="currentColor">console IN the stack</text>
+        <text x="630" y="155" font-size="10" fill="currentColor" opacity=".7">./scripts/webui.sh --in-stack</text>
+        <text x="630" y="173" font-size="10" fill="#A3341F">refuses to stop the stack</text>
+        <line x1="612" y1="150" x2="554" y2="150" stroke="#3F7A34" stroke-width="1.6" marker-end="url(#d1)"/>
 
-        <rect x="330" y="86" width="216" height="78" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <text x="344" y="112" font-size="13" font-weight="700" fill="currentColor">carla-air-bridge</text>
-        <text x="344" y="130" font-size="11" fill="currentColor" opacity=".65">sidecar &middot; python 3.10</text>
-        <text x="344" y="148" font-size="11" fill="currentColor" opacity=".65">joins the namespaces</text>
-
-        <rect x="602" y="86" width="216" height="78" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <text x="616" y="112" font-size="13" font-weight="700" fill="currentColor">carla-air-ros</text>
-        <text x="616" y="130" font-size="11" fill="currentColor" opacity=".65">rclpy &middot; python 3.12</text>
-        <text x="616" y="148" font-size="11" fill="currentColor" opacity=".65">DDS domain 42</text>
-
-        <line x1="274" y1="125" x2="326" y2="125" stroke="#1584B5" stroke-width="1.6" marker-end="url(#g1)"/>
-        <text x="272" y="115" font-size="10" fill="#1584B5">:2000 / :41451</text>
-
-        <!-- the volume -->
-        <rect x="330" y="200" width="216" height="62" rx="4" fill="none" stroke="#1584B5" stroke-width="1.6"/>
-        <text x="344" y="224" font-size="12.5" font-weight="700" fill="currentColor">volume carla-air-run</text>
-        <text x="344" y="244" font-size="10.5" fill="#1584B5">/run/carla-air/sim.sock</text>
-
-        <line x1="438" y1="164" x2="438" y2="196" stroke="#1584B5" stroke-width="1.6" marker-end="url(#g1)"/>
-        <line x1="640" y1="164" x2="556" y2="212" stroke="#1584B5" stroke-width="1.6" marker-end="url(#g1)"/>
-
-        <text x="566" y="238" font-size="10.5" fill="#A3341F">host mountpoint is</text>
-        <text x="566" y="253" font-size="10.5" fill="#A3341F">Permission denied</text>
-        <line x1="548" y1="234" x2="562" y2="234" stroke="#A3341F" stroke-width="1.2" stroke-dasharray="3 3"/>
-
-        <!-- host lane -->
-        <rect x="30" y="326" width="392" height="102" rx="6" fill="none"
-              stroke="currentColor" stroke-opacity=".33" stroke-dasharray="5 4"/>
-        <text x="30" y="316" font-size="11" fill="currentColor" opacity=".7">host &mdash; in no image, started by no script</text>
-
-        <rect x="58" y="352" width="256" height="60" rx="4" fill="none" stroke="#C8892B" stroke-width="1.5"/>
-        <text x="72" y="376" font-size="13" font-weight="700" fill="currentColor">webui/server.py</text>
-        <text x="72" y="396" font-size="10.5" fill="#C8892B">/tmp/carla_air_testbed.sock</text>
-
-        <!-- the broken edge -->
-        <line x1="314" y1="374" x2="404" y2="272" stroke="#A3341F" stroke-width="1.6" stroke-dasharray="5 4"/>
-        <line x1="349" y1="313" x2="369" y2="333" stroke="#A3341F" stroke-width="2.2"/>
-        <line x1="369" y1="313" x2="349" y2="333" stroke="#A3341F" stroke-width="2.2"/>
-        <text x="384" y="330" font-size="11" font-weight="700" fill="#A3341F">no such socket</text>
-        <text x="384" y="346" font-size="10.5" fill="currentColor" opacity=".7">the stack never creates it</text>
+        <text x="24" y="284" font-size="10.5" fill="currentColor" opacity=".7">Both verified 2026-08-08. On the host the DDS profile is not optional: without it the graph is discovered and no data arrives.</text>
       </svg>
     </div>
   </figure>
 
   <section class="prose">
-    <h3>Three things break the join, in increasing order of awkwardness</h3>
-  </section>
-
-  <div class="tw">
-    <table>
-      <thead>
-        <tr><th>#</th><th>Break</th><th>Evidence</th><th>How hard</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <th>1</th>
-          <td><strong>The socket paths differ.</strong> Console defaults to
-              <code>/tmp/carla_air_testbed.sock</code>; the stack puts it at
-              <code>/run/carla-air/sim.sock</code></td>
-          <td><code>sim_bridge/protocol.py:23</code> vs <code>scripts/stack_up.sh:40</code></td>
-          <td><span class="pill net">one line</span> <code>TESTBED_SOCKET</code> already exists</td>
-        </tr>
-        <tr>
-          <th>2</th>
-          <td><strong>But the volume is not reachable from the host.</strong> Even with the
-              variable set, the console cannot open the file</td>
-          <td>Mountpoint <code>/var/lib/docker/volumes/carla-air-run/_data</code> is
-              <code>Permission denied</code> to this user under the rootless daemon &mdash;
-              checked 2026-08-07</td>
-          <td><span class="pill ground">real work</span> the console must move <em>into</em> a
-              container joining the bridge&rsquo;s namespaces, the way
-              <code>stack_run.sh</code> does</td>
-        </tr>
-        <tr>
-          <th>3</th>
-          <td><strong><code>Processes</code> manages host processes, not containers.</strong>
-              Start and stop would be wrong even if the socket resolved</td>
-          <td><code>start()</code> runs <code>run_sim.sh</code> and spawns the sidecar directly;
-              <code>stop()</code> runs <code>stop.sh --all</code></td>
-          <td><span class="pill ground">real work</span> the container equivalents are
-              <code>stack_up.sh</code> and <code>docker stop</code></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <section class="prose">
-    <div class="note">
-      <p class="t">What <em>does</em> know about it</p>
-      <p>
-        Process management, and only process management. <code>scripts/status.sh:49</code> counts
-        the console, and <code>scripts/stop.sh:30</code> includes <code>webui/server.py</code> in
-        its name list &mdash; so <code>./scripts/stop.sh --all</code> takes it down correctly. It
-        is the <em>container</em> layer specifically that has never heard of it.
-      </p>
-    </div>
-  </section>
-
-  <!-- ============================ R-03 ============================ -->
-  <section class="prose">
-    <h2><span class="n">4</span> R-03: the control path is not ROS 2</h2>
-    <p>
-      Separate from the container gap, and older. Every flight button &mdash; velocity, yaw, hold,
-      land, takeoff &mdash; goes over the Unix socket to the sidecar, and the method name arrives
-      <em>from the browser</em>, validated only against the allowlist:
-    </p>
-  </section>
-
-  <pre><span class="c"># webui/server.py:328-332</span>
-method = body.get(<span class="s">"method"</span>)
-<span class="k">if</span> method <span class="k">not in</span> protocol.METHODS:
-    <span class="k">raise</span> RuntimeError(<span class="s">f"unknown method {method!r}"</span>)
-self._json({<span class="s">"result"</span>: CONTROL.call(method, **body.get(<span class="s">"args"</span>, {}))})</pre>
-
-  <section class="prose">
-    <p>
-      All <strong>30</strong> sidecar methods are reachable that way, including
-      <code>spawn_traffic</code>, <code>set_weather</code>, <code>destroy_actors</code> and
-      <code>shutdown</code> &mdash; not just the flying ones. The console therefore proves nothing
-      about whether the ROS 2 surface is sufficient, which was the entire point of building it
-      that way.
-    </p>
     <div class="note why">
-      <p class="t">One honest carve-out, already recorded in R-03</p>
+      <p class="t">Two detection assumptions that were wrong, and only the live run found them</p>
       <p>
-        <em>Start the simulator</em> and <em>stop everything</em> cannot become ROS calls. There
-        is no graph to call into before the simulator exists, and the stop button&rsquo;s whole
-        job is to destroy the graph. Those stay process management. <strong>Flying the aircraft
-        is the part that must be ROS.</strong>
+        <strong><code>/run/.containerenv</code> cannot tell you that you are inside the
+        stack</strong> &mdash; it is present for this whole project on this machine, so inferring
+        it would refuse the stop button for every ordinary console. And <strong>the ROS image
+        ships no <code>docker</code> binary</strong>, so a console inside the stack asking
+        <code>docker ps</code> concluded there was <em>no</em> stack and took the host path. Every
+        unit test passed throughout, because they injected that answer rather than computing it.
       </p>
     </div>
   </section>
 
-  <!-- ============================ SECURITY ============================ -->
+  <!-- ============================ STEP 4 ============================ -->
   <section class="prose">
-    <h2><span class="n">5</span> Reaching it from off the machine</h2>
+    <h2><span class="n">5</span> The one open decision</h2>
     <p>
-      The console binds <code>127.0.0.1</code> by default. <code>--bind netbird</code> resolves the
-      <code>wt0</code> mesh address from <code>ip</code> rather than guessing it, and going off
-      loopback <strong>generates a token by default</strong> rather than on request &mdash; an
-      unauthenticated endpoint that starts processes and flies an aircraft is reachable by every
-      peer on the mesh. The check is <code>hmac.compare_digest</code>, and the URL is also written
-      to <code>out/webui-url.txt</code> at mode 0600 so a backgrounded server&rsquo;s token
-      survives a lost log.
-    </p>
-    <div class="note trap">
-      <p class="t">This is not the same path as the ROS graph</p>
-      <p>
-        Remote ROS 2 access goes through <code>scripts/discovery_server.sh</code> and
-        <code>configs/dds/udp-only.xml</code> &mdash; measured at 17.9&nbsp;Hz over NetBird and
-        16.1&nbsp;Hz over the LAN. The console is a <em>second</em>, unrelated remote surface with
-        its own auth. Closing R-03 would collapse them into one; today they are two.
-      </p>
-    </div>
-  </section>
-
-  <!-- ============================ PROVENANCE ============================ -->
-  <section class="prose">
-    <h2><span class="n">6</span> What here was verified, and what was read</h2>
-    <p>
-      Separated deliberately, because this page describes a component that was <em>not run</em>
-      while writing it.
+      <code>chase_jpeg</code> is the last socket call, and the chase camera is the only thing the
+      console needs that the ROS surface does not publish. Three answers, and the cheap ones are
+      not obviously wrong:
     </p>
   </section>
 
   <div class="tw">
     <table>
-      <thead><tr><th>Claim</th><th>How it is known</th></tr></thead>
+      <thead><tr><th>Option</th><th>Cost</th><th>Consequence</th></tr></thead>
       <tbody>
-        <tr><th>Route table, socket count, allowlist</th>
-            <td>Read from <code>webui/server.py</code> at the cited lines</td></tr>
-        <tr><th>30 RPC methods</th>
-            <td>Enumerated from <code>protocol.METHODS</code> &mdash; run 2026-08-07</td></tr>
-        <tr><th>Volume mountpoint is permission-denied</th>
-            <td><code>docker volume inspect carla-air-run</code> then <code>ls</code> &mdash;
-                run 2026-08-07</td></tr>
-        <tr><th>The stack never mentions the console</th>
-            <td><code>grep -rn webui scripts/ docker/ configs/</code> &mdash; only
-                <code>stop.sh</code> and <code>status.sh</code> match</td></tr>
-        <tr><th>12 / 30 fps, 38 fps ceiling, 59.8 vs 60.0 tick</th>
-            <td>Configured rates and measurements <em>recorded in the source</em> on 2026-08-02
-                &mdash; not re-measured for this page</td></tr>
-        <tr><th>NetBird 17.9 Hz, LAN 16.1 Hz</th>
-            <td>Measured 2026-08-06 for the DDS path, not the console</td></tr>
-        <tr><th>Does the console still work end to end?</th>
-            <td><strong>Unverified.</strong> It was not started while writing this. The container
-                gap was established by reading paths and permissions, which is enough to show the
-                break but not enough to claim the host lane is still healthy</td></tr>
+        <tr><th>Build a chase video topic</th>
+            <td><span class="pill ground">real work</span></td>
+            <td>An <code>image_transport</code> pipeline whose only consumer is this page, adding
+                a continuous second capture to the path just optimised</td></tr>
+        <tr><th>Leave it on the socket</th>
+            <td><span class="pill air">free</span></td>
+            <td>The honest claim becomes <em>&ldquo;flying is ROS; the chase view and lifecycle
+                are not&rdquo;</em> &mdash; two documented exceptions rather than one</td></tr>
+        <tr><th>Drop the pane</th>
+            <td><span class="pill air">free</span></td>
+            <td>Chase <em>recording</em> already works as a service for episodes; the live view is
+                a convenience</td></tr>
       </tbody>
     </table>
   </div>
 
   <section class="prose">
+    <p>
+      A fourth exists and resolves the tension rather than trading it away: a topic that
+      <strong>publishes only while something is subscribed</strong>, so it costs nothing when
+      nobody is watching. More work than either cheap option, and genuinely optional.
+    </p>
     <p style="font-size:.85rem;color:var(--ink-faint)">
-      Companion pages: <a href="containers.html">the stack in containers</a> &middot;
-      <a href="dataflow.html">data flow</a> &middot; <a href="ros2-api.html">the ROS 2 surface</a>
-      &middot; <a href="rpc-path.html">the RPC path</a>. Backlog item
-      <strong>R-03</strong> in <code>docs/todo.md</code>, re-planned 2026-08-07 &mdash; the fix is
-      laid out in <a href="webui-ros2-plan.html">putting the web console on ROS 2</a>.
+      Steps 1&ndash;3 merged 2026-08-07/08 (PRs #5, #7, #8). Backlog entry <strong>R-03</strong>
+      in <code>docs/todo.md</code>; the plan and its measured corrections are in
+      <a href="webui-ros2-plan.html">putting the web console on ROS 2</a>. Companion pages:
+      <a href="containers.html">the stack in containers</a> &middot;
+      <a href="ros2-api.html">the ROS 2 surface</a> &middot;
+      <a href="dataflow.html">data flow</a>.
+      <strong>Not rendered</strong> before publishing &mdash; there is no browser on this box.
     </p>
   </section>
 

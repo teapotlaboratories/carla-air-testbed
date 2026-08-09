@@ -1342,6 +1342,35 @@ treat as the Atlantic), and `ros_domain_id` never leaks into the ROS parameter f
 
 ## Tooling
 
+### T-06 · Container teardown SIGKILLs where the host path escalates — **open** *(filed 2026-08-08)*
+
+`stop.sh` gives the host simulator `TERM → TERM → KILL` and then **verifies it is gone**, because
+Unreal does not always go down on the first TERM and because this script once reported success
+twice while 3.5 GB of VRAM was still held (2026-08-03). The container path added in R-03 step 3
+does none of that: `webui/server.py` runs `docker rm -f`, which is an immediate SIGKILL plus
+removal, and `stop.sh` itself does the same for `carla-air-sim`.
+
+That is harsher and less careful than the path it replaced, for no reason anyone wrote down. It
+is not obviously *wrong* — the container is being destroyed either way — but "less careful than
+the host path" is a claim nobody made deliberately, and the host path's care was bought with a
+real incident.
+
+- **Do:** `docker stop` (SIGTERM, grace period, then kill) before `docker rm`, and verify the
+  container is actually gone rather than reporting the attempt. The verification half matters
+  more than the signal half — that is exactly what the 2026-08-03 incident was.
+- **Do not** bother preserving the container to restart it faster. `carla-air-bridge` and
+  `carla-air-ros` join the sim container's network and IPC namespaces, so once it goes away —
+  stopped *or* removed — the other two are broken and need recreating. The namespace coupling
+  makes the sim container's lifecycle the whole stack's lifecycle.
+
+**Not a reset path, and worth stating because the two get conflated.** Resetting the simulator
+never needs the container touched. The ladder is `/sim/reset_vehicle` (seconds, what episodes
+use), then `/sim/destroy_actors` + `spawn_traffic` for world state, then AirSim's global
+`client.reset()` — which `vehicle.py` records as costing about a minute, and which this project
+deliberately engineered away from by comparing collision timestamps against a per-vehicle epoch
+instead of relying on the latched flag only a global reset clears. Container removal is teardown,
+not reset.
+
 ### T-05 · `stop.sh` obeyed arguments it did not understand — **fixed** *(2026-08-07)*
 
 `./scripts/stop.sh --help` **tore down the ROS graph** instead of printing help. The script
