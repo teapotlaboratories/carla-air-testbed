@@ -180,7 +180,18 @@ if [ "$ALL" -eq 1 ]; then
     if command -v docker >/dev/null 2>&1; then
         for c in ${TESTBED_SIM_CONTAINER:-carla-air-sim}; do
             if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-                docker rm -f "$c" >/dev/null 2>&1 && echo "stopped container $c"
+                # SIGTERM with a grace period BEFORE the hammer, and then CHECK — the same
+                # escalate-and-verify the host simulator gets a few lines above, and for the
+                # same reason. `docker rm -f` alone is an immediate SIGKILL, which is harsher
+                # than the path it replaced and told nobody whether it worked.
+                docker stop -t 10 "$c" >/dev/null 2>&1 || true
+                docker rm -f "$c" >/dev/null 2>&1 || true
+                if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+                    echo "WARNING: container $c survived stop and rm -f" >&2
+                    rc=1
+                else
+                    echo "stopped container $c"
+                fi
             fi
         done
     fi

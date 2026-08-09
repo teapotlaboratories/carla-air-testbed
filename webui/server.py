@@ -240,15 +240,23 @@ class Processes:
             if lifecycle.deployment(self.stack_running()) == lifecycle.CONTAINER:
                 # run_sim.sh --kill matches a host process name and would silently do nothing.
                 name = os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim")
+                # SIGTERM with a grace period first. Unreal does not always go down on the
+                # first signal, and `docker rm -f` is an immediate SIGKILL — harsher than the
+                # host path this replaced, which escalates. Failure here is not fatal: the
+                # removal below is the hammer, and the check after it is what decides.
+                self._run(["docker", "stop", "-t", "10", name])
                 r = self._run(["docker", "rm", "-f", name])
                 # Report what was ACHIEVED, not what was attempted. stop.sh learned this the
                 # expensive way on 2026-08-03: it announced success twice while the simulator
                 # held 3.5 GB of VRAM, because nothing checked. Reintroducing that one file
                 # over would be worse, not better.
-                if r.returncode != 0:
+                # Report what was ACHIEVED. A non-zero rm is a hint, not the verdict: ask
+                # whether the container is actually gone, because that is the question.
+                still = self._run(["docker", "ps", "-a", "--format", "{{.Names}}"])
+                if name in (still.stdout or "").split():
                     raise RuntimeError(
-                        f"docker rm -f {name} failed, so the simulator is STILL RUNNING:\n"
-                        f"{((r.stderr or '') + (r.stdout or '')).strip()[-400:]}")
+                        f"{name} survived docker stop and rm -f, so the simulator is STILL "
+                        f"RUNNING:\n{((r.stderr or '') + (r.stdout or '')).strip()[-400:]}")
                 return {"stopped": "simulator", "deployment": lifecycle.CONTAINER,
                         "detail": [f"removed container {name}"]}
             r = self._run([os.path.join(PROJ, "scripts", "run_sim.sh"), "--kill"])

@@ -41,10 +41,14 @@ class _FakeRun:
 
     def __init__(self, returncode=0):
         self.calls, self.returncode = [], returncode
+        #: What `docker ps -a` reports. The teardown's verdict comes from ASKING whether the
+        #: container is gone, not from a return code, so the fake has to answer that question.
+        self.containers = ""
 
     def __call__(self, argv, env=None, background=False):
         self.calls.append(list(argv))
-        return SimpleNamespace(returncode=self.returncode, stdout="ok", stderr="")
+        out = self.containers if "ps" in argv else "ok"
+        return SimpleNamespace(returncode=self.returncode, stdout=out, stderr="")
 
 
 @pytest.fixture
@@ -96,7 +100,8 @@ def test_stop_simulator_removes_the_container_when_the_stack_is_up(procs, monkey
     p, fake, _ = procs
     monkeypatch.setattr(p, "stack_running", lambda: True)
     assert p.stop_simulator()["deployment"] == "container"
-    assert fake.calls[0][:3] == ["docker", "rm", "-f"], fake.calls
+    # Not calls[0] any more: T-06 put a graceful `docker stop` in front of the removal.
+    assert ["docker", "rm", "-f"] in [c[:3] for c in fake.calls], fake.calls
 
 
 def test_stop_simulator_uses_the_host_script_without_a_stack(procs, monkeypatch):
@@ -106,15 +111,38 @@ def test_stop_simulator_uses_the_host_script_without_a_stack(procs, monkeypatch)
     assert fake.calls[0][-1] == "--kill" and "run_sim.sh" in fake.calls[0][0]
 
 
-def test_a_failed_docker_rm_is_reported_as_a_failure(procs, monkeypatch):
+def test_a_container_that_survives_teardown_is_reported_as_a_failure(procs, monkeypatch):
     """`stop.sh` announced success twice on 2026-08-03 while the simulator held 3.5 GB of
-    VRAM, because nothing checked the result. Reintroducing that one file over would be worse
-    than never having fixed it."""
+    VRAM, because nothing checked. The verdict comes from asking whether the container is
+    gone — not from the return code, which is a hint at best."""
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: True)
+    fake.containers = "carla-air-sim other-thing"
+    with pytest.raises(RuntimeError, match="STILL RUNNING"):
+        p.stop_simulator()
+
+
+def test_the_teardown_asks_rather_than_trusting_the_return_code(procs, monkeypatch):
+    """T-06. A non-zero `docker rm` with the container actually gone is a success, not a
+    failure — `rm` complains about plenty of things that do not matter."""
     p, fake, _ = procs
     monkeypatch.setattr(p, "stack_running", lambda: True)
     fake.returncode = 1
-    with pytest.raises(RuntimeError, match="STILL RUNNING"):
-        p.stop_simulator()
+    fake.containers = "something-else"
+    assert p.stop_simulator()["deployment"] == "container"
+
+
+def test_sigterm_with_a_grace_period_comes_before_the_hammer(procs, monkeypatch):
+    """T-06. `docker rm -f` alone is an immediate SIGKILL — harsher than the host path it sits
+    beside, which escalates TERM/TERM/KILL because Unreal does not always go down on the
+    first signal. Nobody decided to be less careful in containers; it just happened."""
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: True)
+    p.stop_simulator()
+    verbs = [c[1] for c in fake.calls if c and c[0] == "docker"]
+    assert verbs[0] == "stop", f"went straight to {verbs[0]!r} without a graceful stop"
+    assert "-t" in fake.calls[0], "no grace period given"
+    assert verbs.index("stop") < verbs.index("rm")
 
 
 class TestRefusingToDestroyItself:
