@@ -1380,6 +1380,47 @@ Docker is unavailable. Containers should become the *default* path, not the only
   `/carla_air_bridge` alone — the invariant this design exists to preserve, checked rather than
   assumed.
 
+### T-07 · `stop.sh --all` does not clean up the container lane — **open** *(filed 2026-08-10)*
+
+Found while verifying T-06 against a real stack, and left unfixed on purpose because it is a
+scope question rather than a bug in a line of code.
+
+Rule 1 says every flight test ends with `./scripts/stop.sh --all` and then `status.sh` showing
+every count at 0. In the container lane it does not deliver that. Measured 2026-08-10, after
+`stack_up.sh --config …` and then `stop.sh --all`:
+
+    WARNING: 3 process(es) survived TERM and KILL:
+       …/sim_bridge/server.py --socket /run/carla-air/sim.sock
+       …/ros2 launch bringup testbed.launch.py …
+       …/carla_air_bridge/bridge_node …
+    stopped: graph and sidecar, simulator stopped (3 stragglers)
+
+    docker ps  →  carla-air-ros    Up
+                  carla-air-bridge Up
+
+Two separate wrongnesses:
+
+- **The three "stragglers" can never be killed and are not stragglers.** They are the sidecar
+  and the ROS graph running *inside* `carla-air-bridge` and `carla-air-ros`. They are uid **0**
+  on the host while `stop.sh` runs as uid 1000, so TERM and KILL both bounce — no amount of
+  retrying will remove them. The script escalates, fails, names them, and sets `rc=1`.
+- **Two containers are left running.** `stop.sh` only knows the name `carla-air-sim`, so the
+  other two survive a teardown that reports `simulator stopped`. They hold no VRAM once the sim
+  container is gone (their namespaces are broken with it) — but they are exactly the leftover
+  graph rule 1 exists to prevent, and they will collide by name on the next `stack_up.sh`.
+
+**The question is which script owns the container lane**, and that is why this is not a one-line
+fix. `stack_up.sh --down` already tears the whole stack down correctly, and duplicating its
+`carla-air-*` sweep into `stop.sh` puts the same logic in two places. The options are roughly:
+teach `stop.sh --all` to delegate to `stack_up.sh --down` when a stack is present; widen its
+container matching to the `carla-air-` prefix as `stack_up.sh` does; or state in rule 1 that the
+container lane's teardown is `stack_up.sh --down` and make `stop.sh` say so when it detects one.
+The last is the smallest and the most honest, but it changes a rule rather than a script.
+
+- **Verify:** after whichever fix, `stop.sh --all` following a containerised bringup leaves no
+  `carla-air-*` container in `docker ps -a`, reports no straggler it cannot act on, and
+  `status.sh` shows every count 0 with GPU 1 at ~33 MiB.
+
 ### T-06 · Container teardown SIGKILLs where the host path escalates — **open** *(filed 2026-08-08)*
 
 `stop.sh` gives the host simulator `TERM → TERM → KILL` and then **verifies it is gone**, because
@@ -1400,6 +1441,46 @@ real incident.
   `carla-air-ros` join the sim container's network and IPC namespaces, so once it goes away —
   stopped *or* removed — the other two are broken and need recreating. The namespace coupling
   makes the sim container's lifecycle the whole stack's lifecycle.
+
+**Measured 2026-08-10, and the open question is closed: the grace period costs nothing.** The
+fix shipped with `docker stop -t 10` verified only against an `alpine sleep` container, which
+dies on TERM instantly, so whether CarlaUE4 consumed the full 10 s was unmeasured. Against a
+real stack on GPU 1:
+
+| | |
+|---|---|
+| `docker stop -t 10 carla-air-sim` | **1.175 s** |
+| exit code | **143** (128 + SIGTERM), not 137 (SIGKILL) |
+| GPU 1 VRAM | 4006 MiB → 32 MiB |
+
+143 is the whole answer: 137 would mean the grace period expired and Docker escalated. Unreal
+took the TERM and left in about a tenth of the budget. Two structural facts checked rather than
+assumed, either of which would have made the number meaningless — **PID 1 is the Unreal binary
+itself**, because `bash -lc` `exec`s a lone simple command rather than interposing a shell that
+would eat the signal; and **SIGTERM is caught, not ignored** (`SigCgt: …400144ff`, bit 14 set).
+So the host path's "Unreal does not always go down on the first TERM" does **not** transfer to
+the container.
+
+**And the second trial found the fix was unreachable.** Running the *shipped* path rather than
+the command in isolation — `stop.sh --all` against a real stack — left `carla-air-sim` in
+`Exited (143)` and **never removed**, with none of the three new messages printed.
+
+`pkill -x "CarlaUE4-Linux-"` (`scripts/stop.sh`, the escalation) reaches **inside** the
+container: its CarlaUE4 runs as the invoking user on the host (`docker top`, UID column) and its
+`comm` is exactly `CarlaUE4-Linux-` — the 15-character truncation `-x` matches. That ran first,
+so by the time the container block was reached the container had exited, and its guard asked
+*is it running*. The graceful stop, the removal and both verifications were **dead code in the
+container lane**, reachable only when `pkill` finds nothing — precisely what an `alpine`
+container reproduces, which is why the original real-container check passed.
+
+The state it left is the one R-08 was filed about: stopped, holding no VRAM, **blocking the next
+start by name**.
+
+- **Fixed 2026-08-10.** The container block moves *ahead* of the `pkill` escalation, and its
+  guard becomes `docker ps -a` (exists) rather than `docker ps` (running). Verified against a
+  real stack: `stopped container carla-air-sim` printed, container absent from `docker ps -a`,
+  VRAM 3744 → 32 MiB, and `docker events` showing `kill → stop → die exitCode=143 → destroy`.
+  Two structural tests pin both halves, mutation-checked against the pre-fix script.
 
 **Not a reset path, and worth stating because the two get conflated.** Resetting the simulator
 never needs the container touched. The ladder is `/sim/reset_vehicle` (seconds, what episodes

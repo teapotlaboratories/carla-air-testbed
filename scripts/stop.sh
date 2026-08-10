@@ -146,6 +146,57 @@ rm -f /tmp/carla_air_testbed.sock
 # `pkill -x` matches the process NAME, never a command line: see the header.
 sim_alive() { pgrep -x "CarlaUE4-Linux-" > /dev/null 2>&1; }
 
+rc=0
+
+# THE CONTAINER IS TORN DOWN FIRST, and the order is load-bearing rather than tidy.
+#
+# The containerised simulator (P-01) is not a process under $PROJ, so the path-scoped matching
+# in `targets` cannot see it — `stop.sh --all` would report success with 3.3 GB of VRAM still
+# held. It is matched by CONTAINER NAME, which is this project's own and cannot collide with
+# the sibling project's `sim-unreal`.
+#
+# But `pkill -x "CarlaUE4-Linux-"` below CAN see it, and that is the trap. The container's
+# CarlaUE4 runs as THIS user on the host (`docker top` shows the invoking user, not root) and
+# its `comm` is exactly `CarlaUE4-Linux-` — the 15-character truncation `-x` matches. So if the
+# escalation ran first it would kill the container's main process, the container would drop to
+# `Exited`, and a guard asking "is it still RUNNING" would be false: the graceful stop, the
+# removal and both checks below would never execute at all.
+#
+# That is not hypothetical. Measured 2026-08-10 against a real stack: the container was left
+# `Exited (143)` and NOT removed, with nothing reported — holding no VRAM, but blocking the
+# next start by name, which is exactly the stale container that silently served old code on
+# 2026-08-07. Stopping the container before signalling processes is what keeps this reachable.
+if [ "$ALL" -eq 1 ] && command -v docker >/dev/null 2>&1; then
+    for c in ${TESTBED_SIM_CONTAINER:-carla-air-sim}; do
+        # `docker ps -a`, not `docker ps`: act whenever the container EXISTS, not only while it
+        # is still running. A container someone else already stopped still has to be removed,
+        # and that is the case this script kept walking past.
+        docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c" || continue
+        # SIGTERM with a grace period BEFORE the hammer, and then CHECK — the same
+        # escalate-and-verify the host simulator gets below, and for the same reason.
+        # `docker rm -f` alone is an immediate SIGKILL, which is harsher than the path it
+        # replaced and told nobody whether it worked. The grace period is nearly free:
+        # measured 2026-08-10, CarlaUE4 takes SIGTERM and exits in 1.2 s (code 143, not 137),
+        # so the 10 s is a ceiling that is never reached rather than a delay anyone pays.
+        docker stop -t 10 "$c" >/dev/null 2>&1 || true
+        docker rm -f "$c" >/dev/null 2>&1 || true
+        # Two DIFFERENT questions, and conflating them mislabels a harmless state.
+        # "Still running" is the VRAM question rule 1 cares about. "Still exists" is
+        # the name-collision question - a stopped-but-present container holds no GPU
+        # memory, but it will block the next start by name.
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+            echo "WARNING: container $c is STILL RUNNING after stop and rm -f" >&2
+            rc=1
+        elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+            echo "WARNING: container $c is stopped but NOT REMOVED — it holds no GPU" >&2
+            echo "         memory, but it will block the next start by that name." >&2
+            rc=1
+        else
+            echo "stopped container $c"
+        fi
+    done
+fi
+
 if [ "$ALL" -eq 1 ]; then
     for sig in TERM TERM KILL; do
         sim_alive || break
@@ -156,7 +207,6 @@ fi
 
 left="$(targets | wc -l)"
 sim_note="simulator left running"
-rc=0
 if [ "$ALL" -eq 1 ]; then
     if sim_alive; then
         sim_note="SIMULATOR STILL RUNNING — it ignored TERM and KILL"
@@ -170,40 +220,6 @@ if [ "$left" -gt 0 ]; then
     echo "WARNING: ${left} process(es) survived TERM and KILL:" >&2
     ps -o pid,cmd --no-headers -p $(targets | tr '\n' ' ') 2>/dev/null | sed 's/^/  /' >&2
     rc=1
-fi
-
-# The containerised simulator (P-01) is not a process under $PROJ, so the path-scoped
-# matching above cannot see it — `stop.sh --all` would report success with 3.3 GB of VRAM
-# still held. Matched by CONTAINER NAME, which is this project's own and cannot collide with
-# the sibling project's `sim-unreal`.
-if [ "$ALL" -eq 1 ]; then
-    if command -v docker >/dev/null 2>&1; then
-        for c in ${TESTBED_SIM_CONTAINER:-carla-air-sim}; do
-            if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-                # SIGTERM with a grace period BEFORE the hammer, and then CHECK — the same
-                # escalate-and-verify the host simulator gets a few lines above, and for the
-                # same reason. `docker rm -f` alone is an immediate SIGKILL, which is harsher
-                # than the path it replaced and told nobody whether it worked.
-                docker stop -t 10 "$c" >/dev/null 2>&1 || true
-                docker rm -f "$c" >/dev/null 2>&1 || true
-                # Two DIFFERENT questions, and conflating them mislabels a harmless state.
-                # "Still running" is the VRAM question rule 1 cares about. "Still exists" is
-                # the name-collision question - a stopped-but-present container holds no GPU
-                # memory, but it will block the next start by name, which is how a stale
-                # console container silently served old code on 2026-08-07.
-                if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-                    echo "WARNING: container $c is STILL RUNNING after stop and rm -f" >&2
-                    rc=1
-                elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-                    echo "WARNING: container $c is stopped but NOT REMOVED — it holds no GPU" >&2
-                    echo "         memory, but it will block the next start by that name." >&2
-                    rc=1
-                else
-                    echo "stopped container $c"
-                fi
-            fi
-        done
-    fi
 fi
 
 echo "stopped: graph and sidecar, ${sim_note} (${left} stragglers)"

@@ -129,6 +129,42 @@ def test_all_is_honoured_consistently():
         "same flag, or they disagree about what --all meant")
 
 
+def test_the_container_is_torn_down_before_the_process_escalation():
+    """T-06, and the ordering is the whole fix.
+
+    The container's CarlaUE4 runs as the invoking user on the host with `comm` exactly
+    `CarlaUE4-Linux-`, so `pkill -x` reaches INSIDE the container. When the escalation ran
+    first it killed the container's main process, the container dropped to `Exited`, and the
+    teardown block below — guarded on "is it still running" — was skipped entirely. Measured
+    2026-08-10 against a real stack: `Exited (143)`, never removed, nothing reported.
+
+    An `alpine sleep` container cannot reproduce it, which is why the original real-container
+    check passed. Nothing here fails if the two blocks are swapped back, so it is pinned.
+    """
+    src = _source()
+    docker_at = src.index("docker stop -t 10")
+    pkill_at = re.search(r'^\s*pkill "-\$sig" -x "CarlaUE4-Linux-"', src, re.M).start()
+    assert docker_at < pkill_at, (
+        "the pkill escalation runs before the container teardown again — it will kill the "
+        "container's simulator first and the teardown block will never execute")
+
+
+def test_the_container_teardown_acts_on_existence_not_on_running():
+    """A container someone else already stopped still has to be REMOVED.
+
+    Asking `docker ps` walks past a stopped-but-present container, which holds no VRAM but
+    blocks the next start by that name — how a stale console container silently served old
+    code on 2026-08-07.
+    """
+    guard = re.search(
+        r"docker ps (-a )?--format '\{\{\.Names\}\}' 2>/dev/null \| grep -qx \"\$c\" \|\| continue",
+        _source())
+    assert guard is not None, "the container teardown lost its existence guard"
+    assert guard.group(1) == "-a ", (
+        "the teardown triggers on `docker ps` (running) again, so a stopped-but-present "
+        "container is left behind to block the next start")
+
+
 def test_destructive_scope_never_comes_from_the_environment():
     """`ALL` is about as generic an environment variable name as exists.
 
