@@ -1380,6 +1380,35 @@ Docker is unavailable. Containers should become the *default* path, not the only
   `/carla_air_bridge` alone — the invariant this design exists to preserve, checked rather than
   assumed.
 
+### T-08 · The console's stop button is gated by "running", not "exists" — **open** *(filed 2026-08-10)*
+
+Found reviewing PR #9 (T-06), and it is the same defect one level up from the one that PR
+fixes.
+
+`stop_simulator()` takes the container path only when
+`lifecycle.deployment(self.stack_running())` returns `CONTAINER`, and `stack_running()`
+(`webui/server.py`) asks `docker ps` — **running containers only**. So when `carla-air-sim`
+exists but is *stopped* — a crashed simulator, a `docker stop` by hand — the console falls
+through to the HOST branch, runs `run_sim.sh --kill` against a host process that is not there,
+and returns `{"stopped": "simulator"}`. Success, having done nothing, with the container object
+still present.
+
+T-06's whole thesis is that *running* and *exists* are different questions. It answered that
+correctly **inside** the container branch while the check that decides whether to enter the
+branch still conflates them.
+
+**The obvious fix is wrong and that is why this is filed rather than patched.** Making
+`stack_running()` ask `docker ps -a` would tell the **Start** button that a stopped stack is
+up — the console would then refuse to start anything, or aim at a deployment that is not
+running. `stack_running()` means "is the stack up", and a stopped container is not an up stack.
+The sweep belongs in `stop_simulator` as a question asked *independently* of which deployment
+was selected: whatever the deployment, if a `carla-air-*` container object is lying around,
+say so.
+
+- **Verify:** with `carla-air-sim` present but stopped, the console's stop button reports the
+  container's actual state rather than reporting a host-path success; and the Start button
+  still treats the stack as down.
+
 ### T-07 · `stop.sh --all` does not clean up the container lane — **open** *(filed 2026-08-10)*
 
 Found while verifying T-06 against a real stack, and left unfixed on purpose because it is a

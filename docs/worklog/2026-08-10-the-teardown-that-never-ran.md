@@ -113,6 +113,39 @@ and pass after** — checked by reverting `stop.sh` alone and re-running them.
 Suite: **251 passed, 1 skipped.** The PR body's "248" was one commit stale; the branch tip was
 at 249 before these two.
 
+## The review found three more, and one of them was an overclaim in shipped output
+
+Fourth review this week, fourth set of real findings. Two fixed in the PR, one filed.
+
+**The warning told the user something that is not true.** Both teardown paths printed that a
+stopped-but-present container "will block the next start by that name". For `carla-air-sim` it
+does not: `run_sim_docker.sh:80` and `stack_up.sh:152` both `docker rm -f` before they
+`docker run`, so the name self-heals. That sentence was borrowed from the R-08 incident, which
+was `carla-air-webui` — and `webui.sh:77` really is the one start path with no pre-emptive
+removal. The state is still worth reporting; the *reason* was imported from a different
+container. Both messages now say what is true (the simulator is down, the object is still
+there) and a test pins that the claim does not come back.
+
+That is the same shape as the `−6.6%` baseline and the `${ALL:-0}` seeding: not a broken
+mechanism, a **true-sounding sentence attached to the wrong evidence**. It survived because
+nothing tests the text of a warning against the behaviour of a different script.
+
+**A duplicated comment** — the pre-existing "Report what was ACHIEVED" paragraph was left
+standing above the new one, still describing the return-code logic this PR deleted. Merged.
+
+**A test coupled to something it did not mean to assert.** The grace-period test built a
+filtered list of docker calls and then indexed the *unfiltered* one (`fake.calls[0]`). It
+passes only because the docker stop happens to be the first `_run` of any kind, so inserting
+any probe in front would have broken it for an unrelated reason. Now asserts against the list
+it already computed.
+
+**Filed as T-08:** `stop_simulator()`'s container branch is gated by `stack_running()`, which
+asks `docker ps` — running only. A stopped-but-present `carla-air-sim` therefore routes the
+console to the HOST branch, which kills a host process that does not exist and reports success.
+T-06 answered running-vs-exists inside the branch while the check selecting the branch still
+conflates them. Not patched here because the obvious fix is wrong: `stack_running()` must keep
+meaning "is the stack up", or the Start button starts believing a dead stack is alive.
+
 ## A third thing, filed rather than fixed here
 
 `stop.sh --all` reported **3 stragglers that it can never kill**: the sidecar and the two ROS
