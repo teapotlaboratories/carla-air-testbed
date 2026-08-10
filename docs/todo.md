@@ -1342,6 +1342,44 @@ treat as the Atlantic), and `ros_domain_id` never leaks into the ROS parameter f
 
 ## Tooling
 
+### R-08 · The console becomes a fourth container, opt-in — **planned** *(2026-08-10)*
+
+**Decided by the operator 2026-08-10: opt-in.** The console is not part of the stack today and
+should be. It is in no image, `stack_up.sh` starts nothing for it, and `--in-stack` merely
+borrows the ROS image to spin up an unmanaged `carla-air-webui` beside the three real
+containers. Two rough edges follow from nobody owning its lifecycle, and both were hit while
+verifying R-03 step 3:
+
+- `stack_up.sh --down` leaves `carla-air-webui` running — it has to be removed by hand.
+- A **stale container silently served old code**. `webui.sh --in-stack` failed with `exit 125`
+  (name already in use) and the previous container kept answering on the port, so a fix that
+  had landed appeared not to work. That cost a wrong diagnosis before the container was found.
+
+**Opt-in, not on by default, and the reason is a rule rather than taste.** `CLAUDE.md` states
+that after `bringup.sh`, `ros2 node list` is `/carla_air_bridge` **alone** — the "you bring the
+agent" invariant. Since R-03 step 1 the console *is* an `rclpy` node, so starting it by default
+makes that two nodes and brings up an HTTP control surface with every stack. That invariant is
+one of the few things keeping the scope honest, and a flag is cheap.
+
+- `docker/webui.Dockerfile` — thin, `FROM carla-air/ros:1`, its own entrypoint. The ROS image
+  already carries `rclpy`, `cv_bridge` and `msgpack`, so nothing new is installed.
+- `stack_up.sh --console` starts `carla-air-webui` as a managed fourth container.
+- `stack_up.sh --down` removes it, and starting replaces a stale one rather than failing on the
+  name.
+- `status.sh` counts it as a container rather than a host process.
+- `webui.sh --in-stack` becomes redundant for the stack case; `webui.sh` stays for the host lane.
+
+**Not in scope: retiring the host lane.** "Purely container-based" could also mean deleting
+`bringup.sh`, `run_sim.sh` and the `.venv`. That is a much larger decision and a separate item —
+the host lane is what every measurement this week was taken against, and it is the fallback when
+Docker is unavailable. Containers should become the *default* path, not the only one.
+
+- **Verify:** `stack_up.sh --config ... --console` brings up four containers and the console is
+  reachable; `--down` leaves none; starting twice in a row replaces the container rather than
+  serving the old one; and without `--console`, `ros2 node list` inside the stack is
+  `/carla_air_bridge` alone — the invariant this design exists to preserve, checked rather than
+  assumed.
+
 ### T-06 · Container teardown SIGKILLs where the host path escalates — **open** *(filed 2026-08-08)*
 
 `stop.sh` gives the host simulator `TERM → TERM → KILL` and then **verifies it is gone**, because
