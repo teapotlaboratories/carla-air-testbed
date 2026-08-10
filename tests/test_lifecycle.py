@@ -43,11 +43,16 @@ class _FakeRun:
         self.calls, self.returncode = [], returncode
         #: What `docker ps -a` reports. The teardown's verdict comes from ASKING whether the
         #: container is gone, not from a return code, so the fake has to answer that question.
-        self.containers = ""
+        self.containers = ""       # what `docker ps` reports (running)
+        self.containers_all = ""   # what `docker ps -a` reports (running + stopped)
 
     def __call__(self, argv, env=None, background=False):
         self.calls.append(list(argv))
-        out = self.containers if "ps" in argv else "ok"
+        # `docker ps` (running) and `docker ps -a` (exists) are asked separately now.
+        if "ps" in argv:
+            out = self.containers_all if "-a" in argv else self.containers
+        else:
+            out = "ok"
         return SimpleNamespace(returncode=self.returncode, stdout=out, stderr="")
 
 
@@ -117,9 +122,26 @@ def test_a_container_that_survives_teardown_is_reported_as_a_failure(procs, monk
     gone — not from the return code, which is a hint at best."""
     p, fake, _ = procs
     monkeypatch.setattr(p, "stack_running", lambda: True)
-    fake.containers = "carla-air-sim other-thing"
+    fake.containers = fake.containers_all = "carla-air-sim other-thing"
     with pytest.raises(RuntimeError, match="STILL RUNNING"):
         p.stop_simulator()
+
+
+def test_a_stopped_but_unremoved_container_is_not_an_error(procs, monkeypatch):
+    """Review of T-06 caught the check and the message disagreeing.
+
+    `docker ps -a` answers "does this container object exist", but the message said STILL
+    RUNNING. A stopped-but-present container holds no GPU memory — the simulator IS down — so
+    raising would report a failure that did not happen. It does still block the next start by
+    name, which is how a stale console container silently served old code on 2026-08-07, so it
+    is worth SAYING. In the reply, not as an error.
+    """
+    p, fake, _ = procs
+    monkeypatch.setattr(p, "stack_running", lambda: True)
+    fake.containers = ""                       # not running
+    fake.containers_all = "carla-air-sim"      # but not removed either
+    detail = " ".join(p.stop_simulator()["detail"])
+    assert "NOT removed" in detail and "block the next start" in detail
 
 
 def test_the_teardown_asks_rather_than_trusting_the_return_code(procs, monkeypatch):

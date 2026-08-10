@@ -186,8 +186,17 @@ if [ "$ALL" -eq 1 ]; then
                 # than the path it replaced and told nobody whether it worked.
                 docker stop -t 10 "$c" >/dev/null 2>&1 || true
                 docker rm -f "$c" >/dev/null 2>&1 || true
-                if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-                    echo "WARNING: container $c survived stop and rm -f" >&2
+                # Two DIFFERENT questions, and conflating them mislabels a harmless state.
+                # "Still running" is the VRAM question rule 1 cares about. "Still exists" is
+                # the name-collision question - a stopped-but-present container holds no GPU
+                # memory, but it will block the next start by name, which is how a stale
+                # console container silently served old code on 2026-08-07.
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+                    echo "WARNING: container $c is STILL RUNNING after stop and rm -f" >&2
+                    rc=1
+                elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+                    echo "WARNING: container $c is stopped but NOT REMOVED — it holds no GPU" >&2
+                    echo "         memory, but it will block the next start by that name." >&2
                     rc=1
                 else
                     echo "stopped container $c"

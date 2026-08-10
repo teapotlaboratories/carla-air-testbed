@@ -252,13 +252,22 @@ class Processes:
                 # over would be worse, not better.
                 # Report what was ACHIEVED. A non-zero rm is a hint, not the verdict: ask
                 # whether the container is actually gone, because that is the question.
-                still = self._run(["docker", "ps", "-a", "--format", "{{.Names}}"])
-                if name in (still.stdout or "").split():
+                # "Running" and "exists" are different questions. A stopped-but-present
+                # container holds no GPU memory - the simulator IS down - so raising for it
+                # would report a failure that did not happen. It still blocks the next start
+                # by name, which is worth saying, but in the reply rather than as an error.
+                detail = [f"removed container {name}"]
+                running = self._run(["docker", "ps", "--format", "{{.Names}}"])
+                if name in (running.stdout or "").split():
                     raise RuntimeError(
-                        f"{name} survived docker stop and rm -f, so the simulator is STILL "
-                        f"RUNNING:\n{((r.stderr or '') + (r.stdout or '')).strip()[-400:]}")
+                        f"{name} is STILL RUNNING after docker stop and rm -f:\n"
+                        f"{((r.stderr or '') + (r.stdout or '')).strip()[-400:]}")
+                present = self._run(["docker", "ps", "-a", "--format", "{{.Names}}"])
+                if name in (present.stdout or "").split():
+                    detail = [f"{name} stopped but NOT removed — holds no GPU memory, but it "
+                              f"will block the next start by that name"]
                 return {"stopped": "simulator", "deployment": lifecycle.CONTAINER,
-                        "detail": [f"removed container {name}"]}
+                        "detail": detail}
             r = self._run([os.path.join(PROJ, "scripts", "run_sim.sh"), "--kill"])
             return {"stopped": "simulator", "deployment": lifecycle.HOST,
                     "detail": (r.stdout or "").strip().splitlines()[-2:]}
