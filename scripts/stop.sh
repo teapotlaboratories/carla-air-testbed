@@ -181,15 +181,22 @@ if [ "$ALL" -eq 1 ] && command -v docker >/dev/null 2>&1; then
         docker stop -t 10 "$c" >/dev/null 2>&1 || true
         docker rm -f "$c" >/dev/null 2>&1 || true
         # Two DIFFERENT questions, and conflating them mislabels a harmless state.
-        # "Still running" is the VRAM question rule 1 cares about. "Still exists" is
-        # the name-collision question - a stopped-but-present container holds no GPU
-        # memory, but it will block the next start by name.
+        # "Still running" is the VRAM question rule 1 cares about, and the only one that
+        # means rule 1 was not met. "Still exists" is a leftover object: the simulator IS
+        # down, so it is reported without being called a failure of the teardown.
+        #
+        # It is NOT reported as blocking the next start, which is what an earlier draft of
+        # this said. `run_sim_docker.sh` and `stack_up.sh` both `docker rm -f` before they
+        # `docker run`, so this name self-heals. The container that really did block a start
+        # was `carla-air-webui` on 2026-08-07, and `scripts/webui.sh` is the one start path
+        # with no pre-emptive removal. Borrowing that incident's consequence for this name
+        # would be an overclaim in the teardown's own output.
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
             echo "WARNING: container $c is STILL RUNNING after stop and rm -f" >&2
             rc=1
         elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
-            echo "WARNING: container $c is stopped but NOT REMOVED — it holds no GPU" >&2
-            echo "         memory, but it will block the next start by that name." >&2
+            echo "WARNING: container $c is stopped but NOT REMOVED — the simulator is down" >&2
+            echo "         and it holds no GPU memory; the container object is still there." >&2
             rc=1
         else
             echo "stopped container $c"

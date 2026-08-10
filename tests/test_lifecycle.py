@@ -132,16 +132,23 @@ def test_a_stopped_but_unremoved_container_is_not_an_error(procs, monkeypatch):
 
     `docker ps -a` answers "does this container object exist", but the message said STILL
     RUNNING. A stopped-but-present container holds no GPU memory — the simulator IS down — so
-    raising would report a failure that did not happen. It does still block the next start by
-    name, which is how a stale console container silently served old code on 2026-08-07, so it
-    is worth SAYING. In the reply, not as an error.
+    raising would report a failure that did not happen. It is still worth SAYING, in the reply
+    rather than as an error, because an unremoved container is a surprise.
+
+    It must NOT claim the container blocks the next start: `run_sim_docker.sh` and
+    `stack_up.sh` both `docker rm -f` before starting, so `carla-air-sim` self-heals. That
+    justification was borrowed from `carla-air-webui`, which is a different name on the one
+    start path with no pre-emptive removal.
     """
     p, fake, _ = procs
     monkeypatch.setattr(p, "stack_running", lambda: True)
     fake.containers = ""                       # not running
     fake.containers_all = "carla-air-sim"      # but not removed either
     detail = " ".join(p.stop_simulator()["detail"])
-    assert "NOT removed" in detail and "block the next start" in detail
+    assert "NOT removed" in detail and "simulator is down" in detail
+    assert "block the next start" not in detail, (
+        "the reply claims a stale carla-air-sim blocks the next start; the start paths "
+        "docker rm -f first, so that is not true of this container")
 
 
 def test_the_teardown_asks_rather_than_trusting_the_return_code(procs, monkeypatch):
@@ -161,9 +168,12 @@ def test_sigterm_with_a_grace_period_comes_before_the_hammer(procs, monkeypatch)
     p, fake, _ = procs
     monkeypatch.setattr(p, "stack_running", lambda: True)
     p.stop_simulator()
-    verbs = [c[1] for c in fake.calls if c and c[0] == "docker"]
+    docker = [c for c in fake.calls if c and c[0] == "docker"]
+    verbs = [c[1] for c in docker]
     assert verbs[0] == "stop", f"went straight to {verbs[0]!r} without a graceful stop"
-    assert "-t" in fake.calls[0], "no grace period given"
+    # Against `docker[0]`, not `fake.calls[0]` — the latter is the first call of ANY kind and
+    # only happens to be this one, so it would keep passing if a probe were put in front.
+    assert "-t" in docker[0], "no grace period given"
     assert verbs.index("stop") < verbs.index("rm")
 
 

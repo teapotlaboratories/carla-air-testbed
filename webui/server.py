@@ -248,14 +248,19 @@ class Processes:
                 r = self._run(["docker", "rm", "-f", name])
                 # Report what was ACHIEVED, not what was attempted. stop.sh learned this the
                 # expensive way on 2026-08-03: it announced success twice while the simulator
-                # held 3.5 GB of VRAM, because nothing checked. Reintroducing that one file
-                # over would be worse, not better.
-                # Report what was ACHIEVED. A non-zero rm is a hint, not the verdict: ask
-                # whether the container is actually gone, because that is the question.
+                # held 3.5 GB of VRAM, because nothing checked. So a non-zero `rm` is a hint,
+                # not the verdict — ask whether the container is actually gone, because that
+                # is the question.
+                #
                 # "Running" and "exists" are different questions. A stopped-but-present
                 # container holds no GPU memory - the simulator IS down - so raising for it
-                # would report a failure that did not happen. It still blocks the next start
-                # by name, which is worth saying, but in the reply rather than as an error.
+                # would report a failure that did not happen. It is still worth SAYING, in the
+                # reply rather than as an error, because an unremoved container is a surprise
+                # and the next `docker run` is not the only thing that might trip over it.
+                # NOT because it blocks the next start: `run_sim_docker.sh` and `stack_up.sh`
+                # both `docker rm -f` before starting, so this name self-heals. The container
+                # that genuinely blocked a start was `carla-air-webui` on 2026-08-07, and
+                # `webui.sh` is the one path with no pre-emptive removal.
                 detail = [f"removed container {name}"]
                 running = self._run(["docker", "ps", "--format", "{{.Names}}"])
                 if name in (running.stdout or "").split():
@@ -264,8 +269,8 @@ class Processes:
                         f"{((r.stderr or '') + (r.stdout or '')).strip()[-400:]}")
                 present = self._run(["docker", "ps", "-a", "--format", "{{.Names}}"])
                 if name in (present.stdout or "").split():
-                    detail = [f"{name} stopped but NOT removed — holds no GPU memory, but it "
-                              f"will block the next start by that name"]
+                    detail = [f"{name} stopped but NOT removed — it holds no GPU memory, so "
+                              f"the simulator is down; the container object is still there"]
                 return {"stopped": "simulator", "deployment": lifecycle.CONTAINER,
                         "detail": detail}
             r = self._run([os.path.join(PROJ, "scripts", "run_sim.sh"), "--kill"])
