@@ -184,6 +184,32 @@ class Processes:
             return False
         return os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim") in names
 
+    def sim_container_state(self):
+        """Is there a simulator container, and is it running? THREE answers, not two. T-08.
+
+        `stack_running()` answers "is the stack UP" — right for the Start button, wrong for
+        Stop. A container that exists but is stopped looked identical to no container at all,
+        so the stop button took the host lane, killed a host process that was not there, and
+        reported success while the leftover object sat there.
+
+        Asked through `_run` rather than a bare `subprocess.run` so the shipped method can be
+        tested against the same fake the rest of the teardown uses.
+        """
+        name = os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim")
+        try:
+            running = self._run(["docker", "ps", "--format", "{{.Names}}"])
+            if name in (running.stdout or "").split():
+                return lifecycle.CONTAINER_RUNNING
+            present = self._run(["docker", "ps", "-a", "--format", "{{.Names}}"])
+            if name in (present.stdout or "").split():
+                return lifecycle.CONTAINER_STOPPED
+        except (OSError, subprocess.SubprocessError):
+            # No docker binary, or it did not answer. The host lane is the honest default:
+            # it is what this console did before containers existed, and `run_sim.sh --kill`
+            # is a no-op rather than a hazard when there is nothing to kill.
+            return lifecycle.CONTAINER_ABSENT
+        return lifecycle.CONTAINER_ABSENT
+
     def _guard(self, action):
         why = lifecycle.refusal(action, self.IN_STACK)
         if why:
@@ -237,7 +263,14 @@ class Processes:
         already."""
         self._guard("stop_sim")
         with self._lock:
-            if lifecycle.deployment(self.stack_running()) == lifecycle.CONTAINER:
+            # T-08. The lane comes from the container actually RUNNING, not from
+            # `stack_running()`. A merely-present container is litter, not a deployment: a
+            # host-native simulator can be up at the same time, and routing to the container
+            # teardown would remove the leftover, report success, and leave 3.3 GB of VRAM
+            # held. That is the 2026-08-03 incident with a new cause, so the leftover is swept
+            # on the HOST path instead — separately from deciding where the simulator is.
+            state = self.sim_container_state()
+            if state == lifecycle.CONTAINER_RUNNING:
                 # run_sim.sh --kill matches a host process name and would silently do nothing.
                 name = os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim")
                 # SIGTERM with a grace period first. Unreal does not always go down on the
@@ -273,9 +306,22 @@ class Processes:
                               f"the simulator is down; the container object is still there"]
                 return {"stopped": "simulator", "deployment": lifecycle.CONTAINER,
                         "detail": detail}
+            # The host lane, which is also where a stopped-but-present container lands.
             r = self._run([os.path.join(PROJ, "scripts", "run_sim.sh"), "--kill"])
-            return {"stopped": "simulator", "deployment": lifecycle.HOST,
-                    "detail": (r.stdout or "").strip().splitlines()[-2:]}
+            detail = (r.stdout or "").strip().splitlines()[-2:]
+            if state == lifecycle.CONTAINER_STOPPED:
+                # Say it, and act on it. Before T-08 this case reported a bare host success
+                # while the object sat there — the console had no way to tell anyone it had
+                # seen it, because it never looked.
+                name = os.environ.get("TESTBED_SIM_CONTAINER", "carla-air-sim")
+                self._run(["docker", "rm", "-f", name])
+                present = self._run(["docker", "ps", "-a", "--format", "{{.Names}}"])
+                if name in (present.stdout or "").split():
+                    detail.append(f"a stopped container {name} is still present and could "
+                                  f"not be removed")
+                else:
+                    detail.append(f"also removed a leftover stopped container {name}")
+            return {"stopped": "simulator", "deployment": lifecycle.HOST, "detail": detail}
 
     def status(self):
         r = self._run([os.path.join(PROJ, "scripts", "status.sh")])
