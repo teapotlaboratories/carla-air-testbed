@@ -324,7 +324,7 @@ was written two days before both of these. The pattern is worth naming rather th
 - **Not urgent.** Both behaviours are verified and recorded; this is about them staying
   verified.
 
-### R-03 · The web console talks ROS 2 only — **planned** *(revised 2026-08-07)*
+### R-03 · The web console talks ROS 2 only — **done** *(2026-08-11)*
 
 `webui/server.py` dispatches sidecar RPC methods over the Unix socket
 (`webui/server.py:328-332`) and imports no ROS at all. Every button — velocity, yaw, hold,
@@ -533,10 +533,9 @@ completely different navigation stack could want a third-person view, which is t
   (a missing moov atom is the failure this must not have); and the console's chase pane works
   from the ROS topic with the sidecar socket unavailable.
 
-**Landed 2026-08-11 — the sidecar and the topic. The console pane is NOT moved yet.**
-`/camera/chase/image_raw/compressed` publishes only while subscribed; `webui/server.py` still
-polls `chase_jpeg` over the socket, so the last line of the verify list above is outstanding
-and R-03 is not finished.
+**Landed 2026-08-11 — the sidecar, the topic, and then the console pane. R-03 is done.**
+`/camera/chase/image_raw/compressed` publishes only while subscribed, and the console's pane
+is now a subscriber to it rather than a socket poller.
 
 Verified against a live stack:
 
@@ -571,6 +570,42 @@ aircraft. Parking is now conditional on nothing still watching.
   the follower unconditionally. **The third initially failed to fail**, because the fixture left
   `_chase_thread` as `None` and the branch under test was unreachable — the same "asserting on
   a constant" hole the `_FakeRun` fake had in T-08, found the same way.
+
+**The console pane, and the whole chain verified end to end.** The lifetime now runs
+browser tab → console subscription → the bridge's subscription count → the CARLA sensor:
+
+| | |
+|---|---|
+| console up, pane never opened | sensor **DOWN** |
+| pane opened | sensor **UP**, ~9 MB of frames in 10 s |
+| tab closed, past the hold-off | sensor **DOWN** |
+
+**The console's subscription is taken per pane, not for its lifetime**, and that is the point:
+held from startup it would pin a full extra render pass up for as long as the console ran,
+which is the cost this whole design exists to avoid. An idle console is invisible to the
+simulator. Counted, because two tabs are two viewers.
+
+**A leak caught before it shipped.** `/api/chase/view` — the button the page presses after
+Start — called `chase_view` over the socket, which takes a **claim** in the sidecar. The
+console has no matching `chase_release` to pair with it, because R-03 step 4 gave that job to
+the subscription. It would have left the claim stuck at one forever, so unsubscribing the pane
+would never release the sensor and the render pass would run for the rest of the session. On
+ROS the call is answered without touching the socket; the button is simply not needed, because
+opening the pane is what brings the camera up.
+
+**Frames are passed through, not re-encoded.** The topic already carries JPEG, so unlike the
+onboard pane there is nothing to encode — the sidecar encoded once and those bytes go straight
+to the browser.
+
+- **7 more tests** in `tests/test_ros_source.py`. They **stub `sensor_msgs` rather than
+  skipping**: the 3.10 venv that runs the documented offline suite has no ROS messages, and an
+  `importorskip` would have meant they never ran in the suite anyone actually invokes. Two
+  mutation-checked — unsubscribing on the first of two closes, and keeping a stale frame after
+  release — each turn the right test red. **290 passed, 1 skipped.**
+
+**Five `*.call(` sites remain and all five are the socket-mode fallback**, reached only when
+`ROS is None`. A literal zero is only reachable by deleting the fallback, which would make the
+console unusable without a graph — the same honest qualification step 2 recorded.
 
 > **Superseded in part.** The 2026-08-03 deferral is kept below because its *reasoning* about
 > the chase camera still holds — but its conclusion ("nothing depends on the console, so this
@@ -804,8 +839,7 @@ Two options, and this is a decision rather than code:
 2. ~~**R-01**~~ — **done 2026-08-03**, `run_episode.py` included.
 3. ~~**R-02**~~ — **done 2026-08-03**. The repositioning is complete apart from R-03, which was re-planned on 2026-08-07 once the containers stranded the console.
 4. ~~**R-07**~~ — **done 2026-08-03**. ~~**R-06**~~ — superseded by the resolution decision.
-5. **R-03** — the console's chase pane is the last piece; the sidecar and the topic landed
-   2026-08-11, the pane itself still polls `chase_jpeg` over the socket.
+5. ~~**R-03**~~ — **done 2026-08-11**, chase pane included.
 6. **R-05** — the only in-scope item with real work left, and only half of it: headless ships,
    **windowed is blocked**.
 7. **P-01** — reads as open and is not. Vulkan-in-a-container was unblocked 2026-08-06 and the
