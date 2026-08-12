@@ -56,7 +56,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, PointCloud2, PointField
 from std_msgs.msg import Bool, String
 from interfaces.msg import Collision
 from interfaces.srv import (ChaseRecording, DestroyActors, ResetVehicle, SetCameraPose,
@@ -112,6 +112,17 @@ class CarlaAirBridge(Node):
         self.declare_parameter("publish_depth", True)
         self.declare_parameter("publish_segmentation", False)
         self.declare_parameter("frame_id", "drone")
+        # R-03 step 4. The chase camera is a spectator view, published ONLY while something is
+        # subscribed — see _tick_chase for why that is not an optimisation.
+        self.declare_parameter("chase_enabled", True)
+        self.declare_parameter("chase_rate_hz", 10.0)
+        self.declare_parameter("chase_width", 1280)
+        self.declare_parameter("chase_height", 720)
+        self.declare_parameter("chase_quality", 75)
+        #: How long the topic must stay unsubscribed before the sensor is released. Spawning a
+        #: CARLA sensor is not free, and `ros2 topic echo` reconnecting — or one subscriber
+        #: handing over to another — would otherwise destroy and respawn it each time.
+        self.declare_parameter("chase_holdoff_s", 3.0)
         self.declare_parameter("setpoint_duration_s", 0.5)
 
         self._frame_id = self.get_parameter("frame_id").value
@@ -185,6 +196,11 @@ class CarlaAirBridge(Node):
         # reconstructed it from odometry plus their own camera_pitch_deg parameter, so a
         # pitch change in one place silently put every waypoint somewhere else.
         self.pub_campose = self.create_publisher(PoseStamped, "/camera/pose", 5)
+        # CompressedImage, because the sidecar already hands back JPEG: no second encode, and
+        # no 1080p raw crossing the two-interpreter seam at the chase frame rate (~62 MB/s).
+        # The `/compressed` suffix is what image_transport subscribers expect.
+        self.pub_chase = self.create_publisher(
+            CompressedImage, "/camera/chase/image_raw/compressed", 2)
 
         # ---- testbed-side signals the sim can answer but a Pixhawk cannot ----
         # Collision, not Bool. The flag alone sends people looking through video for a
@@ -240,6 +256,13 @@ class CarlaAirBridge(Node):
         img_hz = float(self.get_parameter("image_rate_hz").value)
         self.create_timer(1.0 / odo_hz, self._tick_odometry,
                           callback_group=MutuallyExclusiveCallbackGroup())
+        # Polled rather than event-driven: rclpy has no portable "a subscriber matched" hook,
+        # and a timer that asks `get_subscription_count()` is the same question answered a
+        # little later. The hold-off below is what makes "a little later" harmless.
+        if bool(self.get_parameter("chase_enabled").value):
+            self.create_timer(1.0 / max(float(self.get_parameter("chase_rate_hz").value), 0.1),
+                              self._tick_chase,
+                              callback_group=MutuallyExclusiveCallbackGroup())
         self.create_timer(1.0 / img_hz, self._tick_images,
                           callback_group=MutuallyExclusiveCallbackGroup())
         sensor_hz = float(self.get_parameter("sensor_rate_hz").value)
@@ -479,6 +502,84 @@ class CarlaAirBridge(Node):
         st.nav_state = (VehicleStatus.NAVIGATION_STATE_OFFBOARD if self._offboard_active
                         else VehicleStatus.NAVIGATION_STATE_AUTO_LOITER)
         self.pub_status.publish(st)
+
+    #: The live-view claim held with the sidecar, and when the last subscriber went away.
+    #: `None` for the second means "not waiting to release".
+    _chase_held = False
+    _chase_idle_since = None
+
+    def _tick_chase(self):
+        """Publish the chase view, and own the sensor's lifetime while doing it.
+
+        **The sensor does not exist until somebody subscribes, and that is the point.** The
+        chase camera is a full extra render pass in CARLA: measured at
+        `sim_bridge/server.py`, 30 Hz @1080p leaves the simulator at 59.8 of 60.0 fps while
+        60 Hz @1080p takes it to 49.5. Real-time factor stays 1.000 through all of that, so
+        this is judged on tick rate and never on RTF. An always-on publisher would spend that
+        on a topic with, most of the time, no consumer at all.
+
+        A recording outranks a viewer: `chase_view` adopts the spec of any recording already
+        running, because a CARLA sensor's resolution and tick are fixed at spawn and honouring
+        two specs means respawning the sensor — which would truncate the mp4 being written,
+        finalised and silently short rather than visibly broken.
+        """
+        if self._resetting:
+            return
+        wanted = self.pub_chase.get_subscription_count() > 0
+        now = time.monotonic()
+
+        if wanted and not self._chase_held:
+            try:
+                # On `world`, not `media`. `chase_view` takes the sidecar's slow_lock, and
+                # issuing it on the capture connection would park every image behind it —
+                # `/camera/rgb/image_raw` is this project's bottleneck. Frames below stay on
+                # `media`, where `chase_jpeg` already belongs.
+                got = self.world.chase_view(
+                    width=int(self.get_parameter("chase_width").value),
+                    height=int(self.get_parameter("chase_height").value),
+                    fps=float(self.get_parameter("chase_rate_hz").value))
+            except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
+                self.get_logger().warn(f"chase_view failed: {exc}", throttle_duration_sec=5.0)
+                return
+            self._chase_held = True
+            self._chase_idle_since = None
+            if got.get("adopted_recording_spec"):
+                self.get_logger().info(
+                    f"chase view adopted the running recording's spec: {got.get('size')} "
+                    f"@ {got.get('fps')} fps")
+
+        if not wanted and self._chase_held:
+            # Hold off, so a subscriber reconnecting does not destroy and respawn the sensor.
+            if self._chase_idle_since is None:
+                self._chase_idle_since = now
+            elif now - self._chase_idle_since >= float(
+                    self.get_parameter("chase_holdoff_s").value):
+                try:
+                    self.world.chase_release()
+                except (SimBridgeError, OSError) as exc:
+                    self.get_logger().warn(f"chase_release failed: {exc}",
+                                           throttle_duration_sec=5.0)
+                self._chase_held = False
+                self._chase_idle_since = None
+            return
+
+        if not self._chase_held:
+            return
+        self._chase_idle_since = None
+        try:
+            jpeg = (self.media.chase_jpeg(
+                quality=int(self.get_parameter("chase_quality").value)) or {}).get("jpeg")
+        except (SimBridgeError, OSError, KeyError, TypeError, ValueError) as exc:
+            self.get_logger().warn(f"chase_jpeg failed: {exc}", throttle_duration_sec=5.0)
+            return
+        if not jpeg:
+            return          # the camera is up but has not delivered a frame yet
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "chase"
+        msg.format = "jpeg"
+        msg.data = bytes(jpeg)
+        self.pub_chase.publish(msg)
 
     def _tick_images(self):
         if self._resetting:

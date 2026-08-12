@@ -5,6 +5,12 @@ carla_air_bridge:
     sensor_rate_hz: 5.0
     lidar_rate_hz: 10.0
     image_rate_hz: 8.0
+    chase_enabled: true
+    chase_rate_hz: 10.0
+    chase_width: 1280
+    chase_height: 720
+    chase_quality: 75
+    chase_holdoff_s: 3.0
     publish_depth: true
     publish_segmentation: true
     frame_id: drone
