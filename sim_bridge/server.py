@@ -129,6 +129,16 @@ class SimBridge:
         # in the class that owns that client's lock. self.vehicle -> FAST, self.control ->
         # CONTROL, self.camera -> MEDIA. Check that before adding a method, not after.
         self._chase = None
+        #: WHO wants the chase camera, because two independent owners share one sensor and a
+        #: CARLA sensor's resolution and tick are fixed at spawn. R-03 step 4.
+        #:
+        #: A live viewer (the ROS topic, while anything is subscribed) and a recording both
+        #: hold a claim. Destroying on "the last subscriber left" would end an mp4 early —
+        #: and NOT visibly: `ChaseCamera.destroy()` calls `stop()`, which drains and closes
+        #: the writer, so the file is properly finalised and merely short. A playable file
+        #: that is silently incomplete is worse than a broken one.
+        self._chase_viewers = 0
+        self._chase_recording = False
         self._chase_client = None
         self._chase_vehicle = None
         self._chase_stop = threading.Event()
@@ -307,13 +317,65 @@ class SimBridge:
         healthy on the RTF and is quietly integrating physics on a coarser timestep
         (16.7 ms -> 20.3 ms at 60 Hz/1080p). Judge this by tick rate, not by RTF.
         """
+        # A RECORDING OUTRANKS A VIEWER, and this is the whole spec-conflict rule.
+        #
+        # `_ensure_chase` respawns the sensor whenever the requested spec differs, because
+        # resolution and tick are fixed at spawn. Honouring a viewer's spec while an mp4 is
+        # being written would therefore destroy the sensor underneath it and truncate the
+        # file, with nothing reported anywhere. Since R-03 step 4 the ROS topic acquires a
+        # view automatically on its first subscriber, so that would go from "a human did two
+        # conflicting things" to "somebody ran `ros2 topic echo`".
+        #
+        # So the viewer adopts whatever is already recording. The frame size it gets can
+        # differ from what it asked for; the reply says what it actually got, and the topic
+        # carries the size in the message rather than in a latched CameraInfo.
+        if self._chase_recording and self._chase is not None:
+            width, height, fps = self._chase.width, self._chase.height, self._chase.fps
         self._ensure_chase(width, height, fps, distance, above)
-        return {"streaming": True, "size": [width, height], "fps": fps}
+        self._chase_viewers += 1
+        return {"streaming": True, "size": [width, height], "fps": fps,
+                "viewers": self._chase_viewers, "adopted_recording_spec": self._chase_recording}
+
+    def chase_release(self):
+        """Give up ONE live-view claim, and put the camera away if nobody else wants it.
+
+        R-03 step 4. Before this there was no way to stop a live view at all: `chase_stop` is
+        the RECORDING stop — it drains the encoder and finalises the mp4 — so the only way to
+        put the sensor away was to pretend to finish a recording that did not exist.
+
+        **The shared follow thread is deliberately left running.** `_chase_follow` drives the
+        chase camera *and* `self._rig`, the CARLA sensors from carla_sensors.yaml, from a
+        single pose read. Stopping it here would freeze every one of those sensors in place
+        the moment a topic lost its last subscriber. It already guards `if self._chase is not
+        None`, so destroying the camera under it is safe.
+        """
+        if self._chase_viewers > 0:
+            self._chase_viewers -= 1
+        if self._chase_viewers > 0 or self._chase_recording:
+            return {"released": True, "camera": "kept", "viewers": self._chase_viewers,
+                    "recording": self._chase_recording}
+        if self._chase is not None:
+            self._chase.destroy()
+            self._chase = None
+        return {"released": True, "camera": "destroyed", "viewers": 0, "recording": False}
 
     def chase_jpeg(self, quality=75):
-        if self._chase is None:
+        # ONE read of the attribute, then work off that reference.
+        #
+        # This runs under `media_lock` while `chase_view`, `chase_release` and `chase_start`
+        # all mutate `self._chase` under `slow_lock` — different locks, same object. Checking
+        # `is None` and then dereferencing gives a window where a release in between turns the
+        # second line into an AttributeError. The window has always existed; R-03 step 4 makes
+        # the ROS topic acquire and release automatically, so it goes from "two humans racing"
+        # to something a subscriber leaving can hit on any frame.
+        #
+        # Safe to keep using afterwards: `latest_jpeg` reads a buffered numpy frame under the
+        # camera's own lock and encodes it. It touches no CARLA handle, so a camera destroyed
+        # underneath it yields the last frame rather than an error.
+        cam = self._chase
+        if cam is None:
             return {"jpeg": None}
-        return {"jpeg": self._chase.latest_jpeg(quality)}
+        return {"jpeg": cam.latest_jpeg(quality)}
 
     def _ensure_follow_thread(self):
         """One thread drives the chase camera AND every CARLA sensor from a single pose read.
@@ -412,13 +474,29 @@ class SimBridge:
         above = float(d["above"]) if above is None else float(above)
         self._ensure_chase(width, height, fps, distance, above)
         self._chase.start(path)
+        # Claimed BEFORE returning, so a viewer arriving in between adopts this spec rather
+        # than respawning the sensor under the file that was just opened.
+        self._chase_recording = True
         return {"recording": path, "size": [width, height], "fps": fps}
 
     def chase_stop(self):
         if self._chase is None:
             return {"frames": 0, "dropped": 0}
-        self._chase_stop.set()
-        if self._chase_thread is not None:
+        self._chase_recording = False
+        # PARK THE FOLLOWER ONLY IF NOTHING IS STILL WATCHING.
+        #
+        # Two reasons this became conditional in R-03 step 4. The obvious one: a live viewer
+        # may still hold a claim, and freezing the camera under it would leave a pane showing
+        # a stationary shot of wherever the aircraft was.
+        #
+        # The other is a bug that predates this and is fixed by the same condition.
+        # `_chase_follow` drives the chase camera *and* `self._rig` — every CARLA sensor in
+        # carla_sensors.yaml — from one pose read. Stopping it unconditionally meant that
+        # ending ANY chase recording froze all of those sensors at the last pose, with
+        # nothing restarting them until the next `_ensure_chase`. They kept publishing, from
+        # a camera that no longer followed the aircraft.
+        if self._chase_viewers <= 0 and self._chase_thread is not None:
+            self._chase_stop.set()
             # 5 s was not enough at 1080p: the encoder still has a queue to flush when the
             # follower stops, the join timed out, `stop()` never ran, and the file was left
             # without a moov atom - i.e. unplayable, which is the one outcome a recording

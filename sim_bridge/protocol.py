@@ -84,6 +84,7 @@ METHODS = frozenset({
     "carla_sensors",    # what CARLA sensors are spawned and following
     "lidar",            # newest semantic lidar sweep, raw bytes
     "chase_view",       # bring the chase camera up for live viewing only
+    "chase_release",    # give up one live-view claim; put the camera away if nobody is left
     "chase_jpeg",       # newest chase frame, encoded
     "view_jpeg",        # newest drone-camera frame, encoded
 
