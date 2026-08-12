@@ -30,7 +30,9 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "webui"))
 
+import types  # noqa: E402
 import ros_source  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
 #: Every key `webui/index.html` reads off `/api/state`. Kept as data rather than assertions
 #: scattered through the tests, because when the page starts reading a new one this list is
@@ -134,3 +136,91 @@ def test_the_module_imports_without_rclpy():
     offenders = [ln.strip() for ln in module_scope
                  if any(pkg in ln for pkg in ("rclpy", "px4_msgs", "cv_bridge", "sensor_msgs"))]
     assert not offenders, f"ROS imports at module scope: {offenders}"
+
+
+class TestTheChasePaneHoldsTheSensorUp:
+    """R-03 step 4, console half.
+
+    The bridge spawns the CARLA chase sensor while anything is subscribed, so on this side the
+    SUBSCRIPTION is the thing being managed — not a stream, not a button. A subscription held
+    for the console's lifetime would pin a full extra render pass up for as long as the console
+    ran, which is precisely the cost the topic design exists to avoid. An idle console has to
+    be invisible to the simulator.
+
+    Driven against a fake node, because creating a real one needs rclpy and a graph. What is
+    under test is the counting and the create/destroy pairing.
+    """
+
+    class _FakeNode:
+        def __init__(self):
+            self.created, self.destroyed = [], []
+
+        def create_subscription(self, msg_type, topic, cb, qos):
+            sub = f"sub:{topic}:{len(self.created)}"
+            self.created.append(topic)
+            return sub
+
+        def destroy_subscription(self, sub):
+            self.destroyed.append(sub)
+
+    @pytest.fixture
+    def src(self, monkeypatch):
+        # `chase_acquire` imports CompressedImage at call time, and the 3.10 venv that runs
+        # the documented offline suite has no sensor_msgs. Stubbed rather than skipped: what
+        # is under test is the counting, and skipping would have meant these never ran in the
+        # suite anyone actually invokes. `setitem` restores sys.modules afterwards.
+        if "sensor_msgs.msg" not in sys.modules:
+            pkg, mod = types.ModuleType("sensor_msgs"), types.ModuleType("sensor_msgs.msg")
+            mod.CompressedImage = type("CompressedImage", (), {})
+            pkg.msg = mod
+            monkeypatch.setitem(sys.modules, "sensor_msgs", pkg)
+            monkeypatch.setitem(sys.modules, "sensor_msgs.msg", mod)
+        s = ros_source.RosSource()
+        s._node = self._FakeNode()
+        return s
+
+    def test_opening_the_pane_subscribes(self, src):
+        assert src._chase_sub is None, "subscribed before anyone opened the pane"
+        src.chase_acquire()
+        assert src._node.created == ["/camera/chase/image_raw/compressed"]
+
+    def test_closing_the_last_pane_unsubscribes(self, src):
+        src.chase_acquire()
+        src.chase_release()
+        assert src._chase_sub is None
+        assert len(src._node.destroyed) == 1, "the subscription outlived its only viewer"
+
+    def test_two_tabs_need_two_closes(self, src):
+        """The first tab closing must not take the picture away from the second."""
+        src.chase_acquire()
+        src.chase_acquire()
+        src.chase_release()
+        assert src._chase_sub is not None and not src._node.destroyed
+        src.chase_release()
+        assert src._chase_sub is None and len(src._node.destroyed) == 1
+
+    def test_reopening_subscribes_again(self, src):
+        src.chase_acquire(); src.chase_release()
+        src.chase_acquire()
+        assert len(src._node.created) == 2, "the pane could not be reopened"
+
+    def test_frames_are_passed_through_without_re_encoding(self, src):
+        """The topic already carries JPEG. Unlike the onboard pane there is nothing to encode
+        here — re-encoding would spend CPU on the machine that is also rendering, to produce
+        the same picture."""
+        src.chase_acquire()
+        src._on_chase(SimpleNamespace(data=b"\xff\xd8jpeg-bytes"))
+        assert src.latest_chase_jpeg() == b"\xff\xd8jpeg-bytes"
+
+    def test_no_frame_yet_reads_as_none_not_as_an_error(self, src):
+        src.chase_acquire()
+        assert src.latest_chase_jpeg() is None
+
+    def test_releasing_drops_the_stale_frame(self, src):
+        """A reopened pane must not flash the last frame from the previous session — the
+        aircraft has moved, and a stale picture that looks live is the kind of quiet wrongness
+        this project keeps paying for."""
+        src.chase_acquire()
+        src._on_chase(SimpleNamespace(data=b"old"))
+        src.chase_release()
+        assert src.latest_chase_jpeg() is None
