@@ -1342,7 +1342,7 @@ treat as the Atlantic), and `ros_domain_id` never leaks into the ROS parameter f
 
 ## Tooling
 
-### R-08 · The console becomes a fourth container, opt-in — **planned** *(2026-08-10)*
+### R-08 · The console becomes a fourth container, opt-in — **done** *(2026-08-10)*
 
 **Decided by the operator 2026-08-10: opt-in.** The console is not part of the stack today and
 should be. It is in no image, `stack_up.sh` starts nothing for it, and `--in-stack` merely
@@ -1350,7 +1350,13 @@ borrows the ROS image to spin up an unmanaged `carla-air-webui` beside the three
 containers. Two rough edges follow from nobody owning its lifecycle, and both were hit while
 verifying R-03 step 3:
 
-- `stack_up.sh --down` leaves `carla-air-webui` running — it has to be removed by hand.
+- ~~`stack_up.sh --down` leaves `carla-air-webui` running — it has to be removed by hand.~~
+  **Wrong, and corrected 2026-08-10 by testing it.** `down()` has swept every `^carla-air-`
+  container since the original containerisation commit (`d5ed0ff`), which includes this one.
+  Measured: with the console up, `--down` printed `stopped carla-air-webui` and left nothing
+  in `docker ps -a`. The entry asserted a defect that was never there — filed from reasoning
+  about the code rather than from running it, which is the failure mode rule 6 exists for.
+  The *second* bullet was real, and is the one that mattered.
 - A **stale container silently served old code**. `webui.sh --in-stack` failed with `exit 125`
   (name already in use) and the previous container kept answering on the port, so a fix that
   had landed appeared not to work. That cost a wrong diagnosis before the container was found.
@@ -1379,6 +1385,50 @@ Docker is unavailable. Containers should become the *default* path, not the only
   serving the old one; and without `--console`, `ros2 node list` inside the stack is
   `/carla_air_bridge` alone — the invariant this design exists to preserve, checked rather than
   assumed.
+
+**Done 2026-08-10. All four verify criteria met against a real stack**, not a stand-in:
+
+| criterion | result |
+|---|---|
+| default bringup keeps the invariant | 3 containers, `ros2 node list` = **`/carla_air_bridge` alone**, nothing on :8080 |
+| `--console` brings up four | 4 containers, `GET /` → **200**, `ros2 node list` = bridge **+ `/carla_air_webui`** |
+| starting twice replaces a stale one | container `41bb69a400e4` → **`e076e91a0675`**, one container by that name, still serving 200 |
+| `--down` leaves none | `stopped carla-air-webui` … and `docker ps -a` shows **no** `carla-air-*` |
+
+**The third row was set up as the actual incident, not as a happy path.** The console container
+was deliberately left *stopped but present* — `Exited (137)`, holding the name — before the
+second run, because that is the shape that produced the wrong diagnosis on 2026-08-07. A run
+that only ever replaces a *running* container would not have exercised it.
+
+**And the console is genuinely on ROS inside the container**, which is the thing most worth
+checking because failing it is silent: `/api/status` reported `source: ros` with video 0.16 s
+old and state 0.03 s old. The failure mode is not a crash — without `interfaces`/`px4_msgs` the
+console falls back to the sidecar socket and opens the second AirSim capture R-03 step 1 exists
+to remove, turning a 6.6% cost into 24%. The image's entrypoint therefore *refuses* rather than
+degrading, and that refusal has its own test.
+
+**`status.sh` reports both rows, and that is deliberate.** A containerised console shows
+`web console 1` *and* `console container 1`, because the process row greps the process table
+and this machine's table includes container processes. One console in a container reads 1 and
+1; two host consoles read 2 and 0. Narrowing the process row to exclude containers was
+rejected: a status screen that checks *less* than `stop.sh` removes is how an orphaned console
+listened on the mesh for days.
+
+- **13 tests** in `tests/test_stack_console.py`, no Docker or GPU. Behavioural for the paths
+  that exit during parsing; **structural** for the rest, because `--config PATH --console`
+  brings up a real simulator and no test may pass it — the same rule `--all` has in
+  `test_stop_args.py`. Five were mutation-checked: console-on-by-default, the removed
+  pre-emptive `docker rm -f`, dropping `--ipc container:`, moving the image check back after
+  step 1, and making the HTTP probe unconditional each turn exactly one test red.
+
+**Self-review before proposing it found three, and one broke the documented example.** The
+health probe curled `127.0.0.1:8080` unconditionally while `TESTBED_CONSOLE_ARGS` is documented
+— with `--bind netbird` as *the* example — as the way to change that address, so the documented
+usage would have made a healthy console burn a 20 s timeout and then print a warning that was
+false. The probe now runs only when the address is known, and says what it did not check
+otherwise; the container-exited check runs either way. The image check moved above step 1,
+because nothing builds that image automatically and finding out at step 4 means a bringup spent
+and a half-started stack. `curl` is no longer assumed present.
 
 ### T-08 · The console's stop button is gated by "running", not "exists" — **open** *(filed 2026-08-10)*
 
