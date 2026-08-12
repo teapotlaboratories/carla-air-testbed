@@ -495,10 +495,31 @@ completely different navigation stack could want a third-person view, which is t
   surface rather than a rewiring.
 - **The chase camera must be reference-counted, not boolean.** A recording and a live viewer
   both want the sensor, and "the last subscriber left" must not destroy it out from under an
-  `mp4` being written. The follow thread is shared too — `_ensure_follow_thread` drives *"the
+  `mp4` being written. ~~The file would be left without a moov atom, i.e. unplayable.~~
+  **Corrected 2026-08-11 by reading it rather than assuming:** `ChaseCamera.destroy()` calls
+  `stop()`, which drains the queue, joins the writer thread and calls `writer.close()`
+  (`sim_bridge/carla_air/chase.py:248` and `:131`). The file **is** finalised. The real
+  consequence is quieter and worse for it — the recording **ends early, properly closed, with
+  no error anywhere**. A playable file that is silently short is the shape this project keeps
+  paying for. The follow thread is shared too — `_ensure_follow_thread` drives *"the
   chase camera AND every CARLA sensor from a single pose read"* — so releasing the view must
   not stop it while other sensors depend on it. `chase_stop()` already sets `_chase_stop` for
   the shared thread, which is worth looking at while here.
+- **UNDECIDED, and it needs an answer before code: what happens when a subscriber's spec
+  disagrees with a running recording's?** A CARLA sensor's resolution and tick are fixed at
+  spawn, so `_ensure_chase` (`sim_bridge/server.py:347`) *destroys and respawns* the camera
+  whenever the requested spec differs. Today that takes a human doing two conflicting things;
+  a subscription-driven topic makes it automatic, so any `ros2 topic echo` could respawn the
+  sensor under a recording and truncate it.
+
+  **Decided by the operator 2026-08-11: the topic adopts the recording's spec whenever a
+  recording exists.** No conflict by construction, and it keeps the artefact somebody will
+  actually keep — the mp4 — authoritative. The cost is that the topic's frame size can change
+  underneath a subscriber mid-stream, which `CompressedImage` subscribers already have to cope
+  with because the size comes from the message rather than from a latched `CameraInfo`. The
+  two rejected alternatives: pinning to the first owner makes the topic quietly ignore its own
+  configured resolution, and refusing the second spec turns `ros2 topic echo` into a confusing
+  failure whenever somebody is recording.
 - Published as **`CompressedImage`**, because the sidecar already hands back JPEG — no new
   encode, and no 1080p raw crossing the two-interpreter seam at 30 Hz (~62 MB/s).
 - The bridge owns the lifecycle: `get_subscription_count()` on a timer, spin the sensor up on
@@ -511,6 +532,45 @@ completely different navigation stack could want a third-person view, which is t
   `/sim/chase_recording` **survives** the last subscriber leaving, and its mp4 is playable
   (a missing moov atom is the failure this must not have); and the console's chase pane works
   from the ROS topic with the sidecar socket unavailable.
+
+**Landed 2026-08-11 — the sidecar and the topic. The console pane is NOT moved yet.**
+`/camera/chase/image_raw/compressed` publishes only while subscribed; `webui/server.py` still
+polls `chase_jpeg` over the socket, so the last line of the verify list above is outstanding
+and R-03 is not finished.
+
+Verified against a live stack:
+
+| | |
+|---|---|
+| nothing subscribed | topic exists, `chase_jpeg` → **None** — the sensor is not spawned at all |
+| subscribed | **7.3–7.7 Hz** on a 10 Hz budget, sensor up |
+| unsubscribed + hold-off | `chase_jpeg` → **None** again, sensor released |
+| cost to `/camera/rgb/image_raw` | **none measurable** |
+
+The camera A/B was alternated twice rather than run once, because a single pair sits inside
+this baseline's own drift: unsubscribed **3.754 / 3.846 Hz**, subscribed **3.721 / 3.856 Hz**.
+The subscribed figures land inside the gap between the two baselines, so the honest claim is
+*no measurable cost, with a detection floor of about 2.4%* — not "free".
+
+**The spec-conflict rule, exercised as the real thing rather than a happy path:** a 1920×1080
+recording started first, then a subscriber whose topic is configured for 1280×720. The
+published JPEG measured **1920×1080** — the viewer adopted the recording — the bridge logged
+`chase view adopted the running recording's spec: [1920, 1080] @ 20.0 fps`, the sensor was
+**kept** when the subscriber left mid-recording, and the finished file decoded as **440 frames,
+0 dropped, 1920×1080, 24.1 s**. Under the rejected design that file would have been finalised
+and silently short.
+
+**A bug older than this item, fixed by the same condition.** `chase_stop()` parked the follow
+thread unconditionally — and `_chase_follow` drives the chase camera *and* `self._rig`, every
+CARLA sensor in `carla_sensors.yaml`, from one pose read. So ending any chase recording froze
+all of those sensors at the last pose, still publishing, from a camera no longer following the
+aircraft. Parking is now conditional on nothing still watching.
+
+- **9 tests** in `tests/test_chase_claims.py`, no simulator or GPU — the claim arithmetic only.
+  Three mutation-checked: releasing while recording, dropping the spec adoption, and parking
+  the follower unconditionally. **The third initially failed to fail**, because the fixture left
+  `_chase_thread` as `None` and the branch under test was unreachable — the same "asserting on
+  a constant" hole the `_FakeRun` fake had in T-08, found the same way.
 
 > **Superseded in part.** The 2026-08-03 deferral is kept below because its *reasoning* about
 > the chase camera still holds — but its conclusion ("nothing depends on the console, so this
@@ -743,8 +803,18 @@ Two options, and this is a decision rather than code:
 1. ~~**R-04**~~ — **done 2026-08-03.**
 2. ~~**R-01**~~ — **done 2026-08-03**, `run_episode.py` included.
 3. ~~**R-02**~~ — **done 2026-08-03**. The repositioning is complete apart from R-03, which was re-planned on 2026-08-07 once the containers stranded the console.
-4. **R-07**, **R-05**, **R-06** — small and independent, in whatever order suits.
-4. **R-05** and **R-06** any time — small, independent, and neither blocks anything.
+4. ~~**R-07**~~ — **done 2026-08-03**. ~~**R-06**~~ — superseded by the resolution decision.
+5. **R-03** — the console's chase pane is the last piece; the sidecar and the topic landed
+   2026-08-11, the pane itself still polls `chase_jpeg` over the socket.
+6. **R-05** — the only in-scope item with real work left, and only half of it: headless ships,
+   **windowed is blocked**.
+7. **P-01** — reads as open and is not. Vulkan-in-a-container was unblocked 2026-08-06 and the
+   container work has run to completion since (R-08 added the fourth container, T-06/T-07 the
+   teardown). Wants a status pass to close it honestly rather than a fix.
+
+*(This list said "R-07, R-05, R-06 next" until 2026-08-11, by which point R-07 was done and
+R-06 superseded. It is the one place someone would look to answer "what is next", so it
+misleading is worse than most drift.)*
 
 Deliberately **not** started until the above lands: the camera-pitch decision, and V-01's
 Claude flights. Both are VLM work, and R-02 moves the code they live in.
@@ -1613,7 +1683,7 @@ the sentence changed, because only the sentence was false.
   `--all`, and dropping the failed-handover exit code each turn exactly one test red. The
   `[ "$ALL" -eq 1 ]` count guard went 3 → 4 with the new site.
 
-### T-06 · Container teardown SIGKILLs where the host path escalates — **open** *(filed 2026-08-08)*
+### T-06 · Container teardown SIGKILLs where the host path escalates — **fixed** *(2026-08-10)*
 
 `stop.sh` gives the host simulator `TERM → TERM → KILL` and then **verifies it is gone**, because
 Unreal does not always go down on the first TERM and because this script once reported success
