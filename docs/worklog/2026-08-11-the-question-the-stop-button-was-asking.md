@@ -155,3 +155,92 @@ naming: **the code gets reviewed and the strings do not.**
 - Same stack, plain `stop.sh`: stack untouched (4 containers still up), accurate wording.
 - Host lane with nothing running: unchanged, exit 0.
 - **274 passed, 1 skipped.** Three new structural tests, all mutation-checked.
+
+---
+
+# R-03 step 4 — the chase camera, and a lifetime that follows a browser tab
+
+The last piece of R-03, and the one that had been deferred twice as "an `image_transport`
+pipeline nobody else consumes". It is now a topic that nobody consumes *most of the time*, and
+that is the entire design.
+
+## The property worth protecting
+
+The chase camera is a CARLA sensor **created on demand** — `chase_jpeg` returns `None` when
+nobody has asked for one — and it is a full extra render pass. Measured, and already in the
+code before this work: 30 Hz @1080p leaves the simulator at 59.8 of 60.0 fps, 60 Hz @1080p
+takes it to 49.5. Real-time factor stays 1.000 through all of that, so it is judged on tick
+rate and never on RTF.
+
+An always-on publisher would have spent that permanently to serve a topic with, most of the
+time, no consumer. So the lifetime runs the whole way down the chain:
+
+    browser tab → console subscription → bridge subscription count → CARLA sensor
+
+Verified end to end: console up with the pane never opened, sensor **down**; pane opened,
+sensor **up** and ~9 MB of frames in 10 s; tab closed, sensor **down** again after the
+hold-off.
+
+## Two owners, one sensor, fixed at spawn
+
+A CARLA sensor's resolution and tick cannot change after it is created, so `_ensure_chase`
+respawns whenever a caller wants a different spec. That was survivable while it took a human
+doing two conflicting things. A subscription-driven topic makes it something `ros2 topic echo`
+can do by accident, to a sensor an mp4 is being written from.
+
+**A recording outranks a viewer**, decided by the operator. Exercised as the real thing rather
+than a happy path: a 1920×1080 recording started first, then a subscriber configured for
+1280×720. Published frames measured 1920×1080, the sensor was kept when the subscriber left
+mid-recording, and the file decoded as 440 frames, 0 dropped, 24.1 s.
+
+**And I had the consequence wrong in the plan.** I wrote that destroying the sensor under a
+recording would leave an mp4 without a moov atom — unplayable. It does not:
+`ChaseCamera.destroy()` calls `stop()`, which drains the queue and closes the writer. The file
+is finalised. What you get is a **playable recording that is silently short**, which is worse
+in the way this project keeps paying for. Corrected in the plan in place before writing any
+code against it.
+
+## The leak I nearly shipped
+
+`/api/chase/view` is the call the page makes after Start, so the pane has something to show. On
+the socket it brings the camera up. Ported naively it would have kept calling `chase_view` —
+which takes a **claim** in the sidecar that the console has no `chase_release` to pair with,
+because step 4 gave that job to the subscription.
+
+The claim count would have stuck at one forever, so unsubscribing the pane would never release
+the sensor and the render pass would have run for the rest of the session — the exact cost the
+design exists to remove, reintroduced by the button that used to be necessary. Found by asking
+what the page still called rather than by anything failing.
+
+## What the measurements say, honestly
+
+The chase topic costs `/camera/rgb/image_raw` nothing measurable. Alternated twice rather than
+run once, because one pair sits inside this baseline's own drift:
+
+    unsubscribed   3.754 Hz   3.846 Hz
+    subscribed     3.721 Hz   3.856 Hz
+
+The subscribed figures land *inside* the gap between the two baselines. So the claim is **no
+measurable cost with a detection floor of about 2.4%** — not "free". Same discipline as the
+−6.6% console measurement, and for the same reason: the first version of that one reported a
+10% drop that was entirely drift.
+
+## A test that could not fail, again
+
+Mutation-checking the sidecar tests caught that my own fixture left `_chase_thread` as `None`,
+so `chase_stop`'s park-the-follower branch never executed and the test for it passed against
+the mutated code. That is the third fake this week that answered a constant — after `_FakeRun`
+returning the same `docker ps` output before and after a removal, and the stale-bytecode
+diagnostic in August.
+
+The console-side tests **stub `sensor_msgs` rather than skipping it**. An `importorskip` would
+have been easier and would have meant those seven tests never ran in the documented offline
+suite, which is the 3.10 venv with no ROS messages on it. A test that does not run is not a
+test; it is a comment with a decorator.
+
+## R-03 is closed
+
+Five `*.call(` sites remain in the console and all five are the socket-mode fallback, reached
+only when `ROS is None`. A literal zero is only reachable by deleting the fallback, which would
+make the console unusable without a graph — the same qualification step 2 recorded, still
+honest.
