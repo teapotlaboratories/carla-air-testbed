@@ -471,6 +471,47 @@ paper over that is what the no-friendly-services rule forbids.
   no ROS equivalent, and one is `chase_view`, which is step 4. A literal zero is only reachable
   by deleting the fallback, which would make the console unusable without a graph.
 
+**Step 4 decided by the operator 2026-08-11: a topic that publishes only while subscribed.**
+Not an always-on publisher, and not a permanent socket exception.
+
+The reasoning is the measured cost. The chase camera is a **CARLA sensor created on demand** —
+`chase_view` spawns it, and `chase_jpeg` returns `{"jpeg": None}` when nobody has. So today it
+costs *nothing* when nobody is looking, and an unconditional publisher would trade that away
+for a topic with no other consumer. Once it is up the cost is known
+(`sim_bridge/server.py:290`): 30 Hz @1080p leaves the simulator at 59.8 of 60.0 fps, while
+60 Hz @1080p takes it to 49.5 — and RTF stays 1.000 through all of it, so this is judged by
+tick rate, never by RTF.
+
+Subscription-driven keeps the on-demand property *and* puts a genuine sensor on the interface.
+It is not a friendly shim: `/testbed/takeoff` was refused because PX4 already expressed that
+idea, whereas the chase view has no representation on the ROS surface at all. A user with a
+completely different navigation stack could want a third-person view, which is the scope test.
+
+**Design, and two constraints found by reading the code rather than during the port:**
+
+- **Nothing can currently tear down a chase *view*.** `chase_stop()` (`sim_bridge/server.py:417`)
+  is the *recording* stop: it drains the encoder and finalises the mp4. There is no call that
+  destroys the sensor without one. The sidecar therefore needs a release path, and it is new
+  surface rather than a rewiring.
+- **The chase camera must be reference-counted, not boolean.** A recording and a live viewer
+  both want the sensor, and "the last subscriber left" must not destroy it out from under an
+  `mp4` being written. The follow thread is shared too — `_ensure_follow_thread` drives *"the
+  chase camera AND every CARLA sensor from a single pose read"* — so releasing the view must
+  not stop it while other sensors depend on it. `chase_stop()` already sets `_chase_stop` for
+  the shared thread, which is worth looking at while here.
+- Published as **`CompressedImage`**, because the sidecar already hands back JPEG — no new
+  encode, and no 1080p raw crossing the two-interpreter seam at 30 Hz (~62 MB/s).
+- The bridge owns the lifecycle: `get_subscription_count()` on a timer, spin the sensor up on
+  0 → 1, release on 1 → 0 **after a hold-off**, so a client that reconnects does not thrash a
+  sensor whose spawn is not free.
+
+- **Verify:** with nothing subscribed, the chase sensor does not exist and the simulator ticks
+  at its no-chase rate; `ros2 topic echo` brings it up and the tick rate matches the measured
+  30 Hz figure; unsubscribing releases it and the tick rate returns; a recording started via
+  `/sim/chase_recording` **survives** the last subscriber leaving, and its mp4 is playable
+  (a missing moov atom is the failure this must not have); and the console's chase pane works
+  from the ROS topic with the sidecar socket unavailable.
+
 > **Superseded in part.** The 2026-08-03 deferral is kept below because its *reasoning* about
 > the chase camera still holds — but its conclusion ("nothing depends on the console, so this
 > can wait indefinitely") no longer does. The containers changed the cost of waiting.
@@ -1430,7 +1471,7 @@ otherwise; the container-exited check runs either way. The image check moved abo
 because nothing builds that image automatically and finding out at step 4 means a bringup spent
 and a half-started stack. `curl` is no longer assumed present.
 
-### T-08 · The console's stop button is gated by "running", not "exists" — **open** *(filed 2026-08-10)*
+### T-08 · The console's stop button is gated by "running", not "exists" — **fixed** *(2026-08-11)*
 
 Found reviewing PR #9 (T-06), and it is the same defect one level up from the one that PR
 fixes.
@@ -1459,7 +1500,43 @@ say so.
   container's actual state rather than reporting a host-path success; and the Start button
   still treats the stack as down.
 
-### T-07 · `stop.sh --all` does not clean up the container lane — **open** *(filed 2026-08-10)*
+**Fixed 2026-08-11, and the shape of the fix is the interesting part.** `stop_simulator()` now
+asks its own question — `sim_container_state()`, returning **three** answers rather than a
+boolean — and `stack_running()` is untouched, because it means "is the stack up" and the Start
+button needs exactly that.
+
+| container | lane | what happens |
+|---|---|---|
+| **running** | container | `docker stop -t 10` → `rm -f` → verify (unchanged) |
+| **stopped** | **host** | `run_sim.sh --kill` **and** the leftover is removed and named |
+| absent | host | `run_sim.sh --kill`, nothing said about containers |
+
+**The obvious fix would have introduced a worse bug, and the middle row is where.** Routing a
+merely-present container to the *container* teardown reads naturally — there is a container, so
+use the container path — and it is wrong: a host-native simulator can be running at the same
+time, so that path would remove the leftover, report `deployment: container`, never run
+`run_sim.sh --kill`, and leave 3.3 GB of VRAM held while the console said it had stopped the
+simulator. **That is the 2026-08-03 incident with a new cause.** A merely-present container is
+litter, not a deployment; the sweep therefore rides on the host path rather than becoming a
+third lane. A test pins it, and it is the test that fails when the shortcut is taken.
+
+Demonstrated before and after against real Docker, using a container in exactly that state:
+
+    before   {"deployment": "host", "detail": ["stopped"]}                    leftover: still there
+    after    {"deployment": "host", "detail": ["stopped",
+              "also removed a leftover stopped container carla-air-sim"]}     leftover: gone
+
+Also verified with a real stack that the running case is unchanged: `state = running`,
+`deployment: container`, container gone, GPU 1 back to 32 MiB.
+
+- **7 tests** in `tests/test_lifecycle.py`, plus five existing ones updated: they had injected
+  `stack_running`, which is no longer what decides. **`_FakeRun` now models what a `docker rm`
+  ACHIEVES** (`remove` / `stop_only` / `nothing`) — before, it answered the same thing before
+  and after the removal, so every "is it gone" check was asserting on a constant. Two mutations
+  checked: routing a stopped container into the container lane, and dropping the leftover
+  sweep, each turn the right tests red.
+
+### T-07 · `stop.sh --all` does not clean up the container lane — **fixed** *(2026-08-11)*
 
 Found while verifying T-06 against a real stack, and left unfixed on purpose because it is a
 scope question rather than a bug in a line of code.
@@ -1499,6 +1576,42 @@ The last is the smallest and the most honest, but it changes a rule rather than 
 - **Verify:** after whichever fix, `stop.sh --all` following a containerised bringup leaves no
   `carla-air-*` container in `docker ps -a`, reports no straggler it cannot act on, and
   `status.sh` shows every count 0 with GPU 1 at ~33 MiB.
+
+**Decided by the operator 2026-08-11: delegate.** `stop.sh --all` hands the container lane to
+`stack_up.sh --down`, which already owns it. That keeps rule 1's ONE command true in both
+lanes, and avoids a second copy of the `carla-air-*` sweep — this project has already deleted
+one parallel structure that drifted from what it claimed to describe.
+
+**The handover goes FIRST, before the kill escalation, and the ordering does both jobs.** With
+the containers already gone, `targets()` finds no container processes to misreport and the
+escalation wastes no `sleep 2` failing to signal them. Measured against a live four-container
+stack:
+
+| | before *(2026-08-10)* | after |
+|---|---|---|
+| `stop.sh --all` | 8.23 s, **exit 1** | **1 s, exit 0** |
+| reported | `3 stragglers`, `simulator stopped` | `0 stragglers, 0 in containers` |
+| containers left | **2 running** | **0** |
+| GPU 1 | 32 MiB | 33 MiB |
+
+**The false-straggler half is fixed by wording, not by hiding it.** Plain `stop.sh` — no
+`--all` — has no containerised equivalent to perform, because the graph and the sidecar *are*
+containers and `stack_up.sh --down` would take the simulator with them. So it says so, and the
+processes it cannot signal are now reported as what they are:
+
+    WARNING: 4 process(es) are inside containers this script cannot
+             signal — not stragglers, and no amount of retrying would remove them.
+             ./scripts/stack_up.sh --down owns that lane:
+
+`kill -0` decides which population a process belongs to — the precise question *could this
+script have acted on it?* rather than inferring containerhood from a uid or a namespace. Both
+populations still set a non-zero exit, because the machine is still not clean either way; only
+the sentence changed, because only the sentence was false.
+
+- **3 tests** in `tests/test_stop_args.py`, all structural (no test may pass `--all`), all
+  mutation-checked: moving the handover after the escalation, handing over without checking
+  `--all`, and dropping the failed-handover exit code each turn exactly one test red. The
+  `[ "$ALL" -eq 1 ]` count guard went 3 → 4 with the new site.
 
 ### T-06 · Container teardown SIGKILLs where the host path escalates — **open** *(filed 2026-08-08)*
 
