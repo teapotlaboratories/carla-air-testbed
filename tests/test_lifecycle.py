@@ -45,9 +45,26 @@ class _FakeRun:
         #: container is gone, not from a return code, so the fake has to answer that question.
         self.containers = ""       # what `docker ps` reports (running)
         self.containers_all = ""   # what `docker ps -a` reports (running + stopped)
+        #: What a `docker rm` actually ACHIEVES, which is the whole subject of these tests.
+        #: A fake that always answered the same thing before and after the removal could not
+        #: tell "gone" from "still there", so every check would have been asserting on a
+        #: constant.
+        #:
+        #:   "remove"    the container goes away, as it does when this works
+        #:   "stop_only" it stops but is not removed - holds no VRAM, object still present
+        #:   "nothing"   the removal does not take, and it is still running
+        self.rm_effect = "remove"
 
     def __call__(self, argv, env=None, background=False):
         self.calls.append(list(argv))
+        if argv[:2] == ["docker", "rm"]:
+            name = argv[-1]
+            if self.rm_effect in ("remove", "stop_only"):
+                self.containers = " ".join(
+                    c for c in self.containers.split() if c != name)
+            if self.rm_effect == "remove":
+                self.containers_all = " ".join(
+                    c for c in self.containers_all.split() if c != name)
         # `docker ps` (running) and `docker ps -a` (exists) are asked separately now.
         if "ps" in argv:
             out = self.containers_all if "-a" in argv else self.containers
@@ -99,21 +116,29 @@ def test_start_against_a_running_stack_launches_nothing(procs, monkeypatch):
     assert fake.calls == [], f"Start ran {fake.calls} while the stack was already up"
 
 
-def test_stop_simulator_removes_the_container_when_the_stack_is_up(procs, monkeypatch):
+def test_stop_simulator_removes_the_container_when_one_is_running(procs):
     """`run_sim.sh --kill` matches a host process NAME, so against the stack it would report
-    success while stopping nothing."""
+    success while stopping nothing.
+
+    T-08: the lane is decided by the container actually RUNNING, not by `stack_running()`, so
+    the fake states it rather than the answer being injected.
+    """
     p, fake, _ = procs
-    monkeypatch.setattr(p, "stack_running", lambda: True)
+    fake.containers = fake.containers_all = "carla-air-sim"
     assert p.stop_simulator()["deployment"] == "container"
-    # Not calls[0] any more: T-06 put a graceful `docker stop` in front of the removal.
+    # Not calls[0] any more: T-06 put a graceful `docker stop` in front of the removal, and
+    # T-08 put the state probe in front of that.
     assert ["docker", "rm", "-f"] in [c[:3] for c in fake.calls], fake.calls
 
 
-def test_stop_simulator_uses_the_host_script_without_a_stack(procs, monkeypatch):
+def test_stop_simulator_uses_the_host_script_when_there_is_no_container(procs):
     p, fake, _ = procs
-    monkeypatch.setattr(p, "stack_running", lambda: False)
-    assert p.stop_simulator()["deployment"] == "host"
-    assert fake.calls[0][-1] == "--kill" and "run_sim.sh" in fake.calls[0][0]
+    result = p.stop_simulator()
+    assert result["deployment"] == "host"
+    kills = [c for c in fake.calls if c[-1] == "--kill" and "run_sim.sh" in c[0]]
+    assert kills, fake.calls
+    assert not any("removed a leftover" in d for d in result["detail"]), (
+        "claimed to remove a container when there was none")
 
 
 def test_a_container_that_survives_teardown_is_reported_as_a_failure(procs, monkeypatch):
@@ -121,8 +146,8 @@ def test_a_container_that_survives_teardown_is_reported_as_a_failure(procs, monk
     VRAM, because nothing checked. The verdict comes from asking whether the container is
     gone — not from the return code, which is a hint at best."""
     p, fake, _ = procs
-    monkeypatch.setattr(p, "stack_running", lambda: True)
     fake.containers = fake.containers_all = "carla-air-sim other-thing"
+    fake.rm_effect = "nothing"      # the removal does not take
     with pytest.raises(RuntimeError, match="STILL RUNNING"):
         p.stop_simulator()
 
@@ -141,9 +166,8 @@ def test_a_stopped_but_unremoved_container_is_not_an_error(procs, monkeypatch):
     start path with no pre-emptive removal.
     """
     p, fake, _ = procs
-    monkeypatch.setattr(p, "stack_running", lambda: True)
-    fake.containers = ""                       # not running
-    fake.containers_all = "carla-air-sim"      # but not removed either
+    fake.containers = fake.containers_all = "carla-air-sim"   # running when the button is hit
+    fake.rm_effect = "stop_only"                              # it stops, but is not removed
     detail = " ".join(p.stop_simulator()["detail"])
     assert "NOT removed" in detail and "simulator is down" in detail
     assert "block the next start" not in detail, (
@@ -155,9 +179,9 @@ def test_the_teardown_asks_rather_than_trusting_the_return_code(procs, monkeypat
     """T-06. A non-zero `docker rm` with the container actually gone is a success, not a
     failure — `rm` complains about plenty of things that do not matter."""
     p, fake, _ = procs
-    monkeypatch.setattr(p, "stack_running", lambda: True)
-    fake.returncode = 1
-    fake.containers = "something-else"
+    fake.containers = fake.containers_all = "carla-air-sim"
+    fake.returncode = 1              # every command "fails" ...
+    fake.rm_effect = "remove"        # ... but the container really does go away
     assert p.stop_simulator()["deployment"] == "container"
 
 
@@ -166,9 +190,11 @@ def test_sigterm_with_a_grace_period_comes_before_the_hammer(procs, monkeypatch)
     beside, which escalates TERM/TERM/KILL because Unreal does not always go down on the
     first signal. Nobody decided to be less careful in containers; it just happened."""
     p, fake, _ = procs
-    monkeypatch.setattr(p, "stack_running", lambda: True)
+    fake.containers = fake.containers_all = "carla-air-sim"
     p.stop_simulator()
-    docker = [c for c in fake.calls if c and c[0] == "docker"]
+    # Only the calls that CHANGE something. T-08 put a read-only `docker ps` probe in front of
+    # the teardown, and a `ps` is not a failure to escalate gracefully.
+    docker = [c for c in fake.calls if c and c[0] == "docker" and c[1] != "ps"]
     verbs = [c[1] for c in docker]
     assert verbs[0] == "stop", f"went straight to {verbs[0]!r} without a graceful stop"
     # Against `docker[0]`, not `fake.calls[0]` — the latter is the first call of ANY kind and
@@ -234,3 +260,88 @@ def test_being_inside_the_stack_is_proof_the_stack_is_running():
     assert body.index("if self.IN_STACK:") < body.index("subprocess.run"), (
         "stack_running() shells out before checking IN_STACK; inside the stack there is no "
         "docker binary, so it would answer 'no stack' from inside the stack")
+
+
+class TestTheStopButtonAsksTheRightQuestion:
+    """T-08. "Is the stack up" and "is there a container to clean up" are different questions.
+
+    `stop_simulator` was gated on `stack_running()`, which asks `docker ps` — running only — so
+    a container that existed but was STOPPED looked exactly like no container at all. The
+    button took the host lane, ran `run_sim.sh --kill` against a host process that was not
+    there, and reported success having done nothing about either half.
+
+    Fixing `stack_running()` would have been wrong: it means "is the stack up", which is the
+    right question for the **Start** button, and widening it would make Start believe a dead
+    stack was alive. Hence a separate, finer probe.
+    """
+
+    def test_a_running_container_is_the_container_lane(self, procs):
+        p, fake, _ = procs
+        fake.containers = fake.containers_all = "carla-air-sim"
+        assert p.sim_container_state() == lifecycle.CONTAINER_RUNNING
+
+    def test_a_stopped_container_is_neither_lane_nor_nothing(self, procs):
+        """The state the whole item is about, and the one that had no name before."""
+        p, fake, _ = procs
+        fake.containers = ""
+        fake.containers_all = "carla-air-sim"
+        assert p.sim_container_state() == lifecycle.CONTAINER_STOPPED
+
+    def test_no_container_is_absent(self, procs):
+        p, fake, _ = procs
+        fake.containers = fake.containers_all = "something-else"
+        assert p.sim_container_state() == lifecycle.CONTAINER_ABSENT
+
+    def test_a_leftover_container_is_removed_and_said_out_loud(self, procs):
+        """The regression itself. Before T-08 this returned a bare host success, with the
+        container still sitting there and nothing in the reply mentioning it."""
+        p, fake, _ = procs
+        fake.containers = ""
+        fake.containers_all = "carla-air-sim"
+        result = p.stop_simulator()
+        assert ["docker", "rm", "-f"] in [c[:3] for c in fake.calls], (
+            "the leftover container was never removed")
+        assert any("leftover" in d for d in result["detail"]), (
+            f"the reply says nothing about the leftover container: {result['detail']}")
+
+    def test_a_stopped_container_does_not_hide_a_running_host_simulator(self, procs):
+        """The bug the obvious fix would have introduced, and the reason the sweep is on the
+        HOST path rather than being a third lane.
+
+        Routing a merely-present container to the container teardown would remove the leftover,
+        report `deployment: container`, and never run `run_sim.sh --kill` — leaving a
+        host-native simulator holding 3.3 GB of VRAM while the console said it had stopped the
+        simulator. That is the 2026-08-03 incident with a new cause.
+        """
+        p, fake, _ = procs
+        fake.containers = ""
+        fake.containers_all = "carla-air-sim"
+        result = p.stop_simulator()
+        assert result["deployment"] == lifecycle.HOST, (
+            "a stopped container was treated as a deployment, so the host simulator was "
+            "never killed")
+        assert [c for c in fake.calls if c[-1] == "--kill" and "run_sim.sh" in c[0]], (
+            "run_sim.sh --kill was skipped, so a host simulator would still be running")
+
+    def test_a_leftover_that_will_not_go_is_reported_rather_than_claimed_gone(self, procs):
+        p, fake, _ = procs
+        fake.containers = ""
+        fake.containers_all = "carla-air-sim"
+        fake.rm_effect = "nothing"
+        detail = " ".join(p.stop_simulator()["detail"])
+        assert "could not be removed" in detail, detail
+
+    def test_no_docker_binary_falls_back_to_the_host_lane(self, procs):
+        """A console started with `--in-stack` has no `docker` in its image. That path is
+        refused before it reaches here, but the probe must not raise on the way to finding
+        out — the honest default is the lane this console drove before containers existed.
+        """
+        p, fake, _ = procs
+
+        def no_docker(argv, env=None, background=False):
+            if argv and argv[0] == "docker":
+                raise OSError("No such file or directory: 'docker'")
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+        p._run = no_docker
+        assert p.sim_container_state() == lifecycle.CONTAINER_ABSENT

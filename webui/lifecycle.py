@@ -40,6 +40,21 @@ from __future__ import annotations
 HOST = "host"
 CONTAINER = "container"
 
+#: The simulator's container, as THREE states rather than a boolean. T-08.
+#:
+#: "Is the stack up" and "is there a container to clean up" are different questions, and
+#: answering the second with the first is what T-08 was: `stack_running()` asks `docker ps`,
+#: so a container that existed but was STOPPED looked exactly like no container at all. The
+#: stop button then took the host lane, ran `run_sim.sh --kill` against a host process that
+#: was not there, and reported success having done nothing about either half.
+#:
+#: `stack_running()` is not the thing to fix — it means "is the stack up", which is the right
+#: question for the Start button, and widening it would make Start believe a dead stack was
+#: alive. The stop path needs its own, finer answer.
+CONTAINER_RUNNING = "running"   # the simulator is in the container lane
+CONTAINER_STOPPED = "stopped"   # the simulator is NOT here, but an object is lying around
+CONTAINER_ABSENT = "absent"     # no container of that name at all
+
 
 def deployment(stack_running):
     """`container` when the containerised stack is up, otherwise `host`.
