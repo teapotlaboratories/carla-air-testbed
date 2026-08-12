@@ -201,6 +201,24 @@ graph:
     sensor_rate_hz: 5.0     # the AirSim sensors above. See the cost note in `sensors:`.
     lidar_rate_hz: 10.0
     image_rate_hz: 8.0
+
+    # The chase camera on ROS 2 — R-03 step 4. Published ONLY while something is subscribed,
+    # and that is not an optimisation: the chase view is a full extra render pass in CARLA.
+    # Measured against the simulator's own tick rate (see sim_bridge/server.py chase_view):
+    #     chase off        60.0 fps
+    #     30 Hz @ 1080p    59.8 fps    <- free
+    #     60 Hz @ 1080p    49.5 fps    <- steals ~10 fps
+    # Real-time factor stays 1.000 throughout, so judge this by TICK RATE, never by RTF.
+    #
+    # The topic carries JPEG (`CompressedImage`), because the sidecar already encodes: no
+    # second encode, and no 1080p raw crossing the two-interpreter seam at this rate.
+    chase_enabled: true
+    chase_rate_hz: 10.0
+    chase_width: 1280       # ignored while a recording is running - the topic adopts the
+    chase_height: 720       # recording's spec, because a CARLA sensor's size and tick are
+    chase_quality: 75       # fixed at spawn and honouring both would respawn it mid-file.
+    chase_holdoff_s: 3.0    # unsubscribed for this long before the sensor is released
+
     publish_depth: true
     # ON by default since 2026-08-04. A simulator should publish its sensors; switching one
     # off to protect a navigation loop is a navigation decision, and that lives in examples/.

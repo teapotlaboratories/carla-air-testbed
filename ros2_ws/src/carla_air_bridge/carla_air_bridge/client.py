@@ -308,6 +308,19 @@ class SimBridgeClient:
         """The exterior follow camera. A spectator view, scored on nothing."""
         return self.call("chase_start", path=path, width=width, height=height, fps=fps)
 
+    def chase_view(self, width=1280, height=720, fps=30.0, distance=14.0, above=6.0):
+        """Bring the chase camera up for LIVE viewing, taking one claim. R-03 step 4."""
+        return self.call("chase_view", width=width, height=height, fps=fps,
+                         distance=distance, above=above)
+
+    def chase_release(self):
+        """Give up one live-view claim. The camera survives if a recording still wants it."""
+        return self.call("chase_release")
+
+    def chase_jpeg(self, quality=75):
+        """Newest chase frame as JPEG bytes, or None when no camera is up."""
+        return self.call("chase_jpeg", quality=quality)
+
     def chase_stop(self):
         return self.call("chase_stop")
 
