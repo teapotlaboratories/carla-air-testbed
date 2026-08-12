@@ -465,7 +465,22 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._mjpeg(lambda: ONBOARD.call("view_jpeg", quality=75)["jpeg"], fps=12)
             elif path == "/stream/chase":
-                self._mjpeg(lambda: CHASE.call("chase_jpeg", quality=75)["jpeg"], fps=30)
+                # R-03 step 4. On ROS the SUBSCRIPTION is what brings the CARLA sensor up, so
+                # it is taken when the pane opens and given back when the tab closes — held
+                # for the console's lifetime it would pin a full extra render pass up with
+                # nobody watching, which is the cost the topic design exists to avoid.
+                #
+                # 30 fps was the socket-path ceiling and is now wrong: the topic publishes at
+                # the bridge's chase rate (10 Hz configured, ~7.5 Hz measured), so asking for
+                # 30 would serve the same frame three times over. Matched to the source.
+                if ROS is not None:
+                    ROS.chase_acquire()
+                    try:
+                        self._mjpeg(ROS.latest_chase_jpeg, fps=10)
+                    finally:
+                        ROS.chase_release()
+                else:
+                    self._mjpeg(lambda: CHASE.call("chase_jpeg", quality=75)["jpeg"], fps=30)
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001 — a UI must not 500 silently
@@ -491,9 +506,24 @@ class Handler(BaseHTTPRequestHandler):
                 CONTROL.close(); ONBOARD.close(); CHASE.close()
                 self._json(PROCS.stop_simulator())
             elif path == "/api/chase/view":
-                self._json(CONTROL.call("chase_view",
-                                        width=int(body.get("width", 1280)),
-                                        height=int(body.get("height", 720))))
+                # ON ROS THIS MUST NOT TOUCH THE SOCKET, and the reason is a leak rather than
+                # tidiness. `chase_view` takes a CLAIM in the sidecar, and the console has no
+                # matching `chase_release` to pair with it — R-03 step 4 gave that job to the
+                # topic subscription. Calling it here would leave the claim count stuck at one
+                # forever, so unsubscribing the pane would never release the CARLA sensor and
+                # a full extra render pass would run for the rest of the session.
+                #
+                # The button is simply not needed on ROS: opening the pane subscribes, and
+                # subscribing is what brings the camera up. Answered rather than removed, so
+                # the page keeps one code path and the reply says which lane ran.
+                if ROS is not None:
+                    self._json({"streaming": True, "via": "ros",
+                                "detail": "the chase pane brings the camera up by subscribing "
+                                          "to /camera/chase/image_raw/compressed"})
+                else:
+                    self._json(CONTROL.call("chase_view",
+                                            width=int(body.get("width", 1280)),
+                                            height=int(body.get("height", 720))))
             elif path == "/api/command":
                 method = body.get("method")
                 if method not in protocol.METHODS:

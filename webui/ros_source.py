@@ -141,9 +141,11 @@ class RosSource:
     def __init__(self, image_topic="/camera/rgb/image_raw",
                  odom_topic="/fmu/out/vehicle_odometry",
                  status_topic="/fmu/out/vehicle_status",
-                 collision_topic="/sim/collision"):
+                 collision_topic="/sim/collision",
+                 chase_topic="/camera/chase/image_raw/compressed"):
         self.topics = dict(image=image_topic, odom=odom_topic,
-                           status=status_topic, collision=collision_topic)
+                           status=status_topic, collision=collision_topic,
+                           chase=chase_topic)
         self._lock = threading.Lock()
         self._frame = None                 # (numpy BGR array, monotonic stamp)
         self._jpeg = None                  # (frame stamp, quality, encoded bytes)
@@ -158,6 +160,15 @@ class RosSource:
         self._stop = threading.Event()
         self._cv = None
         self._cv2 = None
+        #: The chase subscription is created ON DEMAND and destroyed with the last viewer.
+        #:
+        #: R-03 step 4 made the bridge spawn the CARLA sensor while anything is subscribed, so
+        #: a subscription held for the console's lifetime would pin a full extra render pass
+        #: up for as long as the console ran — the exact cost that design exists to avoid. An
+        #: idle console must be invisible to the simulator.
+        self._chase_sub = None
+        self._chase_viewers = 0
+        self._chase_jpeg = None            # (bytes, monotonic stamp), already encoded
 
     # -- lifecycle ------------------------------------------------------------------------
 
@@ -290,6 +301,62 @@ class RosSource:
         with self._lock:
             self._jpeg = (stamp, quality, data)
         return data
+
+    def chase_acquire(self):
+        """Subscribe to the chase topic, which is what brings the CARLA sensor up.
+
+        Counted, because two browser tabs are two viewers and the first one closing must not
+        take the picture away from the second.
+        """
+        from sensor_msgs.msg import CompressedImage
+
+        with self._lock:
+            self._chase_viewers += 1
+            if self._chase_sub is not None or self._node is None:
+                return self._chase_viewers
+        sub = self._node.create_subscription(
+            CompressedImage, self.topics["chase"], self._on_chase, 1)
+        with self._lock:
+            self._chase_sub = sub
+        return self._chase_viewers
+
+    def chase_release(self):
+        """Drop one viewer, and unsubscribe when the last one goes.
+
+        Unsubscribing is what releases the sensor: the bridge is watching its own subscription
+        count. Leaving the subscription up would keep the render pass running with nobody
+        looking at it.
+        """
+        with self._lock:
+            if self._chase_viewers > 0:
+                self._chase_viewers -= 1
+            if self._chase_viewers > 0:
+                return self._chase_viewers
+            sub, self._chase_sub = self._chase_sub, None
+            self._chase_jpeg = None
+        if sub is not None and self._node is not None:
+            self._node.destroy_subscription(sub)
+        return 0
+
+    def _on_chase(self, msg):
+        # Stored as-is. The topic already carries JPEG, so unlike the onboard path there is
+        # nothing to encode here — the sidecar encoded it once and these bytes go straight to
+        # the browser.
+        with self._lock:
+            self._chase_jpeg = (bytes(msg.data), time.monotonic())
+
+    def latest_chase_jpeg(self):
+        """The most recent chase frame, or None if none has arrived on the topic yet."""
+        with self._lock:
+            entry = self._chase_jpeg
+        return None if entry is None else entry[0]
+
+    def chase_health(self):
+        with self._lock:
+            entry = self._chase_jpeg
+            viewers = self._chase_viewers
+        return {"viewers": viewers, "subscribed": self._chase_sub is not None,
+                **freshness(None if entry is None else entry[1])}
 
     def state(self):
         with self._lock:
