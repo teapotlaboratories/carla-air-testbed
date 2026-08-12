@@ -67,6 +67,15 @@ if [ "$IN_STACK" = "1" ]; then
     docker ps --format '{{.Names}}' | grep -qx "$SIM" || {
         echo "ERROR: the stack is not up — ./scripts/stack_up.sh --config configs/testbed.yaml" >&2
         exit 1; }
+    # R-08 made `stack_up.sh --console` the managed way to do this. This path still works and
+    # is kept for a console started against a stack that is already up, but it is unmanaged:
+    # nothing else knows it exists.
+    echo "note: --console on stack_up.sh is the managed equivalent of this" >&2
+    # REPLACE a stale container rather than inheriting `exit 125`. This exact failure cost a
+    # wrong diagnosis on 2026-08-07: the run died with "name already in use", the PREVIOUS
+    # container kept answering on the port, and a fix that had landed appeared not to work.
+    # `stack_run.sh` runs with --rm, so this only ever matters after an abnormal exit.
+    docker rm -f carla-air-webui >/dev/null 2>&1 || true
     # The inner invocation is told it is inside the stack EXPLICITLY, via a flag rather than
     # by detection. /run/.containerenv is present for this whole project on this machine, so a
     # marker-file check cannot tell "console inside the stack" from "console in the ordinary

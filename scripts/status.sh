@@ -54,6 +54,17 @@ printf "  %-18s %s\n" "trace recorder" "$(count "bag record")"
 if command -v docker >/dev/null 2>&1; then
     printf "  %-18s %s\n" "sim container" \
         "$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "${TESTBED_SIM_CONTAINER:-carla-air-sim}")"
+    # R-08. The console can now be the stack's fourth container, and knowing WHICH lane it is
+    # in decides how to stop it: `stack_up.sh --down` for this one, `stop.sh` for a host one.
+    #
+    # This does NOT double-count with "web console" above by accident — that row greps the
+    # process table, which on this machine also lists container processes, so a containerised
+    # console legitimately appears in both. Reading 1 and 1 means ONE console, in a container.
+    # Two host consoles would read 2 and 0. The process row is deliberately not narrowed to
+    # exclude containers: a status screen that checks less than `stop.sh` removes is how an
+    # orphaned console listened on the mesh for days.
+    printf "  %-18s %s\n" "console container" \
+        "$(docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "carla-air-webui")"
 fi
 printf "  %-18s %s\n" "vlm example"  "$(count "vlm_navigation/vlm.launch.py")"
 printf "  %-18s %s\n" "episode/sweep" \

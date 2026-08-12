@@ -17,6 +17,12 @@
 #   carla-air-sim         --network host          CarlaUE4, GPU
 #   carla-air-bridge      --network container:sim sidecar, python 3.10
 #   carla-air-ros         --network container:sim bridge node, python 3.12
+#   carla-air-webui       --network container:sim web console, python 3.12   [--console only]
+#
+# The console is the odd one out and OPT-IN, which is a rule rather than taste: it is an
+# `rclpy` node since R-03 step 1, so starting it by default would make `ros2 node list` two
+# nodes rather than `/carla_air_bridge` alone. That invariant — "you bring the agent" — is one
+# of the few things keeping this project's scope honest, and a flag is cheap.
 #
 # THE REPOSITORY IS MOUNTED AT ITS OWN ABSOLUTE PATH, not at /workspace. That looks odd and
 # is deliberate: `colcon build --symlink-install` writes an install tree full of symlinks to
@@ -36,6 +42,8 @@ PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIM="${TESTBED_SIM_CONTAINER:-carla-air-sim}"
 BRIDGE=carla-air-bridge
 ROS=carla-air-ros
+WEBUI=carla-air-webui
+WEBUI_IMAGE="${TESTBED_WEBUI_IMAGE:-carla-air/webui:1}"
 SOCKVOL=carla-air-run
 SOCKPATH=/run/carla-air/sim.sock
 
@@ -44,16 +52,28 @@ usage() {
 stack_up.sh - run the whole testbed in containers.
 
 SYNOPSIS
-  ./scripts/stack_up.sh --config PATH [--gpu N]
+  ./scripts/stack_up.sh --config PATH [--gpu N] [--console]
   ./scripts/stack_up.sh --down
   ./scripts/stack_up.sh --status
 
 OPTIONS
   --config PATH   required; decides the map, GPU, cameras and GPS origin
   --gpu N         override simulator.gpu for one run
+  --console       also start the web console as a fourth container (opt-in; see below)
   --down          stop and remove every container in the stack
   --status        what is running, and what it holds on the GPU
   -h, --help      this text
+
+WHY --console IS OPT-IN
+  Since R-03 step 1 the console is an rclpy node, so starting it by default would make
+  `ros2 node list` two nodes instead of `/carla_air_bridge` alone — the "you bring the
+  agent" invariant — and would bring up an HTTP control surface with every stack. It is
+  a flag, and the default stays one node.
+
+  It serves on http://127.0.0.1:8080. TESTBED_CONSOLE_ARGS passes arguments through to
+  webui/server.py, e.g. TESTBED_CONSOLE_ARGS="--bind netbird" to reach it over the mesh.
+  Build its image once with:
+      docker build -f docker/webui.Dockerfile -t carla-air/webui:1 .
 
 WHAT IT DOES NOT START
   Waypoint following, episode scoring and the VLM are examples, not the simulator, and are
@@ -85,7 +105,7 @@ down() {
 
 status() {
     echo "== containers =="
-    for c in "$SIM" "$BRIDGE" "$ROS"; do
+    for c in "$SIM" "$BRIDGE" "$ROS" "$WEBUI"; do
         printf "  %-18s %s\n" "$c" \
             "$(docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep "^$c " | cut -d' ' -f2- || echo 'not running')"
     done
@@ -93,12 +113,13 @@ status() {
     nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used --format=csv,noheader 2>/dev/null | sed 's/^/  /'
 }
 
-CONFIG=""; GPU_ARG=""; ACTION=up
+CONFIG=""; GPU_ARG=""; ACTION=up; CONSOLE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --config) [ $# -ge 2 ] || { echo "--config needs a value" >&2; exit 2; }; CONFIG="$2"; shift 2 ;;
         --config=*) CONFIG="${1#*=}"; shift ;;
         --gpu)    [ $# -ge 2 ] || { echo "--gpu needs a value" >&2; exit 2; }; GPU_ARG="$2"; shift 2 ;;
+        --console) CONSOLE=1; shift ;;
         --down)   ACTION=down; shift ;;
         --status) ACTION=status; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -144,14 +165,29 @@ if [ -n "${DISCOVERY_SERVER:-}" ]; then
     echo "discovery server: $DISCOVERY_SERVER"
 fi
 
-echo "=== 1/3  simulator ==="
+#: The console makes it four steps. Counted rather than hard-coded so the progress lines do
+#: not quietly lie about how much is left when --console is given.
+STEPS=3; [ "$CONSOLE" -eq 1 ] && STEPS=4
+
+# Checked BEFORE anything starts, not at step 4. Nothing builds this image automatically, so
+# "you have not built it yet" is the ordinary first-run case — and discovering it after a 55 s
+# bringup, with a stack now up and one step failed, is a worse way to be told. Fail fast is
+# the same instinct as stack_up.sh's config check: refuse at the top, or not at all.
+if [ "$CONSOLE" -eq 1 ] && ! docker image inspect "$WEBUI_IMAGE" >/dev/null 2>&1; then
+    echo "ERROR: --console needs the image $WEBUI_IMAGE, which is not built." >&2
+    echo "       docker build -f docker/webui.Dockerfile -t $WEBUI_IMAGE ." >&2
+    echo "       Nothing was started." >&2
+    exit 1
+fi
+
+echo "=== 1/$STEPS  simulator ==="
 "$PROJ/scripts/run_sim_docker.sh" --config "$CONFIG" ${GPU_ARG:+--gpu "$GPU_ARG"} || {
     echo "the simulator did not come up — not starting the rest" >&2; exit 1; }
 
 docker volume create "$SOCKVOL" >/dev/null 2>&1 || true
 docker rm -f "$BRIDGE" "$ROS" >/dev/null 2>&1 || true
 
-echo "=== 2/3  sidecar (python 3.10) ==="
+echo "=== 2/$STEPS  sidecar (python 3.10) ==="
 docker run -d --name "$BRIDGE" \
     --network "container:$SIM" \
     -v "$PROJ:$PROJ" \
@@ -172,7 +208,7 @@ docker exec "$BRIDGE" test -S "$SOCKPATH" 2>/dev/null || {
     docker logs "$BRIDGE" 2>&1 | tail -15 >&2; exit 1; }
 echo "  sidecar up on $SOCKPATH"
 
-echo "=== 3/3  ROS 2 graph (python 3.12) ==="
+echo "=== 3/$STEPS  ROS 2 graph (python 3.12) ==="
 docker run -d --name "$ROS" \
     --network "container:$SIM" \
     --ipc "container:$SIM" \
@@ -197,5 +233,74 @@ done
 docker logs "$ROS" 2>&1 | grep -m1 "bridged to CARLA-Air" | sed 's/^/  /' || {
     echo "ERROR: the bridge never connected" >&2; docker logs "$ROS" 2>&1 | tail -20 >&2; exit 1; }
 
+if [ "$CONSOLE" -eq 1 ]; then
+    echo "=== 4/$STEPS  web console ==="
+    # REPLACE a stale container rather than failing on the name, and this is the specific
+    # incident R-08 was filed for: `webui.sh --in-stack` died with `exit 125` (name already in
+    # use), the PREVIOUS container kept answering on the port, and a fix that had landed
+    # appeared not to work. A wrong diagnosis is a worse outcome than a loud failure, and this
+    # is the one container in the stack whose name is not already cleared by run_sim_docker.sh
+    # or by the bridge/ROS removal above.
+    docker rm -f "$WEBUI" >/dev/null 2>&1 || true
+    # Joins the simulator's namespaces exactly as the other two do. The simulator runs with
+    # --network host, so binding 127.0.0.1 in here IS the host's loopback and the console is
+    # reachable at localhost:8080 without publishing a port.
+    docker run -d --name "$WEBUI" \
+        --network "container:$SIM" \
+        --ipc "container:$SIM" \
+        ${DS_ENV[@]+"${DS_ENV[@]}"} \
+        -e "TESTBED_SOCKET=$SOCKPATH" \
+        -e "TESTBED_PROJ=$PROJ" \
+        -v "$PROJ:$PROJ" \
+        -v "$SOCKVOL:/run/carla-air" \
+        -w "$PROJ" \
+        "$WEBUI_IMAGE" \
+        ${TESTBED_CONSOLE_ARGS:+$TESTBED_CONSOLE_ARGS} >/dev/null || {
+        echo "ERROR: could not start $WEBUI" >&2; exit 1; }
+
+    # Wait for it to SERVE, not merely to exist. The console falling back to the socket is a
+    # quiet 24% regression rather than a crash, so the entrypoint refuses to start without the
+    # workspace — which means a container that exited has something worth printing.
+    #
+    # The HTTP probe only runs when the address is actually known. `TESTBED_CONSOLE_ARGS` can
+    # carry `--bind netbird` or `--port N` — the documented example does exactly that — and a
+    # probe hard-coded to 127.0.0.1:8080 would then fail on a perfectly healthy console, burn
+    # the full timeout, and print a warning that is simply untrue. A check that cries wolf on
+    # its own documented usage is worse than no check. Same for a machine without `curl`.
+    probe=0
+    [ -z "${TESTBED_CONSOLE_ARGS:-}" ] && command -v curl >/dev/null 2>&1 && probe=1
+
+    for i in $(seq 1 20); do
+        sleep 1
+        [ "$probe" -eq 1 ] && curl -sf -o /dev/null "http://127.0.0.1:8080/" 2>/dev/null && break
+        # The failure that matters either way: the entrypoint refused, or the console died.
+        if ! docker ps --format '{{.Names}}' | grep -qx "$WEBUI"; then
+            echo "ERROR: the console exited:" >&2; docker logs "$WEBUI" 2>&1 | tail -15 >&2; exit 1
+        fi
+        [ "$probe" -eq 0 ] && [ "$i" -ge 3 ] && break
+    done
+
+    if [ "$probe" -eq 1 ]; then
+        if curl -sf -o /dev/null "http://127.0.0.1:8080/" 2>/dev/null; then
+            echo "  console up on http://127.0.0.1:8080"
+        else
+            echo "  WARNING: $WEBUI is running but did not answer on :8080 within 20 s" >&2
+            docker logs "$WEBUI" 2>&1 | tail -10 >&2
+        fi
+    else
+        # Say what was NOT checked rather than implying it was. The container is up and did not
+        # exit; where it is listening is whatever the arguments asked for.
+        if [ -n "${TESTBED_CONSOLE_ARGS:-}" ]; then
+            why="TESTBED_CONSOLE_ARGS=$TESTBED_CONSOLE_ARGS decides the address"
+        else
+            why="no curl on this machine"
+        fi
+        echo "  console container up — not probed, $why"
+    fi
+fi
+
 echo
 echo "stack up. Stop it with: ./scripts/stack_up.sh --down"
+if [ "$CONSOLE" -eq 0 ]; then
+    echo "The console is opt-in: add --console, or ./scripts/webui.sh for the host lane."
+fi
