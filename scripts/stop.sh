@@ -35,6 +35,12 @@ OPTIONS
 
 With no arguments: the ROS graph and the sidecar, leaving the simulator up.
 
+CONTAINERS
+  When a containerised stack is up, --all hands over to `stack_up.sh --down`, which owns
+  that lane. One teardown command in both lanes, and no second copy of its sweep here.
+  Without --all there is no containerised equivalent to perform - the graph and the
+  sidecar ARE containers - so it says so rather than half-doing it.
+
 Every pattern is anchored to this repository's install path, so a sibling project's
 control/evaluation/vlm_client nodes are never matched. Exits non-zero if anything
 survived TERM and KILL - it reports what it ACHIEVED, not what it attempted.
@@ -68,6 +74,50 @@ while [ $# -gt 0 ]; do
             exit 2 ;;
     esac
 done
+
+# T-07. THE CONTAINER LANE HAS AN OWNER, AND IT IS stack_up.sh.
+#
+# Measured 2026-08-10: after a containerised bringup, `stop.sh --all` reported
+#   WARNING: 3 process(es) survived TERM and KILL
+# naming the sidecar and the ROS graph, and then said `simulator stopped` while
+# `carla-air-bridge` and `carla-air-ros` were still up. Both halves were wrong. Those three
+# processes run INSIDE those containers and are uid 0 on the host while this script is uid
+# 1000, so TERM and KILL both bounce - no amount of retrying could ever have removed them.
+# And this script only ever knew the name `carla-air-sim`, so the other two containers
+# survived a teardown that announced success.
+#
+# Rule 1 says a flight test ends with `stop.sh --all` and `status.sh` showing every count at
+# 0. Handing over is what keeps that ONE command true in both lanes. The alternative - teaching
+# this script to sweep `carla-air-*` itself - puts `stack_up.sh --down`'s logic in two places,
+# and this project has already deleted one parallel structure that drifted from the thing it
+# claimed to describe.
+#
+# HANDED OVER FIRST, before the escalation below, and the order does the second half of the
+# job: with the containers already gone, `targets()` finds no container processes to misreport
+# as stragglers and the escalation wastes no `sleep 2` failing to signal them. The fix for the
+# ownership and the fix for the false alarm are the same edit.
+#
+# Only for --all. Plain `stop.sh` means "the graph and the sidecar, leaving the simulator up",
+# and there is no containerised equivalent: the graph and the sidecar ARE containers here, and
+# `stack_up.sh --down` would take the simulator with them. So that case is told, not guessed at.
+DOWN_FAILED=0
+if command -v docker >/dev/null 2>&1 &&
+   [ "$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^carla-air-' || true)" -gt 0 ]; then
+    if [ "$ALL" -eq 1 ]; then
+        if [ -x "$PROJ/scripts/stack_up.sh" ]; then
+            echo "a containerised stack is running — handing over to stack_up.sh --down"
+            "$PROJ/scripts/stack_up.sh" --down || DOWN_FAILED=1
+        else
+            echo "WARNING: a containerised stack is running but scripts/stack_up.sh is not" >&2
+            echo "         executable here, so its containers were left alone." >&2
+            DOWN_FAILED=1
+        fi
+    else
+        echo "note: a containerised stack is running. The graph and the sidecar are CONTAINERS" >&2
+        echo "      here, so this script cannot stop them on their own — ./scripts/stack_up.sh" >&2
+        echo "      --down stops the whole stack, simulator included." >&2
+    fi
+fi
 
 # Everything this project can start.
 #
@@ -147,6 +197,9 @@ rm -f /tmp/carla_air_testbed.sock
 sim_alive() { pgrep -x "CarlaUE4-Linux-" > /dev/null 2>&1; }
 
 rc=0
+# The handover ran before `rc` existed, so its verdict is folded in here rather than being
+# lost. A teardown that could not tear down must not exit 0.
+[ "$DOWN_FAILED" -eq 1 ] && rc=1
 
 # THE CONTAINER IS TORN DOWN FIRST, and the order is load-bearing rather than tidy.
 #
@@ -212,7 +265,6 @@ if [ "$ALL" -eq 1 ]; then
     done
 fi
 
-left="$(targets | wc -l)"
 sim_note="simulator left running"
 if [ "$ALL" -eq 1 ]; then
     if sim_alive; then
@@ -223,11 +275,35 @@ if [ "$ALL" -eq 1 ]; then
     fi
 fi
 
-if [ "$left" -gt 0 ]; then
-    echo "WARNING: ${left} process(es) survived TERM and KILL:" >&2
-    ps -o pid,cmd --no-headers -p $(targets | tr '\n' ' ') 2>/dev/null | sed 's/^/  /' >&2
+# TWO different populations, and calling both "stragglers" was the other half of T-07.
+#
+# "Survived TERM and KILL" says a process RESISTED. The container-internal ones never could
+# have been signalled at all: they are uid 0 on the host while this script is uid 1000, so
+# every signal bounced with EPERM. Reporting them as survivors sent someone looking for a
+# wedged process that was never wedged.
+#
+# `kill -0` asks the precise question — could this script have acted on it? — rather than
+# inferring containerhood from a uid or a namespace. Both still mean the machine is not clean,
+# so both still set rc; only the sentence changes, because only the sentence was false.
+survived=""; unreachable=""
+for p in $(targets); do
+    if kill -0 "$p" 2>/dev/null; then survived="$survived $p"; else unreachable="$unreachable $p"; fi
+done
+n_survived="$(echo $survived | wc -w)"
+n_unreachable="$(echo $unreachable | wc -w)"
+
+if [ "$n_survived" -gt 0 ]; then
+    echo "WARNING: ${n_survived} process(es) survived TERM and KILL:" >&2
+    ps -o pid,cmd --no-headers -p $survived 2>/dev/null | sed 's/^/  /' >&2
+    rc=1
+fi
+if [ "$n_unreachable" -gt 0 ]; then
+    echo "WARNING: ${n_unreachable} process(es) are inside containers this script cannot" >&2
+    echo "         signal — not stragglers, and no amount of retrying would remove them." >&2
+    echo "         ./scripts/stack_up.sh --down owns that lane:" >&2
+    ps -o pid,cmd --no-headers -p $unreachable 2>/dev/null | sed 's/^/  /' >&2
     rc=1
 fi
 
-echo "stopped: graph and sidecar, ${sim_note} (${left} stragglers)"
+echo "stopped: graph and sidecar, ${sim_note} (${n_survived} stragglers, ${n_unreachable} in containers)"
 exit $rc

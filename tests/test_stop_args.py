@@ -124,9 +124,9 @@ def test_all_is_honoured_consistently():
     """`ALL=1` used to be read by the container teardown and by nothing else, so
     `ALL=1 ./scripts/stop.sh` removed the container, left the host simulator up, and then
     reported "simulator left running". Three sites, one variable."""
-    assert _source().count('[ "$ALL" -eq 1 ]') == 3, (
-        "the simulator kill, the status message and the container teardown must all read the "
-        "same flag, or they disagree about what --all meant")
+    assert _source().count('[ "$ALL" -eq 1 ]') == 4, (
+        "the handover to stack_up.sh, the simulator kill, the status message and the container "
+        "teardown must all read the same flag, or they disagree about what --all meant")
 
 
 def test_the_container_is_torn_down_before_the_process_escalation():
@@ -163,6 +163,49 @@ def test_the_container_teardown_acts_on_existence_not_on_running():
     assert guard.group(1) == "-a ", (
         "the teardown triggers on `docker ps` (running) again, so a stopped-but-present "
         "container is left behind to block the next start")
+
+
+def test_the_container_lane_is_handed_over_before_anything_is_signalled():
+    """T-07, and the ordering does two jobs at once.
+
+    After a containerised bringup this script reported three processes that "survived TERM and
+    KILL" — the sidecar and the ROS graph, running INSIDE `carla-air-bridge` and
+    `carla-air-ros`, uid 0 on the host while this script is uid 1000. It could never have
+    signalled them. It then said `simulator stopped` with both containers still up, because it
+    only knew the name `carla-air-sim`.
+
+    Handing over FIRST fixes both: the containers are gone before `targets()` runs, so there
+    are no container processes left to misreport and no `sleep 2` wasted failing to signal
+    them. Move the handover after the escalation and the false alarm comes straight back.
+    """
+    src = _source()
+    handover_at = src.index("stack_up.sh\" --down")
+    kill_at = re.search(r"^\s*for p in \$pids; do kill", src, re.M).start()
+    assert handover_at < kill_at, (
+        "the handover runs after the kill escalation — the container processes will be "
+        "reported as stragglers this script cannot kill, exactly as before")
+
+
+def test_the_handover_only_happens_for_all():
+    """Plain `stop.sh` means "the graph and the sidecar, leaving the simulator up", and there
+    is no containerised equivalent — they ARE containers, and `stack_up.sh --down` would take
+    the simulator with them. Handing over unconditionally would turn the non-destructive
+    default into a full teardown, which is the T-05 class of defect all over again."""
+    src = _source()
+    i = src.index("DOWN_FAILED=0")
+    j = src.index("# Everything this project can start.", i)
+    block = src[i:j]
+    call = block.index('stack_up.sh" --down')
+    guard = block.index('[ "$ALL" -eq 1 ]')
+    assert guard < call, "stop.sh hands the stack over without checking --all"
+
+
+def test_a_failed_handover_is_not_reported_as_success():
+    """The handover happens before `rc` exists, so its verdict has to be carried across. A
+    teardown that could not tear down must not exit 0 — that is the 2026-08-03 lesson."""
+    src = _source()
+    assert re.search(r'\[ "\$DOWN_FAILED" -eq 1 \] && rc=1', src), (
+        "the handover's result is dropped, so a failed stack_up.sh --down would still exit 0")
 
 
 def test_destructive_scope_never_comes_from_the_environment():
