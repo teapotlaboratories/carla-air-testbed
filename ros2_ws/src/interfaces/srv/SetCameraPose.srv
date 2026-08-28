@@ -5,9 +5,21 @@
 # ALTITUDE will fly itself into the ground. Changing it invalidates comparisons against
 # every episode scored at the old value - it is a measurement surface, not a preference.
 float64[3] xyz                  # metres, body FRD, from the vehicle origin
-float64 roll                    # degrees
-float64 pitch
-float64 yaw
+float64 roll                    # RADIANS
+float64 pitch                   # RADIANS - this file said "degrees" and it was wrong.
+float64 yaw                     # RADIANS
+#
+# The values go unchanged to `airsim.to_quaternion(pitch, roll, yaw)`
+# (sim_bridge/carla_air/camera.py:50), which takes radians. `configs/testbed.yaml` already
+# calls its own default `episode_pitch_rad`, and run_episode.py's --camera-pitch is radians.
+# Only this comment disagreed, and it is the only documentation a client reading the interface
+# ever sees.
+#
+# Cost of the wrong comment, measured: a client passed -28.6 believing degrees. -28.6 RADIANS
+# normalises to -198.6 deg, so the camera turned almost all the way round and stared at the
+# aircraft's own airframe from in front, at 0.8 m. Every frame the model saw was rotors and
+# fuselage, and three separate conclusions were drawn from that view before anyone opened a
+# frame and looked at it.
 ---
 bool success
 string message
