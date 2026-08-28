@@ -172,7 +172,24 @@ class ClaudeBackend(VlmBackend):
         self._anthropic = anthropic
         # A per-request timeout well under the episode's per-step budget. Without it the SDK
         # default is ten minutes, and one wedged call would eat an entire episode.
-        self._client = anthropic.Anthropic(timeout=timeout_s, max_retries=max_retries)
+        # REFUSE COMPRESSED RESPONSES, or every call fails on this box.
+        #
+        # The SDK's HTTP layer (httpx2) advertises `br` and then decodes it with
+        # `brotli.Decompressor.process(data, output_buffer_limit=...)`. Ubuntu 24.04's system
+        # brotli (1.1.0, /usr/lib/python3/dist-packages) exposes `process()` WITHOUT that
+        # keyword and has no `decompress()`, so the response arrives intact and dies in the
+        # decoder with `TypeError: process() takes no keyword arguments`.
+        #
+        # The SDK surfaces that as `APIConnectionError: Connection error.`, which reads as a
+        # network fault — while `curl` returns a clean 401 from the same host in 18 ms. Every
+        # `--backend claude` run on a stock box fails this way, five errors in the first
+        # minute, with nothing in the message pointing at compression.
+        #
+        # Asking for `identity` skips the decoder entirely. It costs a little bandwidth on a
+        # response that is a handful of tokens; the request carries the image, not the reply.
+        self._client = anthropic.Anthropic(
+            timeout=timeout_s, max_retries=max_retries,
+            default_headers={"Accept-Encoding": "identity"})
         self.model = model
         self.effort = effort
         self.max_tokens = int(max_tokens)
