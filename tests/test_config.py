@@ -203,3 +203,61 @@ def test_nonsense_dimensions_are_rejected():
 def test_no_cameras_at_all_is_rejected():
     assert apply_config.validate({"simulator": {"cameras": {}}})
     assert apply_config.validate({"simulator": {}})
+
+
+class TestTheCameraPoseServiceDocumentsItsUnits:
+    """`SetCameraPose.srv` said "degrees" for fields that are radians.
+
+    Verified in flight 2026-08-29 through the service itself: `pitch = -0.5` puts the camera
+    at -28.6 deg on `/camera/pose`, and `pitch = -28.6` rotates it about 161 deg — far enough
+    round that the frames show the aircraft's own rotors and fuselage instead of the city.
+
+    A client cannot work around this and cannot detect it from outside: the `.srv` comment is
+    the only documentation the interface exposes, and a camera pointing the wrong way still
+    returns perfectly valid-looking frames. Three separate conclusions were drawn downstream
+    from a view of the airframe before anyone opened a frame and looked at it.
+
+    Pinned as text because the unit is a comment — there is nothing in the message type to
+    assert on, which is exactly why it was able to be wrong for so long.
+    """
+
+    SRV = os.path.join(ROOT, "ros2_ws", "src", "interfaces", "srv", "SetCameraPose.srv")
+
+    def _lines(self):
+        with open(self.SRV, encoding="utf-8") as fh:
+            return fh.read().splitlines()
+
+    def _field(self, name):
+        for line in self._lines():
+            if line.startswith(f"float64 {name}"):
+                return line
+        raise AssertionError(f"{name} is no longer a float64 field in SetCameraPose.srv")
+
+    @pytest.mark.parametrize("field", ["roll", "pitch", "yaw"])
+    def test_each_angle_says_radians(self, field):
+        line = self._field(field)
+        assert "RADIANS" in line, f"{field} no longer documents its unit: {line!r}"
+
+    @pytest.mark.parametrize("field", ["roll", "pitch", "yaw"])
+    def test_no_angle_claims_degrees(self, field):
+        """The exact regression. `# degrees` on these fields is what cost the time."""
+        line = self._field(field)
+        assert "degrees" not in line.lower(), (
+            f"{field} claims degrees again — it goes straight to airsim.to_quaternion, which "
+            f"is built from math.cos(x * 0.5): {line!r}")
+
+    def test_the_header_ties_the_two_numbers_together(self):
+        """The header quotes -28.6 deg. On its own, directly above the fields, that is what
+        made the misreading easy — so it has to name the radian value it corresponds to.
+
+        Scoped to the HEADER, not the whole file: an earlier version of this test asked
+        whether "-0.5" appeared anywhere, which the flight-test note further down satisfied on
+        its own. It passed while the header pairing was deleted — true for the wrong reason.
+        """
+        lines = self._lines()
+        first_field = next(i for i, l in enumerate(lines) if l.startswith("float64"))
+        header = "\n".join(lines[:first_field])
+        assert "-28.6" in header, "the header no longer states the pitch it describes"
+        assert "-0.5" in header, (
+            "the header quotes -28.6 deg without naming -0.5, the number a caller actually "
+            "passes — that adjacency is the whole reason this was misread")
