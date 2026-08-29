@@ -850,6 +850,24 @@ Two options, and this is a decision rather than code:
 R-06 superseded. It is the one place someone would look to answer "what is next", so it
 misleading is worse than most drift.)*
 
+**Picked up here after a pivot — state as of 2026-08-29.** `main` is at `5d891f5`, the tree is
+clean, 290 tests pass, and the machine is idle. Three things are outstanding, in the order they
+should be looked at:
+
+0. ~~**PR #14**~~ — **verified and merged 2026-08-29**, and the two halves did not get the
+   same verdict. See T-09 below: the camera-pose half was a real interface bug, confirmed in
+   flight; the brotli half fixed something that does not reproduce here, and its justification
+   was rewritten rather than shipped as stated.
+1. **R-05** — the only in-scope item with real work left, and only half of it. Headless ships;
+   **windowed is blocked**, and what blocks it is the thing to establish before estimating.
+2. **P-01** — a status pass, not a fix. It reads as open and is not: Vulkan-in-a-container was
+   unblocked 2026-08-06 and the container work has since run to completion (R-08 added the
+   opt-in fourth container, T-06/T-07 gave the teardown an owner). Closing it honestly is
+   half an hour; leaving it is another "the todo lied about what is next".
+
+Everything else in scope is done. R-03 closed 2026-08-11 with the chase pane, which was the
+last of it — flying is ROS, video is ROS, lifecycle is not, and that carve-out is permanent.
+
 Deliberately **not** started until the above lands: the camera-pitch decision, and V-01's
 Claude flights. Both are VLM work, and R-02 moves the code they live in.
 
@@ -1574,6 +1592,61 @@ false. The probe now runs only when the address is known, and says what it did n
 otherwise; the container-exited check runs either way. The image check moved above step 1,
 because nothing builds that image automatically and finding out at step 4 means a bringup spent
 and a half-started stack. `curl` is no longer assumed present.
+
+### T-09 · `SetCameraPose.srv` documented radians as degrees — **fixed** *(2026-08-29)*
+
+Arrived as PR #14 from a downstream project building against the public interface. Verified
+before merging, and **the two halves of that PR did not get the same verdict** — which is the
+reason this entry exists rather than a one-line "merged".
+
+**The camera half was real, and the flight test is the proof.** `SetCameraPose.srv` labelled
+`roll`/`pitch`/`yaw` as degrees. They go unchanged into `airsim.to_quaternion`, which is built
+from `math.cos(x * 0.5)` — radians. Flown 2026-08-29 through the service itself, after a
+takeoff to NED −20.39 m:
+
+| `pitch` field | camera measured on `/camera/pose` |
+|---|---|
+| `-0.5` (radians) | **−28.6°** — correct |
+| `-28.6` (believing "degrees") | a rotation of about **161°** |
+
+And the frames settle it: at `-0.5` the camera sees the city — beach, buildings, horizon; at
+`-28.6` it sees **the aircraft's own rotors and fuselage**, from in front at 0.8 m. A client
+cannot detect this from outside, because a camera pointing the wrong way still returns
+perfectly valid frames. Three separate conclusions were drawn downstream from a view of the
+airframe before anyone opened a frame and looked at it.
+
+**Two citations in the PR were wrong and were corrected before merge.** It claimed
+`configs/testbed.yaml` "already names its own default `episode_pitch_rad`" — that identifier
+does not exist anywhere in the tree. And it left the header's "at -28.6 deg" sitting directly
+above fields newly marked RADIANS, which is the exact adjacency that made the misreading easy;
+the header now names −0.5 alongside it.
+
+**The brotli half fixes a bug that does not reproduce here.** The PR blamed
+`brotli.Decompressor.process(data, output_buffer_limit=...)` raising `TypeError` on Ubuntu
+24.04's system brotli. Checked against the stack a real run actually gets — vendored httpx
+0.28.1, system brotli 1.1.0, anthropic 0.120.2:
+
+- `output_buffer_limit` appears **nowhere** in `vendor/py312`; httpx 0.28.1 calls
+  `self._decompress(data)` positionally (`httpx/_decoders.py:141`), so that `TypeError` cannot
+  arise
+- driving httpx's own `BrotliDecoder` with that system brotli **round-trips fine**
+- a real API call on the **unpatched** code returns a clean **200**
+
+The isolated `process(output_buffer_limit=...)` → `TypeError` *is* reproducible, so something
+real was seen downstream — on a stack this repository does not pin. The `Accept-Encoding:
+identity` header was **kept**, because `examples/vlm_navigation/run.sh` *appends*
+`vendor/py312` to `PYTHONPATH` (deliberately, so ROS-supplied modules win), which means the
+HTTP layer here is **not** pinned and a system or ROS httpx appearing later would silently take
+over the decode path. Insurance, not a fix — and the comment now says so instead of asserting
+a mechanism that is not present.
+
+- **Verify:** 7 tests in `tests/test_config.py` pin the unit documentation as text, because the
+  unit is a comment and there is nothing in the message type to assert on — which is exactly
+  why it could be wrong for so long. Two mutations checked: reverting the field comments to
+  "degrees", and deleting the header's −0.5 pairing. **The second initially passed**, because
+  the test asked whether "-0.5" appeared anywhere in the file and the flight-test note further
+  down satisfied it on its own. Scoped to the header, it fails as it should — the same
+  "true for the wrong reason" hole found twice before this month.
 
 ### T-08 · The console's stop button is gated by "running", not "exists" — **fixed** *(2026-08-11)*
 
