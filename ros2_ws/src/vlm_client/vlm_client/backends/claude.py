@@ -172,21 +172,28 @@ class ClaudeBackend(VlmBackend):
         self._anthropic = anthropic
         # A per-request timeout well under the episode's per-step budget. Without it the SDK
         # default is ten minutes, and one wedged call would eat an entire episode.
-        # REFUSE COMPRESSED RESPONSES, or every call fails on this box.
+        # Ask for uncompressed responses, so the reply never depends on which brotli/httpx
+        # pair happens to win on PYTHONPATH.
         #
-        # The SDK's HTTP layer (httpx2) advertises `br` and then decodes it with
-        # `brotli.Decompressor.process(data, output_buffer_limit=...)`. Ubuntu 24.04's system
-        # brotli (1.1.0, /usr/lib/python3/dist-packages) exposes `process()` WITHOUT that
-        # keyword and has no `decompress()`, so the response arrives intact and dies in the
-        # decoder with `TypeError: process() takes no keyword arguments`.
+        # **This does NOT fix a bug that reproduces here, and the first version of this comment
+        # claimed it did.** Checked 2026-08-29 against the stack a real run actually gets —
+        # vendored httpx 0.28.1, system brotli 1.1.0, anthropic 0.120.2:
         #
-        # The SDK surfaces that as `APIConnectionError: Connection error.`, which reads as a
-        # network fault — while `curl` returns a clean 401 from the same host in 18 ms. Every
-        # `--backend claude` run on a stock box fails this way, five errors in the first
-        # minute, with nothing in the message pointing at compression.
+        #   * `output_buffer_limit` appears nowhere in vendor/py312; httpx 0.28.1 calls
+        #     `self._decompress(data)` positionally (`httpx/_decoders.py:141`), so the
+        #     `TypeError: process() takes no keyword arguments` it was blamed on cannot arise
+        #   * driving httpx's own BrotliDecoder with that system brotli round-trips fine
+        #   * a real call on the unpatched code returns a clean 200
         #
-        # Asking for `identity` skips the decoder entirely. It costs a little bandwidth on a
-        # response that is a handful of tokens; the request carries the image, not the reply.
+        # A downstream project did hit something real, on a stack this repository does not
+        # pin. That is the honest reason to keep the header: `examples/vlm_navigation/run.sh`
+        # *appends* vendor/py312 to PYTHONPATH — deliberately, so ROS-supplied modules win —
+        # so the HTTP layer here is NOT pinned, and a system or ROS httpx appearing later
+        # would silently take over the decode path.
+        #
+        # Insurance, in other words, not a fix. It costs a little bandwidth on a reply that is
+        # a handful of tokens; the request carries the image, not the response. If it is ever
+        # removed, the check to re-run is the three bullets above.
         self._client = anthropic.Anthropic(
             timeout=timeout_s, max_retries=max_retries,
             default_headers={"Accept-Encoding": "identity"})
